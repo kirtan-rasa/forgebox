@@ -41,11 +41,12 @@ install -D -m 0755 %{SOURCE0} %{buildroot}%{_bindir}/forgebox
 install -D -m 0644 %{SOURCE1} %{buildroot}%{_datadir}/icons/hicolor/256x256/apps/forgebox.png
 install -D -m 0644 %{SOURCE2} %{buildroot}%{_datadir}/applications/forgebox.desktop
 install -D -m 0644 %{SOURCE3} %{buildroot}%{_datadir}/licenses/%{name}/LICENSE
+install -D -m 0644 %{SOURCE4} %{buildroot}%{_docdir}/%{name}/README.md
 
 %files
 %{_bindir}/forgebox
 %{_datadir}/icons/hicolor/256x256/apps/forgebox.png
 %{_datadir}/applications/forgebox.desktop
 %license %{_datadir}/licenses/%{name}/LICENSE
-%doc %{SOURCE4}
+%doc %{_docdir}/%{name}/README.md
 

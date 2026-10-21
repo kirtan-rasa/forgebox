@@ -6,6 +6,6 @@ Comment=Convert images, PDFs, documents, spreadsheets, and media
 Exec=forgebox
 Icon=forgebox
 Terminal=false
-Categories=Utility;Office;Graphics;
+Categories=Utility;
 StartupNotify=true
 Keywords=convert;image;pdf;video;audio;document;
