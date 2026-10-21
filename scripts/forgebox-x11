@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Work around file drag-and-drop not being exposed by the current winit Wayland backend.
+# Run ForgeBox through XWayland while inside a Wayland compositor such as Hyprland.
+set -euo pipefail
+unset WAYLAND_DISPLAY
+exec forgebox "$@"

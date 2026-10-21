@@ -1,0 +1,76 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -425,7 +425,11 @@
+ 
+         let screen_width = ctx.screen_rect().width();
+         let sidebar_width = if screen_width < 900.0 { 186.0 } else if screen_width < 1120.0 { 218.0 } else { 258.0 };
+-        let compact_ui = screen_width < 900.0;
++        // Responsive decisions must use the width that remains after the sidebar.
++        // Using the full window width keeps the desktop layout active for a narrow
++        // central panel, which can force the wizard controls beyond the right edge.
++        let content_width = (screen_width - sidebar_width).max(0.0);
++        let compact_ui = content_width < 760.0;
+         egui::SidePanel::left("forge-sidebar")
+             .exact_width(sidebar_width)
+             .resizable(false)
+@@ -520,7 +524,7 @@
+                 });
+             });
+ 
+-        let page_margin = if screen_width < 900.0 { 10.0 } else if screen_width < 1200.0 { 16.0 } else { 22.0 };
++        let page_margin = if content_width < 620.0 { 10.0 } else if content_width < 920.0 { 16.0 } else { 22.0 };
+         egui::CentralPanel::default().frame(egui::Frame::none().fill(BG).inner_margin(egui::Margin::symmetric(page_margin, if compact_ui { 10.0 } else { 14.0 }))).show(ctx, |ui| {
+             // Subtle Odysseus-inspired snowfall in the open canvas; widgets paint over it.
+             let snow_rect = ui.available_rect_before_wrap();
+@@ -586,30 +590,42 @@
+                 .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                 .show(ui, |ui| {
+                     ui.set_width(ui.available_width());
+-                    let small_controls = compact_ui;
++                    let full_width = ui.available_width();
++                    let small_controls = compact_ui || full_width < 680.0;
+                     let controls_width = if small_controls { 94.0 } else { 206.0 };
+-                    let full_width = ui.available_width();
+-                    let flow_width = (full_width - controls_width - 22.0).max(220.0);
++                    // Never reserve more horizontal space than actually exists.
++                    // The old 220 px floor could make this row wider than its card.
++                    let flow_width = (full_width - controls_width - 22.0).max(0.0);
+                     ui.horizontal(|ui| {
+                         ui.allocate_ui_with_layout(Vec2::new(flow_width, 40.0), Layout::left_to_right(Align::Center), |ui| {
+                             let spacing = ui.spacing().item_spacing.x;
+-                            let node_width = |step_id: usize| -> f32 {
++                            let base_node_width = |step_id: usize| -> f32 {
+                                 match (step_id, small_controls) {
+-                                    (0, true) => 88.0,
+-                                    (1, true) => 112.0,
+-                                    (2, true) => 118.0,
++                                    (0, true) => 80.0,
++                                    (1, true) => 96.0,
++                                    (2, true) => 84.0,
+                                     (0, false) => 100.0,
+                                     (1, false) => 136.0,
+                                     (2, false) => 144.0,
+                                     _ => 100.0,
+                                 }
+                             };
+-                            let total_node_width: f32 = visible_steps.iter().map(|step_id| node_width(*step_id)).sum();
+                             let arrow_count = visible_steps.len().saturating_sub(1);
+                             let item_count = visible_steps.len() + arrow_count;
+                             let total_spacing = spacing * item_count.saturating_sub(1) as f32;
++                            // Reserve a little room for the arrows, then shrink step
++                            // buttons proportionally when the available width is tight.
++                            let base_total_node_width: f32 = visible_steps.iter().map(|step_id| base_node_width(*step_id)).sum();
++                            let available_for_nodes = (ui.available_width() - total_spacing - arrow_count as f32 * 8.0).max(0.0);
++                            let node_scale = if base_total_node_width > 0.0 {
++                                (available_for_nodes / base_total_node_width).min(1.0)
++                            } else {
++                                1.0
++                            };
++                            let node_width = |step_id: usize| -> f32 { base_node_width(step_id) * node_scale };
++                            let total_node_width: f32 = visible_steps.iter().map(|step_id| node_width(*step_id)).sum();
+                             let arrow_width = if arrow_count > 0 {
+-                                ((ui.available_width() - total_node_width - total_spacing) / arrow_count as f32).max(16.0)
++                                ((ui.available_width() - total_node_width - total_spacing) / arrow_count as f32).max(0.0)
+                             } else {
+                                 0.0
+                             };

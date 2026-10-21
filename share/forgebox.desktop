@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ForgeBox
+GenericName=Local File Utility Studio
+Comment=Convert images, PDFs, documents, spreadsheets, and media
+Exec=forgebox
+Icon=forgebox
+Terminal=false
+Categories=Utility;Office;Graphics;
+StartupNotify=true
+Keywords=convert;image;pdf;video;audio;document;

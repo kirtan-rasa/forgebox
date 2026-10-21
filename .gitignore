@@ -1,0 +1,14 @@
+cat >> .gitignore <<'EOF'
+
+# Rust build output
+/target/
+/dist/
+
+# Packaged binaries
+*.rpm
+*.exe
+*.msi
+
+# Release Kit backups
+*.release-kit.bak
+EOF
