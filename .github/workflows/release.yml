@@ -125,26 +125,78 @@ jobs:
         run: |
           rm -rf dist/linux
           cargo packager --release
-      - name: Validate package outputs
+      - name: Normalize and validate package outputs
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$(find dist/linux -type f -name '*.deb' -print -quit)"
-          test -n "$(find dist/linux -type f -iname '*.appimage' -print -quit)"
-          test -n "$(find dist/linux -type f -name 'PKGBUILD' -print -quit)"
-          test -n "$(find dist/linux -type f -name '*.tar.gz' -print -quit)"
-          find dist/linux -type f -printf '%P\n' | sort
+          DEB="$(find dist/linux -maxdepth 1 -type f -name '*.deb' -print -quit)"
+          APPIMAGE="$(find dist/linux -maxdepth 1 -type f -iname '*.appimage' -print -quit)"
+          test -n "$DEB"
+          test -n "$APPIMAGE"
+          test -n "$(find dist/linux -maxdepth 1 -type f -name 'PKGBUILD' -print -quit)"
+          test -n "$(find dist/linux -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"
+
+          dpkg-deb --info "$DEB"
+          dpkg-deb --contents "$DEB" | grep -q 'usr/bin/forgebox'
+
+          bash packaging/linux/prepare-pacman-pkgbuild.sh dist/linux/PKGBUILD
+
+          chmod +x "$APPIMAGE"
+          APPIMAGE_CHECK_DIR="$(mktemp -d)"
+          trap 'rm -rf "$APPIMAGE_CHECK_DIR"' EXIT
+          (cd "$APPIMAGE_CHECK_DIR" && "$GITHUB_WORKSPACE/$APPIMAGE" --appimage-extract)
+          test -x "$APPIMAGE_CHECK_DIR/squashfs-root/usr/bin/forgebox"
+          test -f "$APPIMAGE_CHECK_DIR/squashfs-root/usr/share/applications/forgebox.desktop"
+          test -f "$APPIMAGE_CHECK_DIR/squashfs-root/usr/share/icons/hicolor/256x256/apps/forgebox.png"
+          rm -rf "$APPIMAGE_CHECK_DIR"
+          trap - EXIT
+
+          find dist/linux -maxdepth 1 -type f -printf '%P\\n' | sort
       - uses: actions/upload-artifact@v4
         with:
           name: forgebox-deb-appimage-arch-x86_64
-          path: dist/linux/**
+          path: dist/linux/*
           if-no-files-found: error
+          retention-days: 14
+
+  build-arch-pacman:
+    name: Build native Arch Pacman package
+    needs: build-deb-appimage-arch
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install Arch packaging tools
+        run: pacman -Sy --noconfirm --needed base-devel git
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: forgebox-deb-appimage-arch-x86_64
+          path: dist/linux
+      - name: Build Pacman package and SRCINFO
+        shell: bash
+        run: |
+          set -euo pipefail
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE/dist"
+          su builder -c 'cd "$GITHUB_WORKSPACE/dist/linux" && makepkg --nodeps --noconfirm'
+          su builder -c 'cd "$GITHUB_WORKSPACE/dist/linux" && makepkg --printsrcinfo > .SRCINFO'
+          test -n "$(find dist/linux -maxdepth 1 -type f -name '*.pkg.tar.*' -print -quit)"
+          test -s dist/linux/.SRCINFO
+          pacman -Qip dist/linux/*.pkg.tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forgebox-arch-pacman-x86_64
+          path: |
+            dist/linux/*.pkg.tar.zst
+            dist/linux/.SRCINFO
+          if-no-files-found: error
+          include-hidden-files: true
           retention-days: 14
 
   publish-release:
     name: Publish Linux release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-fedora, build-deb-appimage-arch]
+    needs: [build-fedora, build-deb-appimage-arch, build-arch-pacman]
     runs-on: ubuntu-latest
     permissions:
       contents: write
