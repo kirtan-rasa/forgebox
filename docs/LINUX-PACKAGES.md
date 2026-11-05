@@ -25,7 +25,7 @@ AppImage bundles ForgeBox, its icon and desktop entry, and the shared libraries 
 - ExifTool for EXIF extraction.
 - FFmpeg for video, audio and GIF features (optional).
 - `pdftk` for PDF watermarking.
-- `rembg` and its Python model environment for background removal.
+- `rembg` and its Python model environment for background removal. Fedora RPM users can run `/usr/share/doc/forgebox/install-rembg-fedora.sh` to set up the optional CPU backend in an isolated Python 3.13 environment.
 
 AppImage still relies on the host's Linux kernel and glibc baseline. It is not a replacement for a fully self-contained virtual machine.
 
