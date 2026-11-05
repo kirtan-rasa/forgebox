@@ -100,20 +100,8 @@ pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
         }
         PdfSplit => {
             let input = first_file(&job)?;
-            let mut parts = job.pages.split(',');
-            let first_text = parts.next().unwrap_or_default().trim();
-            let first = first_text.parse::<u32>().ok().filter(|n| *n > 0)
-                .ok_or("The start page must be a positive number, for example 1,12.")?;
-            let end_text = parts.next().map(str::trim).filter(|s| !s.is_empty())
-                .ok_or("Enter both the start and end of the range, for example 1,12.")?;
-            if parts.next().is_some() {
-                return Err("Enter the range in start,end format, for example 1,12.".into());
-            }
-            let end = end_text.parse::<u32>().ok().filter(|n| *n > 0)
-                .ok_or("The end page must be a positive number.")?;
-            if end < first {
-                return Err("The end page must not be less than the start page.".into());
-            }
+            let page_count = pdf_page_count(input)?;
+            let (first, end) = parse_pdf_page_range(&job.pages, page_count)?;
             let pattern = unique_pattern(&job.output_dir, &input.file_stem().and_then(|s| s.to_str()).unwrap_or("document"));
             let pattern_prefix = pattern.file_name().and_then(|s| s.to_str()).unwrap_or("split-%d.pdf").split("%d").next().unwrap_or("split-").to_string();
             if let Err(error) = run_ok("pdfseparate", vec![os("-f"), os(&first.to_string()), os("-l"), os(&end.to_string()), os(input), os(&pattern)]) {
@@ -150,7 +138,7 @@ pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
             let input = first_file(&job)?;
             let angle = match job.rotation.as_str() { "180" => "180", "270" => "270", _ => "90" };
             let out = output_for_input(&job, input, "rotated", "pdf");
-            if let Err(error) = run_ok("qpdf", vec![os(input), os(format!("--rotate=+{}:1-z", angle)), os(&out)]) {
+            if let Err(error) = run_qpdf(vec![os(input), os(format!("--rotate=+{}:1-z", angle)), os(&out)]) {
                 let _ = fs::remove_file(&out);
                 return Err(error);
             }
@@ -162,13 +150,11 @@ pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
             if order.is_empty() {
                 return Err("Enter a page order, for example 3,1,2,4.".into());
             }
-            let pages = order.split(',').map(str::trim).map(|part| {
-                part.parse::<u32>().ok().filter(|page| *page > 0)
-                    .ok_or_else(|| "The order must contain positive page numbers separated by commas.".to_string())
-            }).collect::<Result<Vec<_>, _>>()?;
+            let page_count = pdf_page_count(input)?;
+            let pages = parse_pdf_page_order(order, page_count)?;
             let normalized_order = pages.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
             let out = output_for_input(&job, input, "reordered", "pdf");
-            if let Err(error) = run_ok("qpdf", vec![os(input), os("--pages"), os("."), os(&normalized_order), os("--"), os(&out)]) {
+            if let Err(error) = run_qpdf(vec![os(input), os("--pages"), os("."), os(&normalized_order), os("--"), os(&out)]) {
                 let _ = fs::remove_file(&out);
                 return Err(error);
             }
@@ -677,6 +663,69 @@ fn run_capture(program: &str, args: Vec<OsString>) -> Result<Vec<u8>, String> {
     Ok(run_ok(program, args)?.stdout)
 }
 
+/// qpdf uses exit code 3 for recoverable warnings. Treat warnings as a
+/// successful operation while leaving their messages available on stderr.
+fn run_qpdf(args: Vec<OsString>) -> Result<Output, String> {
+    let mut qpdf_args = Vec::with_capacity(args.len() + 1);
+    qpdf_args.push(os("--warning-exit-0"));
+    qpdf_args.extend(args);
+    run_ok("qpdf", qpdf_args)
+}
+
+fn pdf_page_count(input: &Path) -> Result<u32, String> {
+    let output = run_qpdf(vec![os("--show-npages"), os(input)])?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let page_count = stdout.trim().parse::<u32>().map_err(|_| {
+        format!("Could not read the page count from this PDF. qpdf returned: {}", stdout.trim())
+    })?;
+    if page_count == 0 {
+        return Err("This PDF contains no pages.".into());
+    }
+    Ok(page_count)
+}
+
+fn parse_pdf_page_range(value: &str, page_count: u32) -> Result<(u32, u32), String> {
+    let parts: Vec<&str> = value.split(',').map(str::trim).collect();
+    if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+        return Err("Enter a page range as start,end. Use last for the final page, for example 1,last.".into());
+    }
+
+    let first = parts[0].parse::<u32>().ok().filter(|page| *page > 0)
+        .ok_or_else(|| "The start page must be a positive number.".to_string())?;
+    let end = if parts[1].eq_ignore_ascii_case("last") {
+        page_count
+    } else {
+        parts[1].parse::<u32>().ok().filter(|page| *page > 0)
+            .ok_or_else(|| "The end page must be a positive number or last.".to_string())?
+    };
+
+    if first > page_count {
+        return Err(format!("Page {first} does not exist. This PDF has {page_count} pages."));
+    }
+    if end > page_count {
+        return Err(format!("Page {end} does not exist. This PDF has {page_count} pages. Use last for the final page."));
+    }
+    if end < first {
+        return Err("The end page must not be less than the start page.".into());
+    }
+    Ok((first, end))
+}
+
+fn parse_pdf_page_order(value: &str, page_count: u32) -> Result<Vec<u32>, String> {
+    if value.trim().is_empty() {
+        return Err("Enter a page order, for example 3,1,2,4.".into());
+    }
+
+    value.split(',').map(str::trim).map(|part| {
+        let page = part.parse::<u32>().ok().filter(|page| *page > 0)
+            .ok_or_else(|| "The order must contain positive page numbers separated by commas.".to_string())?;
+        if page > page_count {
+            return Err(format!("Page {page} does not exist. This PDF has {page_count} pages."));
+        }
+        Ok(page)
+    }).collect()
+}
+
 fn has_command(program: &str) -> bool {
     command_candidates(program).iter().any(|candidate| Command::new(candidate).arg("--version").output().is_ok())
 }
@@ -783,6 +832,43 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod pdf_page_tests {
+    use super::{parse_pdf_page_order, parse_pdf_page_range};
+
+    #[test]
+    fn split_range_accepts_last_page_keyword() {
+        assert_eq!(parse_pdf_page_range("1,last", 8).unwrap(), (1, 8));
+        assert_eq!(parse_pdf_page_range(" 2, 5 ", 8).unwrap(), (2, 5));
+    }
+
+    #[test]
+    fn split_range_rejects_pages_outside_document() {
+        let error = parse_pdf_page_range("1,12", 8).unwrap_err();
+        assert!(error.contains("has 8 pages"));
+        assert!(parse_pdf_page_range("9,last", 8).is_err());
+    }
+
+    #[test]
+    fn split_range_rejects_reversed_or_malformed_ranges() {
+        assert!(parse_pdf_page_range("5,2", 8).is_err());
+        assert!(parse_pdf_page_range("1", 8).is_err());
+        assert!(parse_pdf_page_range("1,0", 8).is_err());
+    }
+
+    #[test]
+    fn page_order_accepts_valid_pages_and_repeats() {
+        assert_eq!(parse_pdf_page_order("3,1,2,1", 4).unwrap(), vec![3, 1, 2, 1]);
+    }
+
+    #[test]
+    fn page_order_rejects_missing_pages_and_empty_input() {
+        assert!(parse_pdf_page_order("1,5", 4).unwrap_err().contains("has 4 pages"));
+        assert!(parse_pdf_page_order("", 4).is_err());
+        assert!(parse_pdf_page_order("1,,2", 4).is_err());
+    }
+}
 
 #[cfg(test)]
 mod video_tests {
