@@ -12,21 +12,21 @@ permissions:
 
 jobs:
   lockfile:
-    name: Resolve pinned Wayland dependency lockfile
-    runs-on: ubuntu-latest
+    name: Resolve locked Rust dependencies
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Prepare native Wayland drag-and-drop backend
+      - name: Prepare native Wayland patch
         run: bash scripts/enable-native-wayland-dnd.sh
-      - name: Generate Cargo.lock for the pinned local winit patch
+      - name: Generate Cargo.lock
         run: cargo generate-lockfile
       - uses: actions/upload-artifact@v4
         with:
-          name: cargo-lock-internal
+          name: forgebox-cargo-lock
           path: Cargo.lock
           if-no-files-found: error
-          retention-days: 2
+          retention-days: 1
 
   test:
     name: Test Linux source
@@ -34,11 +34,11 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/download-artifact@v4
         with:
-          name: cargo-lock-internal
+          name: forgebox-cargo-lock
           path: .
+      - uses: dtolnay/rust-toolchain@stable
       - name: Install native build dependencies
         run: |
           sudo apt-get update
@@ -55,36 +55,33 @@ jobs:
         run: cargo check --locked
 
   build-fedora:
-    name: Build and sign Fedora RPM
+    name: Build Fedora RPM
     needs: [lockfile, test]
     runs-on: ubuntu-latest
     container: fedora:44
     steps:
-      - name: Install container bootstrap tools
-        run: dnf install -y git tar gzip curl findutils
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/download-artifact@v4
-        with:
-          name: cargo-lock-internal
-          path: .
-      - name: Install build and RPM tools
+      - name: Install build tools
         run: |
-          dnf install -y \
+          dnf install -y git tar gzip curl findutils \
             gcc gcc-c++ make pkgconf-pkg-config dbus-devel \
             libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel \
             libXi-devel libXcursor-devel libXinerama-devel mesa-libGL-devel \
             freetype-devel fontconfig-devel rpm-build rpm-sign gnupg2 \
             desktop-file-utils
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: forgebox-cargo-lock
+          path: .
+      - uses: dtolnay/rust-toolchain@stable
       - name: Prepare native Wayland patch
         run: bash scripts/enable-native-wayland-dnd.sh
       - name: Build release binary
         run: cargo build --release --locked
-      - name: Package RPM
+      - name: Validate desktop entry and package RPM
         run: |
           desktop-file-validate share/forgebox.desktop
           bash packaging/rpm/build-rpm.sh
-          cp docs/FEDORA-RUNTIME-DEPENDENCIES.md dist/README-Fedora.txt
           rpm -qp --requires dist/*.rpm
       - name: Sign RPM for tagged releases
         if: startsWith(github.ref, 'refs/tags/v')
@@ -104,11 +101,11 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/download-artifact@v4
         with:
-          name: cargo-lock-internal
+          name: forgebox-cargo-lock
           path: .
+      - uses: dtolnay/rust-toolchain@stable
       - name: Install Linux packaging dependencies
         run: |
           sudo apt-get update
@@ -140,12 +137,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: forgebox-deb-appimage-arch-x86_64
-          path: dist/linux/*
+          path: dist/linux/**
           if-no-files-found: error
           retention-days: 14
 
   publish-release:
-    name: Publish Linux GitHub Release
+    name: Publish Linux release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build-fedora, build-deb-appimage-arch]
     runs-on: ubuntu-latest
@@ -156,7 +153,7 @@ jobs:
       - name: Ensure the tag matches Cargo.toml
         shell: bash
         run: |
-          cargo_version="$(sed -n 's/^version = "\\([^"]*\\)"/\\1/p' Cargo.toml | head -n1)"
+          cargo_version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
           tag_version="${GITHUB_REF_NAME#v}"
           if [[ "$tag_version" != "$cargo_version" ]]; then
             echo "Release tag v${tag_version} does not match Cargo.toml version ${cargo_version}." >&2
