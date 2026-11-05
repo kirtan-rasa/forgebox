@@ -40,7 +40,7 @@ ForgeBox brings common image, PDF, document, spreadsheet, and media tools into o
 - File dialogs and thumbnail generation run outside the UI thread.
 - Conversion runs locally. ForgeBox does not upload selected files to a remote conversion service.
 
-Background removal uses `rembg`; its model may be downloaded separately on first use.
+Background removal uses the optional `rembg` CPU backend; its model may be downloaded separately on first use. Fedora RPM users can set it up with `bash /usr/share/doc/forgebox/install-rembg-fedora.sh`. The helper uses a dedicated Python 3.13 environment rather than the system Python.
 
 ## Download
 
