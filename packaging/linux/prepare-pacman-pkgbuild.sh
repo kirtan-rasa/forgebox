@@ -49,15 +49,14 @@ replace_one(package_pattern, replacement, "package()")
 # expose Pacman optdepends, so add the supported media backend to PKGBUILD here.
 optional_dependency = "ffmpeg: Enable audio, video, and GIF conversion"
 if re.search(r"(?m)^optdepends=", text):
-    optdepends_match = re.search(r"(?ms)^optdepends=\\((.*?)\\)", text)
+    optdepends_match = re.search(r"(?ms)^optdepends=\((.*?)\)", text)
     if not optdepends_match:
         raise SystemExit("Could not parse generated optdepends array.")
-    entries = optdepends_match.group(1).split()
-    if optional_dependency not in entries:
+    if optional_dependency not in optdepends_match.group(1):
         insertion = optdepends_match.end() - 1
-        text = text[:insertion] + f" '{optional_dependency}'" + text[insertion:]
+        text = text[:insertion] + f"\n  '{optional_dependency}'" + text[insertion:]
 else:
-    depends_start = re.search(r"(?m)^depends=\\(", text)
+    depends_start = re.search(r"(?m)^depends=\(", text)
     if not depends_start:
         raise SystemExit("Generated PKGBUILD does not contain depends.")
     depth = 0
@@ -72,7 +71,7 @@ else:
                 break
     if depends_end is None:
         raise SystemExit("Could not find the end of the generated depends array.")
-    text = text[:depends_end] + f"\\noptdepends=('{optional_dependency}')" + text[depends_end:]
+    text = text[:depends_end] + f"\noptdepends=('{optional_dependency}')" + text[depends_end:]
 
 path.write_text(text, encoding="utf-8")
 PY
