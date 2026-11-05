@@ -32,6 +32,7 @@ install -m 0644 "$ROOT/assets/forgebox.png" "$TOP/SOURCES/forgebox.png"
 install -m 0644 "$ROOT/share/forgebox.desktop" "$TOP/SOURCES/forgebox.desktop"
 install -m 0644 "$ROOT/LICENSE" "$TOP/SOURCES/LICENSE"
 install -m 0644 "$ROOT/README.md" "$TOP/SOURCES/README.md"
+install -m 0644 "$ROOT/scripts/install-rembg-fedora.sh" "$TOP/SOURCES/install-rembg-fedora.sh"
 
 rpmbuild -bb "$ROOT/packaging/rpm/forgebox.spec" \
   --define "_topdir $TOP" \
