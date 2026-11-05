@@ -115,7 +115,7 @@ impl WinitState {
 impl DataDeviceHandler for WinitState {
     fn enter(
         &mut self,
-        _: &Connection,
+        conn: &Connection,
         _: &QueueHandle<Self>,
         data_device: &WlDataDevice,
         x: f64,
@@ -149,7 +149,10 @@ impl DataDeviceHandler for WinitState {
             paths: None,
             dropped: false,
         };
-        match offer.receive(URI_LIST.into()) {
+        // The source starts writing only after the receive request reaches the compositor.
+        let receive = offer.receive(URI_LIST.into());
+        let _ = conn.flush();
+        match receive {
             Ok(pipe) => {
                 // Level-triggered: one read per wakeup, so the (blocking) pipe never blocks.
                 let token = self.loop_handle.insert_source(pipe, |_, pipe, state: &mut WinitState| {
@@ -207,7 +210,24 @@ impl DataDeviceHandler for WinitState {
         self.dnd_end(true);
     }
 
-    fn motion(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice, x: f64, y: f64) {
+    fn motion(
+        &mut self,
+        conn: &Connection,
+        _: &QueueHandle<Self>,
+        data_device: &WlDataDevice,
+        x: f64,
+        y: f64,
+    ) {
+        if self.dnd.is_some() {
+            // Some compositors require the file MIME type to be accepted again while the
+            // pointer moves over the target. Do not call set_actions here: that restarts
+            // action negotiation and can cancel a fast drop.
+            if let Some(offer) = Self::drag_offer(data_device) {
+                offer.accept_mime_type(offer.serial, Some(URI_LIST.into()));
+                let _ = conn.flush();
+            }
+        }
+
         if let Some(window_id) = self.dnd.as_ref().map(|d| d.window_id) {
             self.dnd_cursor_moved(window_id, x, y);
             self.dispatched_events = true;
@@ -230,21 +250,27 @@ impl DataOfferHandler for WinitState {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        offer: &mut DragOffer,
+        _: &mut DragOffer,
         _: DndAction,
     ) {
-        if self.dnd.is_some() {
-            offer.set_actions(DndAction::Copy, DndAction::Copy);
-        }
+        // Copy-only actions are negotiated once in DataDeviceHandler::enter.
     }
 
     fn selected_action(
         &mut self,
-        _: &Connection,
+        conn: &Connection,
         _: &QueueHandle<Self>,
-        _: &mut DragOffer,
+        offer: &mut DragOffer,
         _: DndAction,
     ) {
+        let is_our_offer = self.dnd.as_ref().is_some_and(|dnd| {
+            Self::drag_offer(&dnd.data_device)
+                .is_some_and(|current| current.inner() == offer.inner())
+        });
+        if is_our_offer {
+            offer.accept_mime_type(offer.serial, Some(URI_LIST.into()));
+            let _ = conn.flush();
+        }
     }
 }
 
