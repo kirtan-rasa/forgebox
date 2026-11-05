@@ -107,7 +107,7 @@ impl ForgeApp {
             compress_pdf: false,
             pdf_profile: "ebook".into(),
             rotation: "90".into(),
-            pages: "1,12".into(),
+            pages: "1,last".into(),
             fps: "12".into(),
             video_preset: "fast".into(),
             language: "eng".into(),
@@ -153,8 +153,8 @@ impl ForgeApp {
             ToolId::ImageCompress => self.quality = "82".into(),
             ToolId::PdfRotate => self.rotation = "90".into(),
             ToolId::PdfCompress => self.pdf_profile = "ebook".into(),
-            ToolId::PdfSplit => self.pages = "1,12".into(),
-            ToolId::PdfReorder => self.pages = "3,1,2,4".into(),
+            ToolId::PdfSplit => self.pages = "1,last".into(),
+            ToolId::PdfReorder => self.pages.clear(),
             _ => {}
         }
     }
@@ -568,6 +568,15 @@ impl eframe::App for ForgeApp {
                                     RichText::new(tool.description)
                                         .size(12.5)
                                         .color(Color32::from_rgb(169, 204, 224)),
+                                )
+                                .halign(Align::Center)
+                                .wrap(),
+                            );
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(format!("Requires: {}", tool.dependencies))
+                                        .size(10.5)
+                                        .color(MUTED),
                                 )
                                 .halign(Align::Center)
                                 .wrap(),
@@ -1482,12 +1491,12 @@ fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
         ToolId::PdfSplit => {
             ui.label(RichText::new("Page range: start,end").size(12.0));
             ui.text_edit_singleline(&mut app.pages);
-            ui.label(RichText::new("For example, 1,12 creates separate files for pages 1–12.").size(11.0).color(MUTED));
+            ui.label(RichText::new("Creates one PDF per page. Use last to include through the final page, for example 1,last.").size(11.0).color(MUTED));
         }
         ToolId::PdfReorder => {
             ui.label(RichText::new("New page order").size(12.0));
             ui.text_edit_singleline(&mut app.pages);
-            ui.label(RichText::new("For example: 3,1,2,4. Page numbering starts at 1.").size(11.0).color(MUTED));
+            ui.label(RichText::new("Only listed pages are kept; omitted pages are removed. Example: 3,1,2,4.").size(11.0).color(MUTED));
         }
         ToolId::PdfToImages => {
             ui.label(RichText::new("Image format").size(12.0));
