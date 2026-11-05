@@ -106,8 +106,15 @@ pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
                     if error.contains("Error opening data file")
                         || error.contains("Failed loading language")
                     {
+                        let fedora_packages = lang
+                            .split('+')
+                            .map(str::trim)
+                            .filter(|language| !language.is_empty())
+                            .map(|language| format!("tesseract-langpack-{language}"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
                         format!(
-                            "Tesseract language data for `{lang}` is missing. Install the matching language package and try again. On Fedora, use `sudo dnf install tesseract-langpack-{lang}`."
+                            "Tesseract language data for `{lang}` is missing. Install the matching language package and try again. On Fedora, use `sudo dnf install {fedora_packages}`."
                         )
                     } else {
                         error
