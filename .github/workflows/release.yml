@@ -52,7 +52,8 @@ jobs:
             build-essential pkg-config git \
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev \
             libxi-dev libxcursor-dev libxinerama-dev libgl1-mesa-dev \
-            libdbus-1-dev libfreetype6-dev libfontconfig1-dev
+            libdbus-1-dev libfreetype6-dev libfontconfig1-dev \
+            qpdf poppler-utils
       - name: Prepare native Wayland drag-and-drop backend
         run: bash scripts/enable-native-wayland-dnd.sh
       - name: Validate optional Fedora installer script
