@@ -301,11 +301,26 @@ impl ForgeApp {
 
     fn queue_thumbnails(&mut self) {
         if self.selected_tool != ToolId::ImagesToPdf { return; }
-        for path in self.files.clone() {
-            if self.thumbnail_pending.len() >= 2 { break; }
-            if self.thumbnails.contains_key(&path) || self.thumbnail_pending.contains(&path) || self.thumbnail_errors.contains(&path) {
+
+        let available_slots = 2usize.saturating_sub(self.thumbnail_pending.len());
+        if available_slots == 0 { return; }
+
+        // Inspect the file list by reference and clone only the paths that can
+        // actually be scheduled. Cloning the entire batch every repaint is
+        // unnecessary, especially when a large set of pages is being added.
+        let mut candidates = Vec::with_capacity(available_slots);
+        for path in &self.files {
+            if self.thumbnails.contains_key(path)
+                || self.thumbnail_pending.contains(path)
+                || self.thumbnail_errors.contains(path)
+            {
                 continue;
             }
+            candidates.push(path.clone());
+            if candidates.len() >= available_slots { break; }
+        }
+
+        for path in candidates {
             self.thumbnail_pending.insert(path.clone());
             let tx = self.thumbnail_tx.clone();
             thread::spawn(move || {
