@@ -23,7 +23,7 @@ jobs:
         run: cargo generate-lockfile
       - uses: actions/upload-artifact@v4
         with:
-          name: forgebox-cargo-lock
+          name: internal-cargo-lock
           path: Cargo.lock
           if-no-files-found: error
           retention-days: 1
@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: forgebox-cargo-lock
+          name: internal-cargo-lock
           path: .
       - uses: dtolnay/rust-toolchain@stable
       - name: Install native build dependencies
@@ -71,7 +71,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: forgebox-cargo-lock
+          name: internal-cargo-lock
           path: .
       - uses: dtolnay/rust-toolchain@stable
       - name: Prepare native Wayland patch
@@ -103,7 +103,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: forgebox-cargo-lock
+          name: internal-cargo-lock
           path: .
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Linux packaging dependencies
@@ -220,7 +220,7 @@ jobs:
       - name: Generate SHA-256 checksums
         run: |
           cd release-assets
-          find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           name: ForgeBox ${{ github.ref_name }}
