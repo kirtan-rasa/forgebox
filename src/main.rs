@@ -783,7 +783,7 @@ impl eframe::App for ForgeApp {
                         ui.add_space(14.0);
                         ui.horizontal_wrapped(|ui| {
                             if ui.add_enabled(!self.running && !self.dialog_open, egui::Button::new(RichText::new(format!("{}  Choose files", glyph_text(self.icons_loaded, "󰈔"))).font(icon_font(14.0)).strong()).fill(ACCENT).min_size(Vec2::new(160.0, 40.0))).clicked() { self.choose_files(); }
-                            if ui.add_enabled(!self.running && !self.files.is_empty(), egui::Button::new("Clear list")).clicked() { self.files.clear(); self.selection_notice = None; self.dragging_file = None; self.drag_insert_index = None; self.drag_card_size = None; }
+                            if ui.add_enabled(!self.running && !self.files.is_empty(), egui::Button::new("Clear list")).clicked() { self.files.clear(); self.secondary_file = None; self.selection_notice = None; self.dragging_file = None; self.drag_insert_index = None; self.drag_card_size = None; }
                         });
                         ui.add_space(12.0);
                         // Persistent drop target: keep it visible even after files have been added.
@@ -1272,6 +1272,8 @@ impl eframe::App for ForgeApp {
                                                     { let _ = std::process::Command::new("xdg-open").arg(&self.output_dir).spawn(); }
                                                     #[cfg(target_os = "windows")]
                                                     { let _ = std::process::Command::new("explorer.exe").arg(&self.output_dir).spawn(); }
+                                                    #[cfg(target_os = "macos")]
+                                                    { let _ = std::process::Command::new("open").arg(&self.output_dir).spawn(); }
                                                 }
                                             });
                                         }
