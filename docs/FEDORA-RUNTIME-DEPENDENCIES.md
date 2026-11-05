@@ -12,7 +12,7 @@ Do not use `rpm -i` when you expect dependencies to be installed automatically: 
 
 ## Background removal
 
-Background removal is optional because `rembg` is a Python application with its own runtime and model. The current upstream release supports Python 3.11 through 3.13, while Fedora 45's system Python is 3.14. ForgeBox therefore does not install `rembg` into the system Python or declare it as a normal RPM requirement.
+Background removal is optional because `rembg` is a Python application with its own runtime and model. The current upstream release requires Python 3.11 or newer, but does not support Python 3.14 and later. Fedora 45 provides Python 3.13 alongside its newer system interpreter, so ForgeBox uses that version in a dedicated environment instead of changing the system Python or declaring `rembg` as a normal RPM requirement.
 
 The RPM includes a helper that creates a dedicated CPU environment using Python 3.13:
 
