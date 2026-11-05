@@ -2,6 +2,7 @@ use crate::catalog::ToolId;
 use csv::{ReaderBuilder, WriterBuilder};
 use serde_json::{Map, Value};
 use qrcode::QrCode;
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
@@ -12,6 +13,31 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(not(windows))]
 static IMAGEMAGICK_PROGRAM: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+thread_local! {
+    static EXECUTION_WARNINGS: RefCell<Vec<String>> = RefCell::new(Vec::new());
+}
+
+pub fn take_execution_warnings() -> Vec<String> {
+    EXECUTION_WARNINGS.with(|warnings| std::mem::take(&mut *warnings.borrow_mut()))
+}
+
+fn clear_execution_warnings() {
+    EXECUTION_WARNINGS.with(|warnings| warnings.borrow_mut().clear());
+}
+
+fn record_execution_warning(message: String) {
+    let message = message.trim().to_string();
+    if message.is_empty() {
+        return;
+    }
+    EXECUTION_WARNINGS.with(|warnings| {
+        let mut warnings = warnings.borrow_mut();
+        if !warnings.contains(&message) {
+            warnings.push(message);
+        }
+    });
+}
 
 #[derive(Clone, Debug)]
 pub struct Job {
@@ -35,6 +61,7 @@ pub struct Job {
 }
 
 pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
+    clear_execution_warnings();
     fs::create_dir_all(&job.output_dir)
         .map_err(|e| format!("Failed to create the output folder: {e}"))?;
 
@@ -717,7 +744,15 @@ fn run_qpdf(args: Vec<OsString>) -> Result<Output, String> {
     let mut qpdf_args = Vec::with_capacity(args.len() + 1);
     qpdf_args.push(os("--warning-exit-0"));
     qpdf_args.extend(args);
-    run_ok("qpdf", qpdf_args)
+
+    let output = run_ok("qpdf", qpdf_args)?;
+    if !output.stderr.is_empty() {
+        record_execution_warning(format!(
+            "qpdf: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(output)
 }
 
 fn pdf_page_count(input: &Path) -> Result<u32, String> {
