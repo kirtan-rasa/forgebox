@@ -152,6 +152,8 @@ jobs:
           dpkg-deb --contents "$DEB" | grep 'usr/bin/forgebox' >/dev/null
 
           bash packaging/linux/prepare-pacman-pkgbuild.sh dist/linux/PKGBUILD
+          grep -Fq 'pdftk' dist/linux/PKGBUILD
+          grep -Fq "optdepends=('ffmpeg: Enable audio, video, and GIF conversion')" dist/linux/PKGBUILD
 
           chmod +x "$APPIMAGE"
           APPIMAGE_CHECK_DIR="$(mktemp -d)"
@@ -193,6 +195,8 @@ jobs:
           chown -R builder:builder "$GITHUB_WORKSPACE/dist"
           su builder -c "cd '$WORKDIR' && makepkg --nodeps --noconfirm"
           su builder -c "cd '$WORKDIR' && makepkg --printsrcinfo > .SRCINFO"
+          grep -Fq 'depends = pdftk' dist/linux/.SRCINFO
+          grep -Fq 'optdepends = ffmpeg: Enable audio, video, and GIF conversion' dist/linux/.SRCINFO
           test -n "$(find dist/linux -maxdepth 1 -type f -name '*.pkg.tar.*' -print -quit)"
           test -s dist/linux/.SRCINFO
           pacman -Qip dist/linux/*.pkg.tar.zst
