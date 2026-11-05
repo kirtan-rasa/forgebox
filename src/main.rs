@@ -1832,7 +1832,7 @@ mod tests {
 
     #[test]
     fn output_dir_prefers_downloads_when_it_exists() {
-        let home = std::env::temp_dir().join(format!("forgebox-output-test-{}", std::process::id()));
+        let home = std::env::temp_dir().join(format!("forgebox-output-downloads-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join("Downloads")).unwrap();
         assert_eq!(super::output_dir_for_home(&home), home.join("Downloads"));
@@ -1841,7 +1841,7 @@ mod tests {
 
     #[test]
     fn output_dir_falls_back_to_home_when_downloads_is_missing() {
-        let home = std::env::temp_dir().join(format!("forgebox-output-test-{}", std::process::id()));
+        let home = std::env::temp_dir().join(format!("forgebox-output-home-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).unwrap();
         assert_eq!(super::output_dir_for_home(&home), home);
