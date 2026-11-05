@@ -1,6 +1,6 @@
 [package]
 name = "forgebox"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 edition = "2021"
 description = "A privacy-first local file utility studio"
 license = "MIT"
@@ -24,10 +24,6 @@ panic = "abort"
 [patch.crates-io]
 winit = { path = "patches/winit" }
 egui-winit = { path = "patches/egui-winit" }
-
-[target.'cfg(windows)'.build-dependencies]
-winres = "0.1"
-
 
 # Linux distribution packages: DEB, AppImage and Arch Pacman.
 [package.metadata.packager]

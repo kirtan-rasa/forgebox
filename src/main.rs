@@ -628,7 +628,7 @@ impl eframe::App for ForgeApp {
                     ui.set_width(ui.available_width());
                     let full_width = ui.available_width();
                     let small_controls = compact_ui || full_width < 680.0;
-                    // Preserve full step names on narrow windows by placing navigation
+                    // Preserve full step names on narrow layouts by placing navigation
                     // on a separate row instead of crushing the progress buttons.
                     let controls_width = if small_controls { 94.0 } else { 206.0 };
                     // Allocate the whole row, then position the stepper and navigation
@@ -1270,8 +1270,6 @@ impl eframe::App for ForgeApp {
                                                 if ui.button("Open folder").clicked() {
                                                     #[cfg(target_os = "linux")]
                                                     { let _ = std::process::Command::new("xdg-open").arg(&self.output_dir).spawn(); }
-                                                    #[cfg(target_os = "windows")]
-                                                    { let _ = std::process::Command::new("explorer.exe").arg(&self.output_dir).spawn(); }
                                                     #[cfg(target_os = "macos")]
                                                     { let _ = std::process::Command::new("open").arg(&self.output_dir).spawn(); }
                                                 }
@@ -1321,9 +1319,6 @@ fn load_thumbnail(path: &Path) -> Result<egui::ColorImage, String> {
         let temp = std::env::temp_dir().join(format!("forgebox-thumb-{}-{suffix}.png", std::process::id()));
         let program = match std::process::Command::new("magick").arg("-version").output() {
             Ok(output) if output.status.success() => "magick",
-            _ if cfg!(target_os = "windows") => {
-                return Err("ImageMagick (`magick.exe`) was not found. Install it and ensure it is available in PATH.".into());
-            }
             _ => "convert",
         };
         let output = std::process::Command::new(program)
@@ -1466,9 +1461,6 @@ fn load_nerd_font(ctx: &egui::Context) -> bool {
         PathBuf::from("/usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf"),
         PathBuf::from("/usr/share/fonts/truetype/nerd-fonts/JetBrainsMonoNerdFont-Regular.ttf"),
     ];
-    #[cfg(windows)]
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
-    #[cfg(not(windows))]
     let home = std::env::var_os("HOME");
 
     if let Some(home) = home {
@@ -1827,9 +1819,6 @@ fn output_dir_for_home(home: &Path) -> PathBuf {
 }
 
 fn default_output_dir() -> PathBuf {
-    #[cfg(windows)]
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
-    #[cfg(not(windows))]
     let home = std::env::var_os("HOME");
 
     if let Some(home) = home.map(PathBuf::from).filter(|path| path.is_dir()) {

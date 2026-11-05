@@ -4,8 +4,6 @@
 
 # Packaged binaries
 *.rpm
-*.exe
-*.msi
 *.pkg.tar.zst
 *.AppImage
 

@@ -110,11 +110,10 @@ Implementation notes and the pinned source revision are documented in [Wayland d
 
 - [Linux packages and RPM signature verification](docs/LINUX-PACKAGES.md)
 - [Fedora runtime dependencies](docs/FEDORA-RUNTIME-DEPENDENCIES.md)
-- [Windows runtime dependencies](docs/WINDOWS-RUNTIME-DEPENDENCIES.md)
 - [Wayland drag-and-drop implementation](docs/WAYLAND-DRAG-AND-DROP.md)
 - [Changelog](CHANGELOG.md)
 
-The current automated GitHub release workflow builds Linux packages. Windows packaging and runtime notes are present in the repository but are not yet part of that release workflow.
+The automated release workflow builds and publishes Linux packages.
 
 ## Known limitations
 

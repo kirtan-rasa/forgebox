@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(not(windows))]
 static IMAGEMAGICK_PROGRAM: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
 
 thread_local! {
@@ -591,14 +590,7 @@ fn path_to_file_url(path: &Path) -> Result<String, String> {
     let path_text = absolute.to_string_lossy().replace('\\', "/");
     let encoded = encode_file_url_path(&path_text);
 
-    #[cfg(windows)]
-    {
-        Ok(format!("file:///{}", encoded.trim_start_matches('/')))
-    }
-    #[cfg(not(windows))]
-    {
-        Ok(format!("file://{encoded}"))
-    }
+    Ok(format!("file://{encoded}"))
 }
 
 fn soffice_convert(input: &Path, extension: &str, output: &Path) -> Result<(), String> {
@@ -635,135 +627,35 @@ fn soffice_convert(input: &Path, extension: &str, output: &Path) -> Result<(), S
 }
 
 fn run_magick_owned(args: Vec<OsString>) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        // Windows also ships a system convert.exe, unrelated to ImageMagick.
-        // Never accidentally invoke that utility as a conversion backend.
-        run_ok("magick", args).map(|_| ())
-    }
-    #[cfg(not(windows))]
-    {
-        let program = *IMAGEMAGICK_PROGRAM.get_or_init(|| {
-            if has_command("magick") { "magick" } else { "convert" }
-        });
-        run_ok(program, args).map(|_| ())
-    }
+    let program = *IMAGEMAGICK_PROGRAM.get_or_init(|| {
+        if has_command("magick") { "magick" } else { "convert" }
+    });
+    run_ok(program, args).map(|_| ())
 }
 
 fn command_candidates(program: &str) -> Vec<OsString> {
-    #[cfg(windows)]
-    {
-        let mut candidates: Vec<OsString> = Vec::new();
-        let roots = [std::env::var_os("ProgramFiles"), std::env::var_os("ProgramFiles(x86)")];
-
-        for root in roots.into_iter().flatten().map(PathBuf::from) {
-            match program {
-                "libreoffice" => {
-                    for executable in ["soffice.com", "soffice.exe"] {
-                        let path = root.join("LibreOffice").join("program").join(executable);
-                        if path.is_file() { candidates.push(path.into_os_string()); }
-                    }
-                }
-                "gs" => {
-                    let install_root = root.join("gs");
-                    if let Ok(entries) = fs::read_dir(install_root) {
-                        let mut version_dirs: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
-                        version_dirs.sort();
-                        version_dirs.reverse();
-                        for version_dir in version_dirs {
-                            for executable in ["gswin64c.exe", "gswin32c.exe"] {
-                                let path = version_dir.join("bin").join(executable);
-                                if path.is_file() { candidates.push(path.into_os_string()); }
-                            }
-                        }
-                    }
-                }
-                "magick" => {
-                    if let Ok(entries) = fs::read_dir(&root) {
-                        for entry in entries.flatten() {
-                            let path = entry.path();
-                            let label = path.file_name().map(|name| name.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-                            if path.is_dir() && label.starts_with("imagemagick") {
-                                for executable in [path.join("magick.exe"), path.join("bin").join("magick.exe")] {
-                                    if executable.is_file() { candidates.push(executable.into_os_string()); }
-                                }
-                            }
-                        }
-                    }
-                }
-                "tesseract" => {
-                    let path = root.join("Tesseract-OCR").join("tesseract.exe");
-                    if path.is_file() { candidates.push(path.into_os_string()); }
-                }
-                "qpdf" => {
-                    for path in [root.join("qpdf").join("bin").join("qpdf.exe"), root.join("qpdf.exe")] {
-                        if path.is_file() { candidates.push(path.into_os_string()); }
-                    }
-                    if let Ok(entries) = fs::read_dir(&root) {
-                        for entry in entries.flatten() {
-                            let folder = entry.path();
-                            let label = folder.file_name().map(|name| name.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-                            if folder.is_dir() && label.starts_with("qpdf") {
-                                for path in [folder.join("bin").join("qpdf.exe"), folder.join("qpdf.exe")] {
-                                    if path.is_file() { candidates.push(path.into_os_string()); }
-                                }
-                            }
-                        }
-                    }
-                }
-                "pdftk" => {
-                    for path in [root.join("PDFtk Server").join("bin").join("pdftk.exe"), root.join("pdftk").join("pdftk.exe")] {
-                        if path.is_file() { candidates.push(path.into_os_string()); }
-                    }
-                }
-                _ => {}
-            }
+    if program == "rembg" {
+        let mut candidates = Vec::new();
+        let data_home = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .filter(|path| !path.as_os_str().is_empty())
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .map(|home| home.join(".local/share"))
+            });
+        if let Some(data_home) = data_home {
+            candidates.push(
+                data_home.join("forgebox/rembg-venv/bin/rembg").into_os_string()
+            );
         }
-
-        let aliases: &[&str] = match program {
-            "gs" => &["gswin64c.exe", "gswin32c.exe", "gs.exe", "gs"],
-            "libreoffice" => &["soffice.com", "soffice.exe", "libreoffice.exe", "libreoffice"],
-            _ => &[],
-        };
-        for alias in aliases { candidates.push(OsString::from(alias)); }
-        if !program.to_ascii_lowercase().ends_with(".exe") {
-            candidates.push(OsString::from(format!("{program}.exe")));
+        if let Some(home) = std::env::var_os("HOME") {
+            candidates.push(PathBuf::from(home).join(".local/bin/rembg").into_os_string());
         }
         candidates.push(OsString::from(program));
-
-        let mut unique = Vec::new();
-        for candidate in candidates {
-            if !unique.contains(&candidate) { unique.push(candidate); }
-        }
-        unique
-    }
-    #[cfg(not(windows))]
-    {
-        if program == "rembg" {
-            let mut candidates = Vec::new();
-            let data_home = std::env::var_os("XDG_DATA_HOME")
-                .map(PathBuf::from)
-                .filter(|path| !path.as_os_str().is_empty())
-                .or_else(|| {
-                    std::env::var_os("HOME")
-                        .map(PathBuf::from)
-                        .map(|home| home.join(".local/share"))
-                });
-            if let Some(data_home) = data_home {
-                candidates.push(
-                    data_home.join("forgebox/rembg-venv/bin/rembg").into_os_string()
-                );
-            }
-            if let Some(home) = std::env::var_os("HOME") {
-                candidates.push(
-                    PathBuf::from(home).join(".local/bin/rembg").into_os_string()
-                );
-            }
-            candidates.push(OsString::from(program));
-            candidates
-        } else {
-            vec![OsString::from(program)]
-        }
+        candidates
+    } else {
+        vec![OsString::from(program)]
     }
 }
 
@@ -792,17 +684,11 @@ fn run_ok(program: &str, args: Vec<OsString>) -> Result<Output, String> {
         ("tesseract", "linux") => {
             " Install Tesseract and the matching language data with your distribution's package manager. On Fedora: sudo dnf install tesseract tesseract-langpack-eng."
         }
-        ("tesseract", "windows") => {
-            " Install Tesseract for Windows and add its executable directory to PATH."
-        }
         ("tesseract", "macos") => {
             " Install Tesseract and make sure its executable is available on PATH."
         }
         ("rembg", "linux") => {
             " Install the optional rembg CPU backend in a Python 3.11–3.13 environment. Fedora RPM users can run: bash /usr/share/doc/forgebox/install-rembg-fedora.sh."
-        }
-        ("rembg", "windows") => {
-            " Install the optional rembg CPU backend in a Python 3.11–3.13 virtual environment and add that environment's Scripts directory to PATH."
         }
         ("rembg", "macos") => {
             " Install the optional rembg CPU backend in a Python 3.11–3.13 virtual environment and make its bin directory available on PATH."

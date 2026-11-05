@@ -1,6 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-beta.3
+
+### Fixed
+
+- Validate PDF page ranges against the actual page count before splitting or reordering.
+- Rotate every page in a multi-page PDF and preserve page counts during PDF operations.
+- Treat recoverable qpdf warnings as warnings instead of false conversion failures.
+- Isolate LibreOffice conversions from active desktop sessions and other conversions.
+
+### Improved
+
+- Add Fedora dependency setup for OCR and an isolated optional rembg CPU environment.
+- Improve native Wayland drag-and-drop compatibility across compositors.
+- Validate dropped file types, improve output-directory selection, and reduce thumbnail queue overhead.
+- Remove obsolete platform packaging and setup paths and simplify the project around Linux releases.
 
 - Improve native Wayland file-drop compatibility by refreshing `text/uri-list` acceptance during pointer motion and flushing receive requests.
 - Avoid restarting copy-action negotiation during an active drag.
