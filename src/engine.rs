@@ -679,9 +679,25 @@ fn run_ok(program: &str, args: Vec<OsString>) -> Result<Output, String> {
             Err(error) => return Err(format!("Failed to launch `{program}` via `{label}`: {error}")),
         }
     }
-    let install_hint = match program {
-        "tesseract" => " On Fedora, install it with: sudo dnf install tesseract tesseract-langpack-eng.",
-        "rembg" => " On Fedora, run: bash /usr/share/doc/forgebox/install-rembg-fedora.sh. This installs the optional CPU backend in a dedicated Python environment.",
+    let install_hint = match (program, std::env::consts::OS) {
+        ("tesseract", "linux") => {
+            " Install Tesseract and the matching language data with your distribution's package manager. On Fedora: sudo dnf install tesseract tesseract-langpack-eng."
+        }
+        ("tesseract", "windows") => {
+            " Install Tesseract for Windows and add its executable directory to PATH."
+        }
+        ("tesseract", "macos") => {
+            " Install Tesseract and make sure its executable is available on PATH."
+        }
+        ("rembg", "linux") => {
+            " Install the optional rembg CPU backend in a Python 3.11–3.13 environment. Fedora RPM users can run: bash /usr/share/doc/forgebox/install-rembg-fedora.sh."
+        }
+        ("rembg", "windows") => {
+            " Install the optional rembg CPU backend in a Python 3.11–3.13 virtual environment and add that environment's Scripts directory to PATH."
+        }
+        ("rembg", "macos") => {
+            " Install the optional rembg CPU backend in a Python 3.11–3.13 virtual environment and make its bin directory available on PATH."
+        }
         _ => " See the Installation section in the README for setup instructions.",
     };
     Err(format!(
