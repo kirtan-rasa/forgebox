@@ -62,7 +62,7 @@ depends = [
   "glibc", "gcc-libs", "libxkbcommon", "wayland", "libx11",
   "libxrandr", "libxi", "libxcursor", "libxinerama", "mesa",
   "dbus", "freetype2", "fontconfig", "imagemagick", "poppler",
-  "ghostscript", "qpdf", "libreoffice-fresh", "tesseract",
+  "ghostscript", "qpdf", "libreoffice-fresh", "tesseract", "tesseract-data-eng",
   "perl-image-exiftool", "xdg-utils"
 ]
 
