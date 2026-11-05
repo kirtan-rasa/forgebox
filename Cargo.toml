@@ -53,6 +53,7 @@ depends = [
   "tesseract-ocr", "tesseract-ocr-eng", "libimage-exiftool-perl",
   "xdg-utils"
 ]
+package-name = "forgebox"
 desktop-template = "share/forgebox.desktop"
 
 [package.metadata.packager.pacman]
