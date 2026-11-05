@@ -8,6 +8,7 @@ Source1:        forgebox.png
 Source2:        forgebox.desktop
 Source3:        LICENSE
 Source4:        README.md
+Source5:        install-rembg-fedora.sh
 BuildArch:      x86_64
 
 # Required command-line engines used by the app's conversion tools.
