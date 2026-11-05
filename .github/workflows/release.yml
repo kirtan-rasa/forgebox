@@ -1,65 +1,67 @@
-name: ForgeBox release builds
+name: ForgeBox Linux builds
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  lockfile:
-    name: Resolve one dependency lockfile
-    runs-on: ubuntu-latest
+  test:
+    name: Test Linux source
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Prepare pinned winit source
-        run: bash scripts/enable-native-wayland-dnd.sh
-      - name: Resolve Cargo.lock
-        run: cargo generate-lockfile
-      - uses: actions/upload-artifact@v4
-        with:
-          name: cargo-lock-internal
-          path: Cargo.lock
-          if-no-files-found: error
-          retention-days: 2
-
-  build-fedora:
-    name: Build Fedora RPM
-    needs: lockfile
-    runs-on: ubuntu-latest
-    container: fedora:44
-    steps:
-      - name: Install container bootstrap tools
-        run: dnf install -y git tar gzip curl findutils
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/download-artifact@v4
-        with:
-          name: cargo-lock-internal
-          path: .
-      - name: Install build dependencies
+      - name: Install native build dependencies
         run: |
-          dnf install -y \
-            gcc gcc-c++ make pkgconf-pkg-config dbus-devel \
-            libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel \
-            libXi-devel libXcursor-devel libXinerama-devel mesa-libGL-devel \
-            freetype-devel fontconfig-devel rpm-build desktop-file-utils
-      - name: Prepare native Wayland patch
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config git \
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev \
+            libxi-dev libxcursor-dev libxinerama-dev libgl1-mesa-dev \
+            libdbus-1-dev libfreetype6-dev libfontconfig1-dev
+      - name: Prepare native Wayland drag-and-drop backend
         run: bash scripts/enable-native-wayland-dnd.sh
       - name: Run Rust tests
         run: cargo test --locked
+      - name: Check Rust source
+        run: cargo check --locked
+
+  build-fedora:
+    name: Build Fedora RPM
+    needs: test
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      - name: Install build tools
+        run: |
+          dnf install -y git tar gzip curl findutils \
+            gcc gcc-c++ make pkgconf-pkg-config dbus-devel \
+            libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel \
+            libXi-devel libXcursor-devel libXinerama-devel mesa-libGL-devel \
+            freetype-devel fontconfig-devel rpm-build rpm-sign gnupg2 \
+            desktop-file-utils
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare native Wayland patch
+        run: bash scripts/enable-native-wayland-dnd.sh
       - name: Build release binary
         run: cargo build --release --locked
-      - name: Package RPM
+      - name: Validate desktop entry and package RPM
         run: |
           desktop-file-validate share/forgebox.desktop
           bash packaging/rpm/build-rpm.sh
-          cp docs/FEDORA-RUNTIME-DEPENDENCIES.md dist/README-Fedora.txt
           rpm -qp --requires dist/*.rpm
+      - name: Sign RPM for tagged releases
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          RPM_SIGNING_PRIVATE_KEY: ${{ secrets.RPM_SIGNING_PRIVATE_KEY }}
+        run: bash scripts/sign-rpm.sh dist
       - uses: actions/upload-artifact@v4
         with:
           name: forgebox-fedora-x86_64
@@ -67,44 +69,56 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  build-windows:
-    name: Build Windows installer
-    needs: lockfile
-    runs-on: windows-latest
+  build-deb-appimage-arch:
+    name: Build DEB, AppImage and Arch package
+    needs: test
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/download-artifact@v4
-        with:
-          name: cargo-lock-internal
-          path: .
-      - name: Prepare pinned winit source
-        shell: pwsh
-        run: ./scripts/prepare-winit-windows.ps1
-      - name: Run Rust tests
-        run: cargo test --locked
-      - name: Build release executable
+      - name: Install Linux packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config git file patchelf desktop-file-utils \
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev \
+            libxi-dev libxcursor-dev libxinerama-dev libgl1-mesa-dev \
+            libdbus-1-dev libfreetype6-dev libfontconfig1-dev libfuse2 \
+            squashfs-tools zsync
+      - name: Prepare native Wayland patch
+        run: bash scripts/enable-native-wayland-dnd.sh
+      - name: Build release binary
         run: cargo build --release --locked
-      - name: Install Inno Setup
-        shell: pwsh
-        run: choco install innosetup --yes --no-progress
-      - name: Build installer and portable package
-        shell: pwsh
-        run: ./packaging/windows/prepare-installer.ps1
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --locked --version 0.11.8
+      - name: Build DEB, AppImage and Pacman outputs
+        run: |
+          rm -rf dist/linux
+          cargo packager --release
+      - name: Validate package outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$(find dist/linux -maxdepth 1 -type f -name '*.deb' -print -quit)"
+          test -n "$(find dist/linux -maxdepth 1 -type f -iname '*.appimage' -print -quit)"
+          test -n "$(find dist/linux -maxdepth 1 -type f -name 'PKGBUILD' -print -quit)"
+          test -n "$(find dist/linux -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"
+          chmod +x dist/linux/*.AppImage dist/linux/*.appimage 2>/dev/null || true
+          find dist/linux -maxdepth 1 -type f -printf '%f\n' | sort
       - uses: actions/upload-artifact@v4
         with:
-          name: forgebox-windows-x64
-          path: |
-            dist/ForgeBox-Setup-x64.exe
-            dist/ForgeBox-portable-x64.zip
+          name: forgebox-deb-appimage-arch-x86_64
+          path: dist/linux/*
           if-no-files-found: error
           retention-days: 14
 
   publish-release:
-    name: Publish GitHub Release
+    name: Publish Linux release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-fedora, build-windows]
+    needs: [build-fedora, build-deb-appimage-arch]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Ensure the tag matches Cargo.toml
@@ -114,7 +128,6 @@ jobs:
           tag_version="${GITHUB_REF_NAME#v}"
           if [[ "$tag_version" != "$cargo_version" ]]; then
             echo "Release tag v${tag_version} does not match Cargo.toml version ${cargo_version}." >&2
-            echo "Update Cargo.toml or create the matching tag before publishing." >&2
             exit 1
           fi
       - uses: actions/download-artifact@v4
@@ -122,8 +135,13 @@ jobs:
           pattern: forgebox-*
           path: release-assets
           merge-multiple: true
+      - name: Generate SHA-256 checksums
+        run: |
+          cd release-assets
+          find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           name: ForgeBox ${{ github.ref_name }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: release-assets/**
