@@ -16,40 +16,24 @@ permissions:
 
 jobs:
   lockfile:
-    name: Refresh Rust lockfile
-    permissions:
-      contents: write
+    name: Validate committed Rust lockfile
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Prepare native Wayland patch
         run: bash scripts/enable-native-wayland-dnd.sh
-      - name: Generate Cargo.lock
-        run: cargo generate-lockfile
-      - name: Commit the refreshed lockfile to the PR branch
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        env:
-          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+      - name: Validate committed Cargo.lock
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- Cargo.lock; then
-            echo "Cargo.lock is already up to date."
-          else
-            git add Cargo.lock
-            git commit -m "Update Cargo.lock"
-            git push origin "HEAD:${PR_BRANCH}"
-          fi
+          test -s Cargo.lock
+          git ls-files --error-unmatch Cargo.lock
+          cargo metadata --locked --format-version 1 --no-deps
       - uses: actions/upload-artifact@v4
         with:
           name: internal-cargo-lock
           path: Cargo.lock
           if-no-files-found: error
           retention-days: 1
-
   test:
     name: Test Linux source
     needs: lockfile
