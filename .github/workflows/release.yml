@@ -16,15 +16,17 @@ permissions:
 
 jobs:
   lockfile:
-    name: Resolve locked Rust dependencies
+    name: Validate committed Rust lockfile
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Prepare native Wayland patch
         run: bash scripts/enable-native-wayland-dnd.sh
-      - name: Generate Cargo.lock
-        run: cargo generate-lockfile
+      - name: Validate committed Cargo.lock
+        run: |
+          test -s Cargo.lock
+          git ls-files --error-unmatch Cargo.lock
       - uses: actions/upload-artifact@v4
         with:
           name: internal-cargo-lock
