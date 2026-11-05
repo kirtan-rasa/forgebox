@@ -1170,7 +1170,6 @@ mod video_tests {
     }
 }
 
-
 #[cfg(test)]
 mod command_detection_tests {
     use super::command_version_succeeds;
