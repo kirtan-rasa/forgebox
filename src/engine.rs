@@ -493,11 +493,29 @@ fn data_convert(job: &Job) -> Result<Vec<PathBuf>, String> {
 }
 
 fn csv_to_json(input: &Path, output: &Path) -> Result<(), String> {
+    // Keep short rows compatible by filling missing cells with empty strings,
+    // but reject extra cells and duplicate headers instead of silently losing data.
     let mut reader = ReaderBuilder::new().flexible(true).from_path(input).map_err(|e| format!("Could not read CSV: {e}"))?;
     let headers = reader.headers().map_err(|e| format!("Failed to read CSV headers: {e}"))?.clone();
+    let mut unique_headers = BTreeSet::new();
+    for header in &headers {
+        if !unique_headers.insert(header) {
+            return Err(format!("CSV contains a duplicate column name: {header}"));
+        }
+    }
+
     let mut rows = Vec::new();
-    for row in reader.records() {
-        let record = row.map_err(|e| format!("CSV row error: {e}"))?;
+    for (row_index, row) in reader.records().enumerate() {
+        let record = row.map_err(|e| format!("CSV row {}: {e}", row_index + 2))?;
+        if record.len() > headers.len() {
+            return Err(format!(
+                "CSV row {} contains {} fields, but the header has {} columns. Extra fields would be lost; check the source CSV.",
+                row_index + 2,
+                record.len(),
+                headers.len()
+            ));
+        }
+
         let mut object = Map::new();
         for (i, header) in headers.iter().enumerate() {
             object.insert(header.to_string(), Value::String(record.get(i).unwrap_or("").to_string()));
@@ -950,6 +968,45 @@ mod pdf_page_tests {
         assert!(parse_pdf_page_order("1,5", 4).unwrap_err().contains("has 4 pages"));
         assert!(parse_pdf_page_order("", 4).is_err());
         assert!(parse_pdf_page_order("1,,2", 4).is_err());
+    }
+}
+
+#[cfg(test)]
+mod csv_conversion_tests {
+    use super::{csv_to_json, temp_dir};
+    use serde_json::Value;
+    use std::fs;
+
+    #[test]
+    fn csv_to_json_fills_missing_cells_but_rejects_extra_fields() {
+        let directory = temp_dir("csv-tests").unwrap();
+        let input = directory.join("input.csv");
+        let output = directory.join("output.json");
+
+        fs::write(&input, "name,city\\nAda\\n").unwrap();
+        csv_to_json(&input, &output).unwrap();
+        let value: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+        assert_eq!(value[0]["name"], "Ada");
+        assert_eq!(value[0]["city"], "");
+
+        fs::write(&input, "name,city\\nAda,London,extra\\n").unwrap();
+        let error = csv_to_json(&input, &output).unwrap_err();
+        assert!(error.contains("Extra fields would be lost"));
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn csv_to_json_rejects_duplicate_headers() {
+        let directory = temp_dir("csv-duplicate-headers").unwrap();
+        let input = directory.join("input.csv");
+        let output = directory.join("output.json");
+
+        fs::write(&input, "name,name\\nAda,Byron\\n").unwrap();
+        let error = csv_to_json(&input, &output).unwrap_err();
+        assert!(error.contains("duplicate column name"));
+
+        let _ = fs::remove_dir_all(directory);
     }
 }
 
