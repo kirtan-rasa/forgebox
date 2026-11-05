@@ -51,8 +51,10 @@ Choose an RSA signing key (3072 bits or stronger), give it a clear ForgeBox rele
 Export the secret key to a local file:
 
 ```bash
-FINGERPRINT="$(gpg --with-colons --list-secret-keys | awk -F: '$1 == "fpr" { print $10; exit }')"
+FINGERPRINT="$(gpg --with-colons --list-secret-keys "ForgeBox RPM Signing" | awk -F: '$1 == "fpr" { print $10; exit }')"
+test -n "$FINGERPRINT"
 gpg --armor --export-secret-keys "$FINGERPRINT" > forgebox-rpm-signing-private.asc
+chmod 600 forgebox-rpm-signing-private.asc
 ```
 
 Open GitHub → **Settings → Secrets and variables → Actions → New repository secret**. Use the name `RPM_SIGNING_PRIVATE_KEY` and paste the complete contents of that file as its value. Keep a secure offline backup of the private key. Do not commit the exported file.
