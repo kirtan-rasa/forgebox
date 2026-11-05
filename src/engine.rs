@@ -630,12 +630,23 @@ fn command_candidates(program: &str) -> Vec<OsString> {
     {
         if program == "rembg" {
             let mut candidates = Vec::new();
-            if let Some(home) = std::env::var_os("HOME") {
-                let home = PathBuf::from(home);
+            let data_home = std::env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .filter(|path| !path.as_os_str().is_empty())
+                .or_else(|| {
+                    std::env::var_os("HOME")
+                        .map(PathBuf::from)
+                        .map(|home| home.join(".local/share"))
+                });
+            if let Some(data_home) = data_home {
                 candidates.push(
-                    home.join(".local/share/forgebox/rembg-venv/bin/rembg").into_os_string()
+                    data_home.join("forgebox/rembg-venv/bin/rembg").into_os_string()
                 );
-                candidates.push(home.join(".local/bin/rembg").into_os_string());
+            }
+            if let Some(home) = std::env::var_os("HOME") {
+                candidates.push(
+                    PathBuf::from(home).join(".local/bin/rembg").into_os_string()
+                );
             }
             candidates.push(OsString::from(program));
             candidates
