@@ -100,7 +100,19 @@ pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
         ImageOcr => process_each(&job, |input, out| {
             let base = out.with_extension("");
             let lang = if job.language.trim().is_empty() { "eng" } else { job.language.trim() };
-            run_ok("tesseract", vec![os(input), os(&base), os("-l"), os(lang), os("txt")]).map(|_| ())
+            run_ok("tesseract", vec![os(input), os(&base), os("-l"), os(lang), os("txt")])
+                .map(|_| ())
+                .map_err(|error| {
+                    if error.contains("Error opening data file")
+                        || error.contains("Failed loading language")
+                    {
+                        format!(
+                            "Tesseract language data for `{lang}` is missing. Install the matching language package and try again. On Fedora, use `sudo dnf install tesseract-langpack-{lang}`."
+                        )
+                    } else {
+                        error
+                    }
+                })
         }),
         GenerateQr => {
             if job.text.trim().is_empty() {
