@@ -954,6 +954,22 @@ mod pdf_page_tests {
 }
 
 #[cfg(test)]
+mod execution_warning_tests {
+    use super::{clear_execution_warnings, record_execution_warning, take_execution_warnings};
+
+    #[test]
+    fn execution_warnings_are_trimmed_and_deduplicated() {
+        clear_execution_warnings();
+        record_execution_warning("  qpdf: recovered object table  ".into());
+        record_execution_warning("qpdf: recovered object table".into());
+        assert_eq!(
+            take_execution_warnings(),
+            vec!["qpdf: recovered object table".to_string()]
+        );
+    }
+}
+
+#[cfg(test)]
 mod video_tests {
     use super::{convert_video, extract_audio};
     use std::path::Path;
