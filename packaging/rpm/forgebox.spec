@@ -43,6 +43,7 @@ install -D -m 0644 %{SOURCE1} %{buildroot}%{_datadir}/icons/hicolor/256x256/apps
 install -D -m 0644 %{SOURCE2} %{buildroot}%{_datadir}/applications/forgebox.desktop
 install -D -m 0644 %{SOURCE3} %{buildroot}%{_datadir}/licenses/%{name}/LICENSE
 install -D -m 0644 %{SOURCE4} %{buildroot}%{_docdir}/%{name}/README.md
+install -D -m 0644 %{SOURCE5} %{buildroot}%{_docdir}/%{name}/install-rembg-fedora.sh
 
 %files
 %{_bindir}/forgebox
@@ -50,4 +51,5 @@ install -D -m 0644 %{SOURCE4} %{buildroot}%{_docdir}/%{name}/README.md
 %{_datadir}/applications/forgebox.desktop
 %license %{_datadir}/licenses/%{name}/LICENSE
 %doc %{_docdir}/%{name}/README.md
+%doc %{_docdir}/%{name}/install-rembg-fedora.sh
 
