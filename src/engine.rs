@@ -554,10 +554,55 @@ fn json_cell(value: &Value) -> String {
     }
 }
 
+fn encode_file_url_path(path: &str) -> String {
+    let mut encoded = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
+            | b'/' | b':' | b'-' | b'_' | b'.' | b'~' => encoded.push(byte as char),
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+fn path_to_file_url(path: &Path) -> Result<String, String> {
+    let absolute = fs::canonicalize(path)
+        .map_err(|error| format!("Could not resolve the LibreOffice profile path: {error}"))?;
+    let path_text = absolute.to_string_lossy().replace('\\', "/");
+    let encoded = encode_file_url_path(&path_text);
+
+    #[cfg(windows)]
+    {
+        Ok(format!("file:///{}", encoded.trim_start_matches('/')))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(format!("file://{encoded}"))
+    }
+}
+
 fn soffice_convert(input: &Path, extension: &str, output: &Path) -> Result<(), String> {
     let temp = temp_dir("office-convert")?;
     let result = (|| -> Result<(), String> {
-        run_ok("libreoffice", vec![os("--headless"), os("--convert-to"), os(extension), os("--outdir"), os(&temp), os(input)])?;
+        let profile = temp.join("profile");
+        fs::create_dir_all(&profile).map_err(|error| {
+            format!("Failed to create a temporary LibreOffice profile: {error}")
+        })?;
+        let profile_url = path_to_file_url(&profile)?;
+
+        // LibreOffice forwards requests to an already-running instance when they
+        // share the same user profile. A per-conversion profile avoids conflicts
+        // with the user's desktop session and other headless conversions.
+        run_ok("libreoffice", vec![
+            os("--headless"),
+            os(format!("-env:UserInstallation={profile_url}")),
+            os("--convert-to"),
+            os(extension),
+            os("--outdir"),
+            os(&temp),
+            os(input),
+        ])?;
         let generated = temp.join(format!("{}.{}", input.file_stem().and_then(|s| s.to_str()).unwrap_or("output"), extension));
         if !generated.exists() {
             return Err(format!("LibreOffice did not create the expected file {}. Check whether the input format is supported.", generated.display()));
@@ -968,6 +1013,23 @@ mod pdf_page_tests {
         assert!(parse_pdf_page_order("1,5", 4).unwrap_err().contains("has 4 pages"));
         assert!(parse_pdf_page_order("", 4).is_err());
         assert!(parse_pdf_page_order("1,,2", 4).is_err());
+    }
+}
+
+#[cfg(test)]
+mod file_url_tests {
+    use super::encode_file_url_path;
+
+    #[test]
+    fn file_url_paths_escape_spaces_and_uri_delimiters() {
+        assert_eq!(
+            encode_file_url_path("/tmp/ForgeBox profile/#1"),
+            "/tmp/ForgeBox%20profile/%231"
+        );
+        assert_eq!(
+            encode_file_url_path("C:/Users/Example User/AppData/Temp"),
+            "C:/Users/Example%20User/AppData/Temp"
+        );
     }
 }
 
