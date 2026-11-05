@@ -10,6 +10,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(not(windows))]
+static IMAGEMAGICK_PROGRAM: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
 #[derive(Clone, Debug)]
 pub struct Job {
     pub tool: ToolId,
@@ -531,11 +534,10 @@ fn run_magick_owned(args: Vec<OsString>) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
-        if has_command("magick") {
-            run_ok("magick", args).map(|_| ())
-        } else {
-            run_ok("convert", args).map(|_| ())
-        }
+        let program = *IMAGEMAGICK_PROGRAM.get_or_init(|| {
+            if has_command("magick") { "magick" } else { "convert" }
+        });
+        run_ok(program, args).map(|_| ())
     }
 }
 
