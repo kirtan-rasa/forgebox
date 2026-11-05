@@ -1,32 +1,51 @@
-## Unreleased
-- Add native Wayland external-file drag-and-drop through a pinned compatibility patch for winit 0.30.13.
-- Enable Wayland and X11 backends together; the desktop entry now prefers native Wayland when available.
-- Keep an explicit XWayland launcher as a fallback.
-
 # Changelog
+
+## 0.2.0-beta.3
+
+### Fixed
+
+- Validate PDF page ranges against the actual page count before splitting or reordering.
+- Rotate every page in a multi-page PDF and preserve page counts during PDF operations.
+- Treat recoverable qpdf warnings as warnings instead of false conversion failures.
+- Isolate LibreOffice conversions from active desktop sessions and other conversions.
+
+### Improved
+
+- Add Fedora dependency setup for OCR and an isolated optional rembg CPU environment.
+- Improve native Wayland drag-and-drop compatibility across compositors.
+- Validate dropped file types, improve output-directory selection, and reduce thumbnail queue overhead.
+- Remove obsolete platform packaging and setup paths and simplify the project around Linux releases.
+
+- Improve native Wayland file-drop compatibility by refreshing `text/uri-list` acceptance during pointer motion and flushing receive requests.
+- Avoid restarting copy-action negotiation during an active drag.
+
+## 0.2.0-beta.2
+
+### Added
+
+- Native Wayland external-file drag and drop through a pinned compatibility patch for `winit 0.30.13`.
+- Live drag-to-reorder for Images-to-PDF pages, with a visible insertion slot and Escape to cancel.
+
+### Improved
+
+- Enable Wayland and X11 backends together; the desktop entry prefers native Wayland when available.
+- Keep an explicit XWayland launcher as a fallback.
+- Unify the wizard steps, connecting arrows, and Back/Next controls in one responsive navigation bar.
+- Use one dynamic status area in the Save card instead of a separate results panel and duplicate running labels.
+- Slightly enlarge body/help typography, correct visible step numbering when Parameters is skipped, and use font-independent vector icons for reorder controls.
 
 ## 0.2.0-beta.1
 
 ### Added
+
 - Video conversion to MP4, WebM, MKV and MOV using the installed FFmpeg codecs.
 - Video quality control and three speed/size presets, with a low-CPU preset selected by default.
 - Video-input filtering for conversion and GIF tools, including drag-and-drop validation.
 
 ### Improved
+
 - Audio extraction now selects an encoder appropriate to MP3, WAV, AAC, OGG, FLAC or M4A instead of applying one bitrate option to every format.
 - GIF export uses a generated palette for cleaner colors and limits processing to two threads.
 - Removed nested vertical scroll areas from file lists and image-page previews so mouse-wheel/touchpad behavior is more predictable.
 - Reduced release-build work by disabling full LTO and allowing multiple codegen units; the build script no longer builds check/test profiles on every normal release build.
 - Tightened page padding and labeled the application as beta.
-- Unified the wizard steps, connecting arrows and back/next controls into one responsive navigation bar; arrows expand to fill the space between steps.
-- Replaced the separate results panel and duplicate running labels with one dynamic status area inside the save card; moved the output-folder action there and removed the redundant “choose other files” button.
-
-### Validation
-- Exercised FFmpeg command combinations against a generated sample clip for MP4, MOV, MKV, WebM, GIF, MP3, WAV, AAC, OGG, FLAC and M4A output.
-- Static consistency checks confirmed all tool IDs are catalogued and `Job` fields match their construction site.
-- The user confirmed `cargo check` and `cargo run --release` succeeded on Fedora for the original beta.1 tree. The UI refresh itself has not been compiled in the packaging environment because Rust/Cargo are unavailable here; run `cargo check` after applying the source update. `cargo test` has not been confirmed.
-## UI refinements (unreleased)
-
-- Slightly enlarged body/help typography throughout the interface.
-- Renumbered the visible Save step correctly when Parameters is skipped.
-- Replaced reorder-button arrow glyphs with font-independent vector icons.

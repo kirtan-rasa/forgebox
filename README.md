@@ -1,110 +1,128 @@
-# ForgeBox Beta
+<p align="center">
+  <img src="assets/forgebox-512.png" width="112" alt="ForgeBox logo">
+</p>
 
-**Your local file toolkit.** One interface for everyday image, PDF, document, spreadsheet, audio, and video tasks. ForgeBox works locally and calls utilities installed on your computer to process files.
+<h1 align="center">ForgeBox</h1>
+
+<p align="center">
+  A local desktop toolkit for everyday file conversion.
+</p>
+
+<p align="center">
+  <a href="https://github.com/kirtan-rasa/forgebox/releases">Releases</a>
+  · <a href="CHANGELOG.md">Changelog</a>
+  · <a href="LICENSE">MIT License</a>
+</p>
+
+<p align="center">
+  <strong>Beta · Linux packages available</strong>
+</p>
+
+---
+
+ForgeBox brings common image, PDF, document, spreadsheet, and media tools into one desktop app. It processes files on your computer and uses local command-line utilities for conversion tasks.
 
 ## Features
 
-### Images
-- Convert PNG, JPG, WebP, TIFF, HEIC, and other formats supported by ImageMagick.
-- Resize images while preserving aspect ratio.
-- Compress images, convert to grayscale, and remove backgrounds.
-- Export EXIF metadata to JSON.
-- OCR to TXT with selectable Tesseract language.
-- Create a multi-page PDF from multiple images, with page previews, reordering, and optional compression.
-- Split a tall image across PDF pages.
+| Area | Tools |
+|---|---|
+| **Images** | Convert, resize, compress, grayscale, remove backgrounds, extract EXIF, OCR, generate QR codes, create PDFs from images |
+| **PDF** | Merge, split, compress, rotate, reorder pages, render pages to images, add watermarks |
+| **Documents** | DOC/DOCX → PDF and experimental PDF → DOCX conversion |
+| **Data** | CSV ↔ JSON, CSV ↔ XLSX, JSON ↔ XLSX |
+| **Audio & video** | Convert video, extract audio, and create GIFs with frame-rate and size controls |
 
-### PDF and Documents
-- Merge PDFs and reorder input files.
-- Split by page range, compress with a selectable profile, rotate, and reorder pages.
-- Render PDF pages to PNG or JPG.
-- Apply a PDF watermark.
-- DOC/DOCX → PDF and attempted PDF → DOCX conversion through LibreOffice.
+### A few useful details
 
-### Spreadsheets and Media
-- CSV ↔ JSON, CSV ↔ XLSX, and JSON ↔ XLSX.
-- Convert video between MP4, WebM, MKV, and MOV, with quality and encoding-speed controls. The default fast preset is designed to be gentler on slower CPUs.
-- Extract audio from video to MP3, WAV, AAC, OGG, FLAC, or M4A.
-- Convert video to GIF with an automatically generated palette and adjustable FPS and width.
-- Generate QR codes from text or URLs.
+- Batch operations support multiple input files where the tool allows it.
+- Images-to-PDF includes page previews and drag-to-reorder controls.
+- Original files are never overwritten. ForgeBox chooses an unused output name.
+- File dialogs and thumbnail generation run outside the UI thread.
+- Conversion runs locally. ForgeBox does not upload selected files to a remote conversion service.
 
-## Interface and Behavior
+Background removal uses the optional `rembg` CPU backend; its model may be downloaded separately on first use. Fedora RPM users can set it up with `bash /usr/share/doc/forgebox/install-rembg-fedora.sh`. The helper uses a dedicated Python 3.13 environment rather than the system Python.
 
-The workflow has three steps: choose files, configure options, and save the output. The step indicators, connecting arrows, and Back/Next buttons share a single responsive navigation bar. Navigation controls stay in place even when a step cannot be opened. A single dynamic status area inside the save card shows progress, success, or errors. The separate results panel and redundant shortcut for choosing another set of files have been removed. The workspace header stays fixed while the tool list and main area scroll independently. Image previews scroll with the main content rather than using a nested scroll area. Fields and cards adapt to the window width.
+## Download
 
-File dialogs and thumbnail generation run in the background so reading large photos should not block the interface. In Images to PDF, page cards show previews corrected for EXIF orientation; orientation is also normalized before PDF creation, and page order follows the cards. Reorder pages by dragging cards or using the arrow buttons. Input PDFs can also be reordered with arrows in Merge PDFs.
+Get the current packages from [GitHub Releases](https://github.com/kirtan-rasa/forgebox/releases).
 
-Source files are never overwritten: ForgeBox chooses an unused output name. If processing one file in a batch fails, the app reports the problematic filename and removes partial outputs from that batch where it is safe to do so.
+| Linux distribution | Package | Install |
+|---|---|---|
+| Fedora and RPM-based systems | `.rpm` | `sudo dnf install ./forgebox-*.rpm` |
+| Debian and Ubuntu | `.deb` | `sudo apt install ./forgebox_*.deb` |
+| Arch Linux | `.pkg.tar.zst` | `sudo pacman -U ./forgebox-*.pkg.tar.zst` |
+| Compatible x86_64 distributions | `.AppImage` | `chmod +x ./forgebox*.AppImage && ./forgebox*.AppImage` |
 
-## Build
+The AppImage contains the ForgeBox application and its packaged shared libraries, but not every conversion engine. Install the external utilities required by the tools you use. RPM, DEB, and Arch packages declare the dependencies available in their respective package repositories.
 
-You need stable Rust, Cargo, FFmpeg for video/audio, and system libraries for eframe/winit. On Fedora, install the main dependencies from the project root:
+For package details and RPM signature verification, see [Linux packages](docs/LINUX-PACKAGES.md).
+
+## Dependencies
+
+ForgeBox uses external tools only for the features that need them.
+
+| Utility | Used for |
+|---|---|
+| ImageMagick | Image conversion, resizing, compression, grayscale, image-to-PDF |
+| Poppler | PDF merge, split, and page rendering |
+| Ghostscript, qpdf, pdftk | PDF compression, page operations, and watermarking |
+| LibreOffice | Office document and spreadsheet conversion |
+| Tesseract OCR | Extracting text from images |
+| ExifTool | Reading EXIF metadata |
+| FFmpeg | Video conversion, audio extraction, and GIF creation |
+| `rembg` | Background removal |
+
+QR generation is built into ForgeBox and does not require a separate QR command-line tool. HEIC/HEIF support depends on the ImageMagick build and its format delegates. FFmpeg features depend on the codecs available in the installed FFmpeg build.
+
+## Build from source
+
+You need stable Rust and Cargo, plus the native development libraries used by `eframe` and `winit`.
+
+On Fedora, install the project dependencies from the repository root:
 
 ```bash
 bash scripts/install-deps-fedora.sh
 ```
 
-Before the first build, prepare the pinned native Wayland file-drop backend (details below), then build and run:
-
-```bash
-bash scripts/enable-native-wayland-dnd.sh
-cargo run --release
-```
-
-The bootstrap is one-time per source checkout. `scripts/build.sh` invokes it automatically when needed.
-
-`cargo build --release` creates the binary `target/release/forgebox`. The release profile disables full LTO and uses multiple codegen units to reduce link times on slower CPUs. The binary may be slightly larger, but repeat builds are faster. The build script formats the code and builds only the release profile instead of needlessly compiling dev/test profiles:
+Then build the release binary:
 
 ```bash
 bash scripts/build.sh
 ```
 
-To run `cargo check` and tests separately, use `FORGEBOX_RUN_CHECKS=1 bash scripts/build.sh`. This is useful before a release, but not necessary for every small change.
-
-## Native Wayland and Drag-and-Drop
-
-The `winit 0.30` backend used by this version of `eframe` does not implement receiving external file drops on native Wayland. ForgeBox therefore includes a one-time bootstrap script that vendors a pinned compatibility patch for `winit 0.30.13`. The patch receives `text/uri-list` file offers through `wl_data_device` and forwards file-hover/drop events to the existing `egui` import flow. It requests copy-only transfers and reads the URI list asynchronously.
-
-Before your first build, from the project root run:
+The build script runs `cargo fmt` and `cargo build --release`. To run checks and tests before building:
 
 ```bash
-bash scripts/enable-native-wayland-dnd.sh
-cargo run --release
+FORGEBOX_RUN_CHECKS=1 bash scripts/build.sh
 ```
 
-The bootstrap fetches only the `patches/winit` subtree at a pinned upstream commit, then keeps that source inside this project. It requires Git and an internet connection once. The application itself continues to process files locally. `scripts/build.sh` runs the bootstrap automatically if the vendored patch is missing.
+The resulting executable is `target/release/forgebox`. The release profile is configured to reduce link time on lower-powered CPUs.
 
-The normal desktop entry now launches ForgeBox without unsetting `WAYLAND_DISPLAY`, so Hyprland can run it as a native Wayland client. The older `scripts/forgebox-x11` launcher remains available as a fallback if a particular compositor or file manager has compatibility issues.
+## Wayland drag and drop
 
-This is a compatibility patch based on an open upstream proposal, not yet the official `winit 0.30` implementation. Upstream `winit 0.31` has introduced native file-drop events, but `eframe`/`egui-winit` must migrate to that API together before ForgeBox can remove the local patch. Multi-file drops should work, but the upstream patch is still under review for uncommon overlapping/slow drag-transfer cases.
+ForgeBox currently uses the `eframe 0.29` / `winit 0.30` stack. Its native Wayland backend does not provide the external file-drop events used by the app, so the repository includes a pinned compatibility patch for `winit 0.30.13`.
 
-## Tool Dependencies
+The patch receives local `text/uri-list` offers through `wl_data_device`, reads them asynchronously, and forwards the paths to the existing egui import flow. It refreshes MIME acceptance while a drag moves over the window for compositor compatibility, while negotiating copy-only actions once per drag.
 
-The `scripts/install-deps-fedora.sh` script installs the main dependencies. FFmpeg may require RPM Fusion, and `rembg` is installed separately in a Python environment. ImageMagick must be built with HEIC/HEIF support to read and write those formats.
+Implementation notes and the pinned source revision are documented in [Wayland drag and drop](docs/WAYLAND-DRAG-AND-DROP.md). The current integration remains a compatibility patch until the eframe/egui-winit stack can adopt a suitable upstream winit API.
 
-| Feature | Dependency |
-|---|---|
-| Conversion, resize, grayscale, images → PDF, and tall image → PDF | `magick` (ImageMagick; falls back to `convert`) |
-| Background removal | `rembg` CLI |
-| EXIF | `exiftool` |
-| OCR | `tesseract` and language data (`eng`, `rus`, etc.) |
-| QR codes | Built into ForgeBox (`qrcode`) |
-| PDF merge/split/rasterize | `pdfunite`, `pdfseparate`, `pdftoppm` from Poppler |
-| PDF compression / rotate / reorder / watermark | `gs`, `qpdf`, `pdftk` |
-| DOCX/PDF and XLSX | `libreoffice` |
-| Video conversion, audio extraction, and GIF | `ffmpeg` with H.264/AAC for MP4/MOV/MKV; VP9/Opus for WebM |
+## Documentation
 
-External programs are called only by the features that need them. A “dependency not found” error means the program is not installed or is missing from `PATH`. ForgeBox passes arguments directly without a shell, so spaces in paths should not break processing.
+- [Linux packages and RPM signature verification](docs/LINUX-PACKAGES.md)
+- [Fedora runtime dependencies](docs/FEDORA-RUNTIME-DEPENDENCIES.md)
+- [Wayland drag-and-drop implementation](docs/WAYLAND-DRAG-AND-DROP.md)
+- [Changelog](CHANGELOG.md)
 
-## Known Limitations
+The automated release workflow builds and publishes Linux packages.
 
-- Tall-image PDF conversion uses a fixed page-fragment height of 3508 px; paper-size and page-overlap settings are not available yet.
-- PDF to DOCX depends on the PDF import capabilities of the installed LibreOffice version; complex layouts may change.
-- PDF Split expects a range in `start,end` format; PDF page reordering expects a list such as `3,1,2,4`.
-- Background removal depends on the `rembg` setup and model; `rembg` may download its model on first use.
-- Excel operations require LibreOffice. JSON input for CSV/XLSX conversion must be an array of objects rather than an arbitrary nested JSON structure.
-- Video conversion depends on the codecs included in the installed FFmpeg build; ForgeBox reports an FFmpeg error if a required codec is missing.
-- External utilities have their own format limitations and security policies. For example, system ImageMagick policy may block PDF creation.
+## Known limitations
+
+- PDF → DOCX conversion depends on LibreOffice's PDF import and may alter complex layouts.
+- Tall-image PDF export currently uses a fixed page-fragment height; paper size and page overlap are not configurable.
+- OCR quality depends on the installed Tesseract language data.
+- Background removal requires a separately configured `rembg` environment and model.
+- External utilities retain their own format restrictions and security policies.
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+ForgeBox is distributed under the [MIT License](LICENSE).

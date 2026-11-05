@@ -2,6 +2,7 @@ use crate::catalog::ToolId;
 use csv::{ReaderBuilder, WriterBuilder};
 use serde_json::{Map, Value};
 use qrcode::QrCode;
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
@@ -9,6 +10,33 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static IMAGEMAGICK_PROGRAM: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+thread_local! {
+    static EXECUTION_WARNINGS: RefCell<Vec<String>> = RefCell::new(Vec::new());
+}
+
+pub fn take_execution_warnings() -> Vec<String> {
+    EXECUTION_WARNINGS.with(|warnings| std::mem::take(&mut *warnings.borrow_mut()))
+}
+
+fn clear_execution_warnings() {
+    EXECUTION_WARNINGS.with(|warnings| warnings.borrow_mut().clear());
+}
+
+fn record_execution_warning(message: String) {
+    let message = message.trim().to_string();
+    if message.is_empty() {
+        return;
+    }
+    EXECUTION_WARNINGS.with(|warnings| {
+        let mut warnings = warnings.borrow_mut();
+        if !warnings.contains(&message) {
+            warnings.push(message);
+        }
+    });
+}
 
 #[derive(Clone, Debug)]
 pub struct Job {
@@ -32,6 +60,7 @@ pub struct Job {
 }
 
 pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
+    clear_execution_warnings();
     fs::create_dir_all(&job.output_dir)
         .map_err(|e| format!("Failed to create the output folder: {e}"))?;
 
@@ -70,7 +99,26 @@ pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
         ImageOcr => process_each(&job, |input, out| {
             let base = out.with_extension("");
             let lang = if job.language.trim().is_empty() { "eng" } else { job.language.trim() };
-            run_ok("tesseract", vec![os(input), os(&base), os("-l"), os(lang), os("txt")]).map(|_| ())
+            run_ok("tesseract", vec![os(input), os(&base), os("-l"), os(lang), os("txt")])
+                .map(|_| ())
+                .map_err(|error| {
+                    if error.contains("Error opening data file")
+                        || error.contains("Failed loading language")
+                    {
+                        let fedora_packages = lang
+                            .split('+')
+                            .map(str::trim)
+                            .filter(|language| !language.is_empty())
+                            .map(|language| format!("tesseract-langpack-{language}"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        format!(
+                            "Tesseract language data for `{lang}` is missing. Install the matching language package and try again. On Fedora, use `sudo dnf install {fedora_packages}`."
+                        )
+                    } else {
+                        error
+                    }
+                })
         }),
         GenerateQr => {
             if job.text.trim().is_empty() {
@@ -100,20 +148,8 @@ pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
         }
         PdfSplit => {
             let input = first_file(&job)?;
-            let mut parts = job.pages.split(',');
-            let first_text = parts.next().unwrap_or_default().trim();
-            let first = first_text.parse::<u32>().ok().filter(|n| *n > 0)
-                .ok_or("The start page must be a positive number, for example 1,12.")?;
-            let end_text = parts.next().map(str::trim).filter(|s| !s.is_empty())
-                .ok_or("Enter both the start and end of the range, for example 1,12.")?;
-            if parts.next().is_some() {
-                return Err("Enter the range in start,end format, for example 1,12.".into());
-            }
-            let end = end_text.parse::<u32>().ok().filter(|n| *n > 0)
-                .ok_or("The end page must be a positive number.")?;
-            if end < first {
-                return Err("The end page must not be less than the start page.".into());
-            }
+            let page_count = pdf_page_count(input)?;
+            let (first, end) = parse_pdf_page_range(&job.pages, page_count)?;
             let pattern = unique_pattern(&job.output_dir, &input.file_stem().and_then(|s| s.to_str()).unwrap_or("document"));
             let pattern_prefix = pattern.file_name().and_then(|s| s.to_str()).unwrap_or("split-%d.pdf").split("%d").next().unwrap_or("split-").to_string();
             if let Err(error) = run_ok("pdfseparate", vec![os("-f"), os(&first.to_string()), os("-l"), os(&end.to_string()), os(input), os(&pattern)]) {
@@ -150,7 +186,7 @@ pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
             let input = first_file(&job)?;
             let angle = match job.rotation.as_str() { "180" => "180", "270" => "270", _ => "90" };
             let out = output_for_input(&job, input, "rotated", "pdf");
-            if let Err(error) = run_ok("qpdf", vec![os(input), os(format!("--rotate=+{}:1-z", angle)), os(&out)]) {
+            if let Err(error) = run_qpdf(vec![os(input), os(format!("--rotate=+{}:1-z", angle)), os(&out)]) {
                 let _ = fs::remove_file(&out);
                 return Err(error);
             }
@@ -162,13 +198,11 @@ pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
             if order.is_empty() {
                 return Err("Enter a page order, for example 3,1,2,4.".into());
             }
-            let pages = order.split(',').map(str::trim).map(|part| {
-                part.parse::<u32>().ok().filter(|page| *page > 0)
-                    .ok_or_else(|| "The order must contain positive page numbers separated by commas.".to_string())
-            }).collect::<Result<Vec<_>, _>>()?;
+            let page_count = pdf_page_count(input)?;
+            let pages = parse_pdf_page_order(order, page_count)?;
             let normalized_order = pages.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
             let out = output_for_input(&job, input, "reordered", "pdf");
-            if let Err(error) = run_ok("qpdf", vec![os(input), os("--pages"), os("."), os(&normalized_order), os("--"), os(&out)]) {
+            if let Err(error) = run_qpdf(vec![os(input), os("--pages"), os("."), os(&normalized_order), os("--"), os(&out)]) {
                 let _ = fs::remove_file(&out);
                 return Err(error);
             }
@@ -477,11 +511,29 @@ fn data_convert(job: &Job) -> Result<Vec<PathBuf>, String> {
 }
 
 fn csv_to_json(input: &Path, output: &Path) -> Result<(), String> {
+    // Keep short rows compatible by filling missing cells with empty strings,
+    // but reject extra cells and duplicate headers instead of silently losing data.
     let mut reader = ReaderBuilder::new().flexible(true).from_path(input).map_err(|e| format!("Could not read CSV: {e}"))?;
     let headers = reader.headers().map_err(|e| format!("Failed to read CSV headers: {e}"))?.clone();
+    let mut unique_headers = BTreeSet::new();
+    for header in &headers {
+        if !unique_headers.insert(header) {
+            return Err(format!("CSV contains a duplicate column name: {header}"));
+        }
+    }
+
     let mut rows = Vec::new();
-    for row in reader.records() {
-        let record = row.map_err(|e| format!("CSV row error: {e}"))?;
+    for (row_index, row) in reader.records().enumerate() {
+        let record = row.map_err(|e| format!("CSV row {}: {e}", row_index + 2))?;
+        if record.len() > headers.len() {
+            return Err(format!(
+                "CSV row {} contains {} fields, but the header has {} columns. Extra fields would be lost; check the source CSV.",
+                row_index + 2,
+                record.len(),
+                headers.len()
+            ));
+        }
+
         let mut object = Map::new();
         for (i, header) in headers.iter().enumerate() {
             object.insert(header.to_string(), Value::String(record.get(i).unwrap_or("").to_string()));
@@ -520,10 +572,48 @@ fn json_cell(value: &Value) -> String {
     }
 }
 
+fn encode_file_url_path(path: &str) -> String {
+    let mut encoded = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
+            | b'/' | b':' | b'-' | b'_' | b'.' | b'~' => encoded.push(byte as char),
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+fn path_to_file_url(path: &Path) -> Result<String, String> {
+    let absolute = fs::canonicalize(path)
+        .map_err(|error| format!("Could not resolve the LibreOffice profile path: {error}"))?;
+    let path_text = absolute.to_string_lossy().replace('\\', "/");
+    let encoded = encode_file_url_path(&path_text);
+
+    Ok(format!("file://{encoded}"))
+}
+
 fn soffice_convert(input: &Path, extension: &str, output: &Path) -> Result<(), String> {
     let temp = temp_dir("office-convert")?;
     let result = (|| -> Result<(), String> {
-        run_ok("libreoffice", vec![os("--headless"), os("--convert-to"), os(extension), os("--outdir"), os(&temp), os(input)])?;
+        let profile = temp.join("profile");
+        fs::create_dir_all(&profile).map_err(|error| {
+            format!("Failed to create a temporary LibreOffice profile: {error}")
+        })?;
+        let profile_url = path_to_file_url(&profile)?;
+
+        // LibreOffice forwards requests to an already-running instance when they
+        // share the same user profile. A per-conversion profile avoids conflicts
+        // with the user's desktop session and other headless conversions.
+        run_ok("libreoffice", vec![
+            os(format!("-env:UserInstallation={profile_url}")),
+            os("--headless"),
+            os("--convert-to"),
+            os(extension),
+            os("--outdir"),
+            os(&temp),
+            os(input),
+        ])?;
         let generated = temp.join(format!("{}.{}", input.file_stem().and_then(|s| s.to_str()).unwrap_or("output"), extension));
         if !generated.exists() {
             return Err(format!("LibreOffice did not create the expected file {}. Check whether the input format is supported.", generated.display()));
@@ -537,111 +627,34 @@ fn soffice_convert(input: &Path, extension: &str, output: &Path) -> Result<(), S
 }
 
 fn run_magick_owned(args: Vec<OsString>) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        // Windows also ships a system convert.exe, unrelated to ImageMagick.
-        // Never accidentally invoke that utility as a conversion backend.
-        run_ok("magick", args).map(|_| ())
-    }
-    #[cfg(not(windows))]
-    {
-        if has_command("magick") {
-            run_ok("magick", args).map(|_| ())
-        } else {
-            run_ok("convert", args).map(|_| ())
-        }
-    }
+    let program = *IMAGEMAGICK_PROGRAM.get_or_init(|| {
+        if has_command("magick") { "magick" } else { "convert" }
+    });
+    run_ok(program, args).map(|_| ())
 }
 
 fn command_candidates(program: &str) -> Vec<OsString> {
-    #[cfg(windows)]
-    {
-        let mut candidates: Vec<OsString> = Vec::new();
-        let roots = [std::env::var_os("ProgramFiles"), std::env::var_os("ProgramFiles(x86)")];
-
-        for root in roots.into_iter().flatten().map(PathBuf::from) {
-            match program {
-                "libreoffice" => {
-                    for executable in ["soffice.com", "soffice.exe"] {
-                        let path = root.join("LibreOffice").join("program").join(executable);
-                        if path.is_file() { candidates.push(path.into_os_string()); }
-                    }
-                }
-                "gs" => {
-                    let install_root = root.join("gs");
-                    if let Ok(entries) = fs::read_dir(install_root) {
-                        let mut version_dirs: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
-                        version_dirs.sort();
-                        version_dirs.reverse();
-                        for version_dir in version_dirs {
-                            for executable in ["gswin64c.exe", "gswin32c.exe"] {
-                                let path = version_dir.join("bin").join(executable);
-                                if path.is_file() { candidates.push(path.into_os_string()); }
-                            }
-                        }
-                    }
-                }
-                "magick" => {
-                    if let Ok(entries) = fs::read_dir(&root) {
-                        for entry in entries.flatten() {
-                            let path = entry.path();
-                            let label = path.file_name().map(|name| name.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-                            if path.is_dir() && label.starts_with("imagemagick") {
-                                for executable in [path.join("magick.exe"), path.join("bin").join("magick.exe")] {
-                                    if executable.is_file() { candidates.push(executable.into_os_string()); }
-                                }
-                            }
-                        }
-                    }
-                }
-                "tesseract" => {
-                    let path = root.join("Tesseract-OCR").join("tesseract.exe");
-                    if path.is_file() { candidates.push(path.into_os_string()); }
-                }
-                "qpdf" => {
-                    for path in [root.join("qpdf").join("bin").join("qpdf.exe"), root.join("qpdf.exe")] {
-                        if path.is_file() { candidates.push(path.into_os_string()); }
-                    }
-                    if let Ok(entries) = fs::read_dir(&root) {
-                        for entry in entries.flatten() {
-                            let folder = entry.path();
-                            let label = folder.file_name().map(|name| name.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-                            if folder.is_dir() && label.starts_with("qpdf") {
-                                for path in [folder.join("bin").join("qpdf.exe"), folder.join("qpdf.exe")] {
-                                    if path.is_file() { candidates.push(path.into_os_string()); }
-                                }
-                            }
-                        }
-                    }
-                }
-                "pdftk" => {
-                    for path in [root.join("PDFtk Server").join("bin").join("pdftk.exe"), root.join("pdftk").join("pdftk.exe")] {
-                        if path.is_file() { candidates.push(path.into_os_string()); }
-                    }
-                }
-                _ => {}
-            }
+    if program == "rembg" {
+        let mut candidates = Vec::new();
+        let data_home = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .filter(|path| !path.as_os_str().is_empty())
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .map(|home| home.join(".local/share"))
+            });
+        if let Some(data_home) = data_home {
+            candidates.push(
+                data_home.join("forgebox/rembg-venv/bin/rembg").into_os_string()
+            );
         }
-
-        let aliases: &[&str] = match program {
-            "gs" => &["gswin64c.exe", "gswin32c.exe", "gs.exe", "gs"],
-            "libreoffice" => &["soffice.com", "soffice.exe", "libreoffice.exe", "libreoffice"],
-            _ => &[],
-        };
-        for alias in aliases { candidates.push(OsString::from(alias)); }
-        if !program.to_ascii_lowercase().ends_with(".exe") {
-            candidates.push(OsString::from(format!("{program}.exe")));
+        if let Some(home) = std::env::var_os("HOME") {
+            candidates.push(PathBuf::from(home).join(".local/bin/rembg").into_os_string());
         }
         candidates.push(OsString::from(program));
-
-        let mut unique = Vec::new();
-        for candidate in candidates {
-            if !unique.contains(&candidate) { unique.push(candidate); }
-        }
-        unique
-    }
-    #[cfg(not(windows))]
-    {
+        candidates
+    } else {
         vec![OsString::from(program)]
     }
 }
@@ -667,14 +680,101 @@ fn run_ok(program: &str, args: Vec<OsString>) -> Result<Output, String> {
             Err(error) => return Err(format!("Failed to launch `{program}` via `{label}`: {error}")),
         }
     }
+    let install_hint = match (program, std::env::consts::OS) {
+        ("tesseract", "linux") => {
+            " Install Tesseract and the matching language data with your distribution's package manager. On Fedora: sudo dnf install tesseract tesseract-langpack-eng."
+        }
+        ("tesseract", "macos") => {
+            " Install Tesseract and make sure its executable is available on PATH."
+        }
+        ("rembg", "linux") => {
+            " Install the optional rembg CPU backend in a Python 3.11–3.13 environment. Fedora RPM users can run: bash /usr/share/doc/forgebox/install-rembg-fedora.sh."
+        }
+        ("rembg", "macos") => {
+            " Install the optional rembg CPU backend in a Python 3.11–3.13 virtual environment and make its bin directory available on PATH."
+        }
+        _ => " See the Installation section in the README for setup instructions.",
+    };
     Err(format!(
-        "Dependency `{program}` was not found. Tried: {}. See the Installation section in the README.",
-        tried.join(", ")
+        "Dependency `{program}` was not found. Tried: {}.{}",
+        tried.join(", "),
+        install_hint
     ))
 }
 
 fn run_capture(program: &str, args: Vec<OsString>) -> Result<Vec<u8>, String> {
     Ok(run_ok(program, args)?.stdout)
+}
+
+/// qpdf uses exit code 3 for recoverable warnings. Treat warnings as a
+/// successful operation while leaving their messages available on stderr.
+fn run_qpdf(args: Vec<OsString>) -> Result<Output, String> {
+    let mut qpdf_args = Vec::with_capacity(args.len() + 1);
+    qpdf_args.push(os("--warning-exit-0"));
+    qpdf_args.extend(args);
+
+    let output = run_ok("qpdf", qpdf_args)?;
+    if !output.stderr.is_empty() {
+        record_execution_warning(format!(
+            "qpdf: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(output)
+}
+
+fn pdf_page_count(input: &Path) -> Result<u32, String> {
+    let output = run_qpdf(vec![os("--show-npages"), os(input)])?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let page_count = stdout.trim().parse::<u32>().map_err(|_| {
+        format!("Could not read the page count from this PDF. qpdf returned: {}", stdout.trim())
+    })?;
+    if page_count == 0 {
+        return Err("This PDF contains no pages.".into());
+    }
+    Ok(page_count)
+}
+
+fn parse_pdf_page_range(value: &str, page_count: u32) -> Result<(u32, u32), String> {
+    let parts: Vec<&str> = value.split(',').map(str::trim).collect();
+    if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+        return Err("Enter a page range as start,end. Use last for the final page, for example 1,last.".into());
+    }
+
+    let first = parts[0].parse::<u32>().ok().filter(|page| *page > 0)
+        .ok_or_else(|| "The start page must be a positive number.".to_string())?;
+    let end = if parts[1].eq_ignore_ascii_case("last") {
+        page_count
+    } else {
+        parts[1].parse::<u32>().ok().filter(|page| *page > 0)
+            .ok_or_else(|| "The end page must be a positive number or last.".to_string())?
+    };
+
+    if first > page_count {
+        return Err(format!("Page {first} does not exist. This PDF has {page_count} pages."));
+    }
+    if end > page_count {
+        return Err(format!("Page {end} does not exist. This PDF has {page_count} pages. Use last for the final page."));
+    }
+    if end < first {
+        return Err("The end page must not be less than the start page.".into());
+    }
+    Ok((first, end))
+}
+
+fn parse_pdf_page_order(value: &str, page_count: u32) -> Result<Vec<u32>, String> {
+    if value.trim().is_empty() {
+        return Err("Enter a page order, for example 3,1,2,4.".into());
+    }
+
+    value.split(',').map(str::trim).map(|part| {
+        let page = part.parse::<u32>().ok().filter(|page| *page > 0)
+            .ok_or_else(|| "The order must contain positive page numbers separated by commas.".to_string())?;
+        if page > page_count {
+            return Err(format!("Page {page} does not exist. This PDF has {page_count} pages."));
+        }
+        Ok(page)
+    }).collect()
 }
 
 fn has_command(program: &str) -> bool {
@@ -783,6 +883,251 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod pdf_integration_tests {
+    use super::{execute, pdf_page_count, temp_dir, Job};
+    use crate::catalog::ToolId;
+    use std::fs;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    fn make_blank_pdf(page_count: u32) -> Vec<u8> {
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        ];
+        let kids = (0..page_count)
+            .map(|index| format!("{} 0 R", 3 + index * 2))
+            .collect::<Vec<_>>()
+            .join(" ");
+        objects.push(format!(
+            "<< /Type /Pages /Kids [{kids}] /Count {page_count} >>"
+        ));
+
+        for index in 0..page_count {
+            let page_id = 3 + index * 2;
+            let content_id = page_id + 1;
+            objects.push(format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {content_id} 0 R >>"
+            ));
+            objects.push("<< /Length 0 >>\nstream\n\nendstream".into());
+        }
+
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offsets = vec![0usize];
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            writeln!(&mut pdf, "{} 0 obj\n{}\nendobj", index + 1, object)
+                .expect("writing to a Vec cannot fail");
+        }
+
+        let xref_offset = pdf.len();
+        writeln!(&mut pdf, "xref\n0 {}\n0000000000 65535 f ", offsets.len())
+            .expect("writing to a Vec cannot fail");
+        for offset in offsets.iter().skip(1) {
+            writeln!(&mut pdf, "{offset:010} 00000 n ")
+                .expect("writing to a Vec cannot fail");
+        }
+        writeln!(
+            &mut pdf,
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF",
+            offsets.len(),
+            xref_offset
+        )
+        .expect("writing to a Vec cannot fail");
+        pdf
+    }
+
+    fn make_job(tool: ToolId, input: PathBuf, output_dir: PathBuf) -> Job {
+        Job {
+            tool,
+            files: vec![input],
+            secondary_file: None,
+            output_dir,
+            target_format: "png".into(),
+            text: String::new(),
+            width: "1600".into(),
+            height: "1200".into(),
+            quality: "82".into(),
+            compress_pdf: false,
+            pdf_profile: "ebook".into(),
+            rotation: "90".into(),
+            pages: String::new(),
+            fps: "12".into(),
+            video_preset: "fast".into(),
+            language: "eng".into(),
+            dpi: "150".into(),
+        }
+    }
+
+    fn qpdf_available() -> bool {
+        Command::new("qpdf").arg("--version").output()
+            .map(|output| output.status.success()).unwrap_or(false)
+    }
+
+    fn pdfseparate_available() -> bool {
+        Command::new("pdfseparate").arg("-v").output()
+            .map(|output| output.status.success()).unwrap_or(false)
+    }
+
+    #[test]
+    fn multi_page_pdf_split_rotate_and_reorder_work() {
+        if !qpdf_available() || !pdfseparate_available() {
+            eprintln!("Skipping PDF integration test: qpdf and pdfseparate are required.");
+            return;
+        }
+
+        let directory = temp_dir("pdf-integration").unwrap();
+        let input = directory.join("eight-pages.pdf");
+        fs::write(&input, make_blank_pdf(8)).unwrap();
+
+        let split = execute({
+            let mut job = make_job(
+                ToolId::PdfSplit,
+                input.clone(),
+                directory.join("split"),
+            );
+            job.pages = "1,last".into();
+            job
+        }).expect("splitting all eight pages should succeed");
+        assert_eq!(split.len(), 8);
+        for page in &split {
+            assert_eq!(pdf_page_count(page).unwrap(), 1);
+        }
+
+        let rotated = execute(make_job(
+            ToolId::PdfRotate,
+            input.clone(),
+            directory.join("rotated"),
+        )).expect("rotating a multi-page PDF should succeed");
+        assert_eq!(rotated.len(), 1);
+        assert_eq!(pdf_page_count(&rotated[0]).unwrap(), 8);
+
+        let reordered = execute({
+            let mut job = make_job(
+                ToolId::PdfReorder,
+                input,
+                directory.join("reordered"),
+            );
+            job.pages = "3,1,2,4".into();
+            job
+        }).expect("reordering pages should succeed");
+        assert_eq!(reordered.len(), 1);
+        assert_eq!(pdf_page_count(&reordered[0]).unwrap(), 4);
+
+        let _ = fs::remove_dir_all(directory);
+    }
+}
+
+#[cfg(test)]
+mod pdf_page_tests {
+    use super::{parse_pdf_page_order, parse_pdf_page_range};
+
+    #[test]
+    fn split_range_accepts_last_page_keyword() {
+        assert_eq!(parse_pdf_page_range("1,last", 8).unwrap(), (1, 8));
+        assert_eq!(parse_pdf_page_range(" 2, 5 ", 8).unwrap(), (2, 5));
+    }
+
+    #[test]
+    fn split_range_rejects_pages_outside_document() {
+        let error = parse_pdf_page_range("1,12", 8).unwrap_err();
+        assert!(error.contains("has 8 pages"));
+        assert!(parse_pdf_page_range("9,last", 8).is_err());
+    }
+
+    #[test]
+    fn split_range_rejects_reversed_or_malformed_ranges() {
+        assert!(parse_pdf_page_range("5,2", 8).is_err());
+        assert!(parse_pdf_page_range("1", 8).is_err());
+        assert!(parse_pdf_page_range("1,0", 8).is_err());
+    }
+
+    #[test]
+    fn page_order_accepts_valid_pages_and_repeats() {
+        assert_eq!(parse_pdf_page_order("3,1,2,1", 4).unwrap(), vec![3, 1, 2, 1]);
+    }
+
+    #[test]
+    fn page_order_rejects_missing_pages_and_empty_input() {
+        assert!(parse_pdf_page_order("1,5", 4).unwrap_err().contains("has 4 pages"));
+        assert!(parse_pdf_page_order("", 4).is_err());
+        assert!(parse_pdf_page_order("1,,2", 4).is_err());
+    }
+}
+
+#[cfg(test)]
+mod file_url_tests {
+    use super::encode_file_url_path;
+
+    #[test]
+    fn file_url_paths_escape_spaces_and_uri_delimiters() {
+        assert_eq!(
+            encode_file_url_path("/tmp/ForgeBox profile/#1"),
+            "/tmp/ForgeBox%20profile/%231"
+        );
+        assert_eq!(
+            encode_file_url_path("C:/Users/Example User/AppData/Temp"),
+            "C:/Users/Example%20User/AppData/Temp"
+        );
+    }
+}
+
+#[cfg(test)]
+mod csv_conversion_tests {
+    use super::{csv_to_json, temp_dir};
+    use serde_json::Value;
+    use std::fs;
+
+    #[test]
+    fn csv_to_json_fills_missing_cells_but_rejects_extra_fields() {
+        let directory = temp_dir("csv-tests").unwrap();
+        let input = directory.join("input.csv");
+        let output = directory.join("output.json");
+
+        fs::write(&input, "name,city\nAda\n").unwrap();
+        csv_to_json(&input, &output).unwrap();
+        let value: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+        assert_eq!(value[0]["name"], "Ada");
+        assert_eq!(value[0]["city"], "");
+
+        fs::write(&input, "name,city\nAda,London,extra\n").unwrap();
+        let error = csv_to_json(&input, &output).unwrap_err();
+        assert!(error.contains("Extra fields would be lost"));
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn csv_to_json_rejects_duplicate_headers() {
+        let directory = temp_dir("csv-duplicate-headers").unwrap();
+        let input = directory.join("input.csv");
+        let output = directory.join("output.json");
+
+        fs::write(&input, "name,name\nAda,Byron\n").unwrap();
+        let error = csv_to_json(&input, &output).unwrap_err();
+        assert!(error.contains("duplicate column name"));
+
+        let _ = fs::remove_dir_all(directory);
+    }
+}
+
+#[cfg(test)]
+mod execution_warning_tests {
+    use super::{clear_execution_warnings, record_execution_warning, take_execution_warnings};
+
+    #[test]
+    fn execution_warnings_are_trimmed_and_deduplicated() {
+        clear_execution_warnings();
+        record_execution_warning("  qpdf: recovered object table  ".into());
+        record_execution_warning("qpdf: recovered object table".into());
+        assert_eq!(
+            take_execution_warnings(),
+            vec!["qpdf: recovered object table".to_string()]
+        );
+    }
+}
 
 #[cfg(test)]
 mod video_tests {

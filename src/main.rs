@@ -3,7 +3,7 @@ mod engine;
 
 use catalog::{info, Category, ToolId, TOOLS};
 use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Stroke, Vec2};
-use engine::{execute, Job};
+use engine::{execute, take_execution_warnings, Job};
 use std::path::{Path, PathBuf};
 use image::ImageDecoder;
 use std::collections::{HashMap, HashSet};
@@ -19,9 +19,11 @@ const ACCENT: Color32 = Color32::from_rgb(49, 165, 235);
 const CYAN: Color32 = Color32::from_rgb(71, 190, 250);
 const GREEN: Color32 = Color32::from_rgb(87, 190, 145);
 const RED: Color32 = Color32::from_rgb(235, 105, 123);
+const WARNING: Color32 = Color32::from_rgb(231, 177, 83);
 
 struct JobResult {
     result: Result<Vec<PathBuf>, String>,
+    warnings: Vec<String>,
 }
 
 enum DialogResult {
@@ -107,7 +109,7 @@ impl ForgeApp {
             compress_pdf: false,
             pdf_profile: "ebook".into(),
             rotation: "90".into(),
-            pages: "1,12".into(),
+            pages: "1,last".into(),
             fps: "12".into(),
             video_preset: "fast".into(),
             language: "eng".into(),
@@ -153,8 +155,8 @@ impl ForgeApp {
             ToolId::ImageCompress => self.quality = "82".into(),
             ToolId::PdfRotate => self.rotation = "90".into(),
             ToolId::PdfCompress => self.pdf_profile = "ebook".into(),
-            ToolId::PdfSplit => self.pages = "1,12".into(),
-            ToolId::PdfReorder => self.pages = "3,1,2,4".into(),
+            ToolId::PdfSplit => self.pages = "1,last".into(),
+            ToolId::PdfReorder => self.pages.clear(),
             _ => {}
         }
     }
@@ -203,28 +205,34 @@ impl ForgeApp {
     fn add_files(&mut self, mut paths: Vec<PathBuf>) {
         if self.selected_tool == ToolId::GenerateQr { return; }
         self.selection_notice = None;
-        paths.retain(|path| path.is_file());
-        if matches!(self.selected_tool, ToolId::VideoConvert | ToolId::VideoToGif) {
-            let before = paths.len();
-            paths.retain(|path| is_video_file(path));
-            let skipped = before.saturating_sub(paths.len());
-            if skipped > 0 {
-                self.selection_notice = Some(format!("Skipped {skipped} unsupported file(s). This tool requires video files."));
-            }
-            if paths.is_empty() { return; }
+
+        let requested = paths.len();
+        paths.retain(|path| path.is_file() && is_supported_input_file(self.selected_tool, path));
+        let skipped = requested.saturating_sub(paths.len());
+        let mut notices = Vec::new();
+        if skipped > 0 {
+            notices.push(format!(
+                "Skipped {skipped} unsupported item(s). This tool accepts {}.",
+                accepted_input_description(self.selected_tool)
+            ));
         }
+
         if self.is_single_file_tool() {
             if paths.len() > 1 {
-                self.selection_notice = Some("This tool accepts one file. The first file was selected; the others were ignored.".into());
+                notices.push("This tool accepts one file; only the first was selected.".into());
             }
             if let Some(path) = paths.into_iter().next() {
                 self.files.clear();
                 self.files.push(path);
             }
-            return;
+        } else {
+            for path in paths {
+                if !self.files.contains(&path) { self.files.push(path); }
+            }
         }
-        for path in paths {
-            if !self.files.contains(&path) { self.files.push(path); }
+
+        if !notices.is_empty() {
+            self.selection_notice = Some(notices.join(" "));
         }
     }
 
@@ -293,11 +301,26 @@ impl ForgeApp {
 
     fn queue_thumbnails(&mut self) {
         if self.selected_tool != ToolId::ImagesToPdf { return; }
-        for path in self.files.clone() {
-            if self.thumbnail_pending.len() >= 2 { break; }
-            if self.thumbnails.contains_key(&path) || self.thumbnail_pending.contains(&path) || self.thumbnail_errors.contains(&path) {
+
+        let available_slots = 2usize.saturating_sub(self.thumbnail_pending.len());
+        if available_slots == 0 { return; }
+
+        // Inspect the file list by reference and clone only the paths that can
+        // actually be scheduled. Cloning the entire batch every repaint is
+        // unnecessary, especially when a large set of pages is being added.
+        let mut candidates = Vec::with_capacity(available_slots);
+        for path in &self.files {
+            if self.thumbnails.contains_key(path)
+                || self.thumbnail_pending.contains(path)
+                || self.thumbnail_errors.contains(path)
+            {
                 continue;
             }
+            candidates.push(path.clone());
+            if candidates.len() >= available_slots { break; }
+        }
+
+        for path in candidates {
             self.thumbnail_pending.insert(path.clone());
             let tx = self.thumbnail_tx.clone();
             thread::spawn(move || {
@@ -375,7 +398,8 @@ impl ForgeApp {
         self.running = true;
         thread::spawn(move || {
             let result = execute(job);
-            let _ = tx.send(JobResult { result });
+            let warnings = take_execution_warnings();
+            let _ = tx.send(JobResult { result, warnings });
         });
     }
 
@@ -392,6 +416,9 @@ impl ForgeApp {
                             self.logs.push((true, format!("Done: {}", path.display())));
                         }
                     }
+                    for warning in message.warnings {
+                        self.logs.push((true, format!("Warning: {warning}")));
+                    }
                 }
                 Err(error) => self.logs.push((false, error)),
             }
@@ -404,6 +431,9 @@ impl ForgeApp {
         match self.selected_tool {
             ToolId::GenerateQr => !self.text.trim().is_empty(),
             ToolId::PdfMerge => self.files.len() >= 2,
+            ToolId::PdfSplit | ToolId::PdfReorder => {
+                !self.files.is_empty() && !self.pages.trim().is_empty()
+            }
             ToolId::PdfWatermark => !self.files.is_empty() && self.secondary_file.is_some(),
             _ => !self.files.is_empty(),
         }
@@ -572,6 +602,15 @@ impl eframe::App for ForgeApp {
                                 .halign(Align::Center)
                                 .wrap(),
                             );
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(format!("Requires: {}", tool.dependencies))
+                                        .size(10.5)
+                                        .color(MUTED),
+                                )
+                                .halign(Align::Center)
+                                .wrap(),
+                            );
                         });
                     });
             });
@@ -589,7 +628,7 @@ impl eframe::App for ForgeApp {
                     ui.set_width(ui.available_width());
                     let full_width = ui.available_width();
                     let small_controls = compact_ui || full_width < 680.0;
-                    // Preserve full step names on narrow windows by placing navigation
+                    // Preserve full step names on narrow layouts by placing navigation
                     // on a separate row instead of crushing the progress buttons.
                     let controls_width = if small_controls { 94.0 } else { 206.0 };
                     // Allocate the whole row, then position the stepper and navigation
@@ -744,7 +783,7 @@ impl eframe::App for ForgeApp {
                         ui.add_space(14.0);
                         ui.horizontal_wrapped(|ui| {
                             if ui.add_enabled(!self.running && !self.dialog_open, egui::Button::new(RichText::new(format!("{}  Choose files", glyph_text(self.icons_loaded, "󰈔"))).font(icon_font(14.0)).strong()).fill(ACCENT).min_size(Vec2::new(160.0, 40.0))).clicked() { self.choose_files(); }
-                            if ui.add_enabled(!self.running && !self.files.is_empty(), egui::Button::new("Clear list")).clicked() { self.files.clear(); self.selection_notice = None; self.dragging_file = None; self.drag_insert_index = None; self.drag_card_size = None; }
+                            if ui.add_enabled(!self.running && !self.files.is_empty(), egui::Button::new("Clear list")).clicked() { self.files.clear(); self.secondary_file = None; self.selection_notice = None; self.dragging_file = None; self.drag_insert_index = None; self.drag_card_size = None; }
                         });
                         ui.add_space(12.0);
                         // Persistent drop target: keep it visible even after files have been added.
@@ -759,7 +798,11 @@ impl eframe::App for ForgeApp {
                             });
                         });
                         let _ = drop;
-                        ui.add_space(12.0);
+                        ui.add_space(8.0);
+                        if let Some(notice) = &self.selection_notice {
+                            ui.label(RichText::new(notice).size(11.5).color(CYAN));
+                        }
+                        ui.add_space(8.0);
                         if !self.files.is_empty() {
                             let mut remove_index = None;
                             let mut reorder_request: Option<(usize, usize)> = None;
@@ -1109,9 +1152,6 @@ impl eframe::App for ForgeApp {
                             if let Some(index) = remove_index { if index < self.files.len() && !self.running { self.files.remove(index); } }
                             ui.add_space(5.0);
                             ui.label(RichText::new(format!("Files selected: {}", self.files.len())).size(12.0).color(MUTED));
-                            if let Some(notice) = &self.selection_notice {
-                                ui.label(RichText::new(notice).size(11.5).color(CYAN));
-                            }
                             if self.selected_tool == ToolId::PdfWatermark {
                                 ui.add_space(10.0);
                                 ui.horizontal(|ui| {
@@ -1168,11 +1208,14 @@ impl eframe::App for ForgeApp {
                         if self.running || !self.logs.is_empty() {
                             ui.add_space(12.0);
                             let has_error = self.logs.iter().any(|(ok, _)| !ok);
+                            let has_warning = self.logs.iter().any(|(ok, message)| *ok && message.starts_with("Warning:"));
                             let success_count = self.logs.iter().filter(|(ok, message)| *ok && message.starts_with("Done:")).count();
                             let (status_fill, status_edge) = if self.running {
                                 (Color32::from_rgb(19, 35, 48), Color32::from_rgb(35, 119, 160))
                             } else if has_error {
                                 (Color32::from_rgb(47, 23, 39), Color32::from_rgb(139, 60, 83))
+                            } else if has_warning {
+                                (Color32::from_rgb(48, 39, 23), Color32::from_rgb(139, 108, 51))
                             } else {
                                 (Color32::from_rgb(11, 43, 43), Color32::from_rgb(37, 103, 87))
                             };
@@ -1199,26 +1242,36 @@ impl eframe::App for ForgeApp {
                                                 }
                                             });
                                         } else {
-                                            let (check_rect, _) = ui.allocate_exact_size(Vec2::new(18.0, 22.0), egui::Sense::hover());
-                                            paint_check_mark(ui.painter(), check_rect.center(), 2.0, GREEN);
+                                            if has_warning {
+                                                let (icon_rect, _) = ui.allocate_exact_size(Vec2::new(18.0, 22.0), egui::Sense::hover());
+                                                ui.painter().text(icon_rect.center(), egui::Align2::CENTER_CENTER, "!", FontId::proportional(18.0), WARNING);
+                                            } else {
+                                                let (check_rect, _) = ui.allocate_exact_size(Vec2::new(18.0, 22.0), egui::Sense::hover());
+                                                paint_check_mark(ui.painter(), check_rect.center(), 2.0, GREEN);
+                                            }
                                             ui.vertical(|ui| {
-                                                let summary = if success_count > 0 {
+                                                let summary = if has_warning {
+                                                    format!("Done with warnings · outputs saved: {success_count}")
+                                                } else if success_count > 0 {
                                                     format!("Done · outputs saved: {success_count}")
                                                 } else {
                                                     self.logs.first().map(|(_, message)| message.clone()).unwrap_or_else(|| "Task completed".into())
                                                 };
-                                                ui.label(RichText::new(summary).strong().color(GREEN));
+                                                ui.label(RichText::new(summary).strong().color(if has_warning { WARNING } else { GREEN }));
                                                 if let Some((_, message)) = self.logs.iter().find(|(ok, message)| *ok && message.starts_with("Done:")) {
                                                     ui.add(egui::Label::new(RichText::new(message.trim_start_matches("Done:").trim()).size(11.5).color(MUTED)).truncate())
                                                         .on_hover_text(message.trim_start_matches("Done:").trim());
+                                                }
+                                                for (_, warning) in self.logs.iter().filter(|(ok, message)| *ok && message.starts_with("Warning:")) {
+                                                    ui.add(egui::Label::new(RichText::new(warning).size(11.5).color(WARNING)).wrap());
                                                 }
                                             });
                                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                                 if ui.button("Open folder").clicked() {
                                                     #[cfg(target_os = "linux")]
                                                     { let _ = std::process::Command::new("xdg-open").arg(&self.output_dir).spawn(); }
-                                                    #[cfg(target_os = "windows")]
-                                                    { let _ = std::process::Command::new("explorer.exe").arg(&self.output_dir).spawn(); }
+                                                    #[cfg(target_os = "macos")]
+                                                    { let _ = std::process::Command::new("open").arg(&self.output_dir).spawn(); }
                                                 }
                                             });
                                         }
@@ -1266,9 +1319,6 @@ fn load_thumbnail(path: &Path) -> Result<egui::ColorImage, String> {
         let temp = std::env::temp_dir().join(format!("forgebox-thumb-{}-{suffix}.png", std::process::id()));
         let program = match std::process::Command::new("magick").arg("-version").output() {
             Ok(output) if output.status.success() => "magick",
-            _ if cfg!(target_os = "windows") => {
-                return Err("ImageMagick (`magick.exe`) was not found. Install it and ensure it is available in PATH.".into());
-            }
             _ => "convert",
         };
         let output = std::process::Command::new(program)
@@ -1366,37 +1416,9 @@ fn collect_nerd_fonts(root: &PathBuf, out: &mut Vec<PathBuf>, depth: usize) {
     }
 }
 
-fn load_nerd_font(ctx: &egui::Context) -> bool {
-    let mut candidates: Vec<PathBuf> = vec![
-        PathBuf::from("/usr/share/fonts/nerd-fonts/JetBrainsMonoNerdFont-Regular.ttf"),
-        PathBuf::from("/usr/share/fonts/JetBrainsMonoNerdFont-Regular.ttf"),
-        PathBuf::from("/usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf"),
-        PathBuf::from("/usr/share/fonts/truetype/nerd-fonts/JetBrainsMonoNerdFont-Regular.ttf"),
-    ];
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = PathBuf::from(home);
-        candidates.push(home.join(".local/share/fonts/JetBrainsMonoNerdFont-Regular.ttf"));
-        candidates.push(home.join(".local/share/fonts/JetBrainsMono/JetBrainsMonoNerdFont-Regular.ttf"));
-    }
-    for root in ["/usr/share/fonts", "/usr/local/share/fonts"] {
-        collect_nerd_fonts(&PathBuf::from(root), &mut candidates, 0);
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = PathBuf::from(home);
-        collect_nerd_fonts(&home.join(".local/share/fonts"), &mut candidates, 0);
-        collect_nerd_fonts(&home.join(".fonts"), &mut candidates, 0);
-    }
-    if let Ok(output) = std::process::Command::new("fc-match")
-        .args(["-f", "%{file}", "JetBrainsMono Nerd Font"])
-        .output()
-    {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if path.to_lowercase().contains("nerd") { candidates.insert(0, PathBuf::from(path)); }
-        }
-    }
+fn install_nerd_font(ctx: &egui::Context, bytes: Option<Vec<u8>>) -> bool {
     let mut fonts = egui::FontDefinitions::default();
-    let loaded = if let Some(bytes) = candidates.iter().find_map(|path| std::fs::read(path).ok()) {
+    let loaded = if let Some(bytes) = bytes {
         fonts.font_data.insert("forgebox-nerd".to_owned(), egui::FontData::from_owned(bytes));
         let mut icon_family = vec!["forgebox-nerd".to_owned()];
         if let Some(proportional) = fonts.families.get(&egui::FontFamily::Proportional) {
@@ -1413,6 +1435,46 @@ fn load_nerd_font(ctx: &egui::Context) -> bool {
 
     ctx.set_fonts(fonts);
     loaded
+}
+
+fn load_nerd_font(ctx: &egui::Context) -> bool {
+    // Fontconfig knows the active font directories. Prefer its direct answer and
+    // avoid recursively scanning every system/user font folder on normal startup.
+    if let Ok(output) = std::process::Command::new("fc-match")
+        .args(["-f", "%{file}", "JetBrainsMono Nerd Font"])
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.to_lowercase().contains("nerd") {
+                if let Ok(bytes) = std::fs::read(path) {
+                    return install_nerd_font(ctx, Some(bytes));
+                }
+            }
+        }
+    }
+
+    // Fallback for systems without Fontconfig or for fonts outside its database.
+    let mut candidates: Vec<PathBuf> = vec![
+        PathBuf::from("/usr/share/fonts/nerd-fonts/JetBrainsMonoNerdFont-Regular.ttf"),
+        PathBuf::from("/usr/share/fonts/JetBrainsMonoNerdFont-Regular.ttf"),
+        PathBuf::from("/usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf"),
+        PathBuf::from("/usr/share/fonts/truetype/nerd-fonts/JetBrainsMonoNerdFont-Regular.ttf"),
+    ];
+    let home = std::env::var_os("HOME");
+
+    if let Some(home) = home {
+        let home = PathBuf::from(home);
+        candidates.push(home.join(".local/share/fonts/JetBrainsMonoNerdFont-Regular.ttf"));
+        candidates.push(home.join(".local/share/fonts/JetBrainsMono/JetBrainsMonoNerdFont-Regular.ttf"));
+        collect_nerd_fonts(&home.join(".local/share/fonts"), &mut candidates, 0);
+        collect_nerd_fonts(&home.join(".fonts"), &mut candidates, 0);
+    }
+    for root in ["/usr/share/fonts", "/usr/local/share/fonts"] {
+        collect_nerd_fonts(&PathBuf::from(root), &mut candidates, 0);
+    }
+
+    install_nerd_font(ctx, candidates.iter().find_map(|path| std::fs::read(path).ok()))
 }
 
 fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
@@ -1482,12 +1544,12 @@ fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
         ToolId::PdfSplit => {
             ui.label(RichText::new("Page range: start,end").size(12.0));
             ui.text_edit_singleline(&mut app.pages);
-            ui.label(RichText::new("For example, 1,12 creates separate files for pages 1–12.").size(11.0).color(MUTED));
+            ui.label(RichText::new("Creates one PDF per page. Use last to include through the final page, for example 1,last.").size(11.0).color(MUTED));
         }
         ToolId::PdfReorder => {
             ui.label(RichText::new("New page order").size(12.0));
             ui.text_edit_singleline(&mut app.pages);
-            ui.label(RichText::new("For example: 3,1,2,4. Page numbering starts at 1.").size(11.0).color(MUTED));
+            ui.label(RichText::new("Only listed pages are kept; omitted pages are removed. Example: 3,1,2,4.").size(11.0).color(MUTED));
         }
         ToolId::PdfToImages => {
             ui.label(RichText::new("Image format").size(12.0));
@@ -1603,7 +1665,7 @@ fn paint_snowfall(painter: &egui::Painter, rect: egui::Rect, time: f64) {
         // Fade the tail from fully transparent at its far end to at most 3%
         // opacity near the head. Keep segment count modest for low-end hardware.
         const TAIL_SEGMENTS: u32 = 24;
-        const MAX_TAIL_ALPHA: f32 = 1.00; // 3% of 255
+        const MAX_TAIL_ALPHA: f32 = 7.65; // 3% of 255
         for segment in 0..TAIL_SEGMENTS {
             let start_t = segment as f32 / TAIL_SEGMENTS as f32;
             let end_t = (segment + 1) as f32 / TAIL_SEGMENTS as f32;
@@ -1681,9 +1743,60 @@ fn glyph_text(icons_loaded: bool, glyph: &str) -> &str {
     }
 }
 
+fn file_extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+}
+
 fn is_video_file(path: &Path) -> bool {
-    matches!(path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase().as_str(),
+    matches!(file_extension(path).as_str(),
         "mp4" | "mkv" | "mov" | "webm" | "avi" | "m4v" | "mpeg" | "mpg" | "3gp" | "ogv" | "flv" | "mts" | "m2ts")
+}
+
+fn is_image_file(path: &Path) -> bool {
+    matches!(file_extension(path).as_str(),
+        "png" | "jpg" | "jpeg" | "webp" | "tif" | "tiff" | "bmp" | "heic" | "avif" | "gif")
+}
+
+fn is_audio_file(path: &Path) -> bool {
+    matches!(file_extension(path).as_str(),
+        "mp3" | "wav" | "flac" | "m4a" | "ogg" | "aac")
+}
+
+fn is_supported_input_file(tool: ToolId, path: &Path) -> bool {
+    match tool {
+        ToolId::GenerateQr => false,
+        ToolId::PdfMerge | ToolId::PdfSplit | ToolId::PdfCompress | ToolId::PdfRotate
+        | ToolId::PdfReorder | ToolId::PdfToImages | ToolId::PdfWatermark | ToolId::PdfToDoc => {
+            file_extension(path) == "pdf"
+        }
+        ToolId::DocToPdf => {
+            matches!(file_extension(path).as_str(), "doc" | "docx" | "odt" | "rtf")
+        }
+        ToolId::DataConvert => {
+            matches!(file_extension(path).as_str(), "csv" | "json" | "xlsx")
+        }
+        ToolId::ExtractAudio => is_video_file(path) || is_audio_file(path),
+        ToolId::VideoConvert | ToolId::VideoToGif => is_video_file(path),
+        ToolId::ImagesToPdf | ToolId::ImageConvert | ToolId::ImageResize | ToolId::ImageCompress
+        | ToolId::ImageGrayscale | ToolId::RemoveBackground | ToolId::ExtractExif
+        | ToolId::ImageOcr | ToolId::LongPngToPdf => is_image_file(path),
+    }
+}
+
+fn accepted_input_description(tool: ToolId) -> &'static str {
+    match tool {
+        ToolId::GenerateQr => "text",
+        ToolId::PdfMerge | ToolId::PdfSplit | ToolId::PdfCompress | ToolId::PdfRotate
+        | ToolId::PdfReorder | ToolId::PdfToImages | ToolId::PdfWatermark | ToolId::PdfToDoc => "PDF files",
+        ToolId::DocToPdf => "DOC, DOCX, ODT, or RTF files",
+        ToolId::DataConvert => "CSV, JSON, or XLSX files",
+        ToolId::ExtractAudio => "audio or video files",
+        ToolId::VideoConvert | ToolId::VideoToGif => "video files",
+        _ => "image files",
+    }
 }
 
 fn file_glyph(path: &PathBuf) -> &'static str {
@@ -1696,12 +1809,23 @@ fn file_glyph(path: &PathBuf) -> &'static str {
     }
 }
 
-fn default_output_dir() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        let downloads = PathBuf::from(home).join("Downloads");
-        if downloads.is_dir() { return downloads; }
+fn output_dir_for_home(home: &Path) -> PathBuf {
+    let downloads = home.join("Downloads");
+    if downloads.is_dir() {
+        downloads
+    } else {
+        home.to_path_buf()
     }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn default_output_dir() -> PathBuf {
+    let home = std::env::var_os("HOME");
+
+    if let Some(home) = home.map(PathBuf::from).filter(|path| path.is_dir()) {
+        return output_dir_for_home(&home);
+    }
+
+    std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir())
 }
 
 fn main() -> eframe::Result<()> {
@@ -1745,6 +1869,39 @@ mod tests {
         assert_eq!(values, vec!["D", "B", "C", "A"]);
     }
 
+
+    #[test]
+    fn output_dir_prefers_downloads_when_it_exists() {
+        let home = std::env::temp_dir().join(format!("forgebox-output-downloads-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("Downloads")).unwrap();
+        assert_eq!(super::output_dir_for_home(&home), home.join("Downloads"));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn output_dir_falls_back_to_home_when_downloads_is_missing() {
+        let home = std::env::temp_dir().join(format!("forgebox-output-home-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        assert_eq!(super::output_dir_for_home(&home), home);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn input_file_filters_match_each_tool_category() {
+        use crate::catalog::ToolId;
+
+        assert!(super::is_supported_input_file(ToolId::PdfSplit, std::path::Path::new("input.PDF")));
+        assert!(!super::is_supported_input_file(ToolId::PdfSplit, std::path::Path::new("input.png")));
+        assert!(super::is_supported_input_file(ToolId::ImageConvert, std::path::Path::new("input.HEIC")));
+        assert!(!super::is_supported_input_file(ToolId::ImageConvert, std::path::Path::new("input.docx")));
+        assert!(super::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("track.FLAC")));
+        assert!(super::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("clip.mkv")));
+        assert!(!super::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("table.xlsx")));
+        assert!(super::is_supported_input_file(ToolId::DocToPdf, std::path::Path::new("report.docx")));
+        assert!(super::is_supported_input_file(ToolId::DataConvert, std::path::Path::new("data.csv")));
+    }
 
     #[test]
     fn video_extension_filter_recognizes_common_containers() {

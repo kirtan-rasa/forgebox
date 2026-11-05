@@ -1,6 +1,6 @@
 [package]
 name = "forgebox"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 edition = "2021"
 description = "A privacy-first local file utility studio"
 license = "MIT"
@@ -23,10 +23,7 @@ panic = "abort"
 # Native Wayland external file drops for the current eframe/winit 0.30 stack.
 [patch.crates-io]
 winit = { path = "patches/winit" }
-
-[target.'cfg(windows)'.build-dependencies]
-winres = "0.1"
-
+egui-winit = { path = "patches/egui-winit" }
 
 # Linux distribution packages: DEB, AppImage and Arch Pacman.
 [package.metadata.packager]
@@ -61,7 +58,7 @@ depends = [
   "glibc", "gcc-libs", "libxkbcommon", "wayland", "libx11",
   "libxrandr", "libxi", "libxcursor", "libxinerama", "mesa",
   "dbus", "freetype2", "fontconfig", "imagemagick", "poppler",
-  "ghostscript", "qpdf", "libreoffice-fresh", "tesseract",
+  "ghostscript", "qpdf", "libreoffice-fresh", "tesseract", "tesseract-data-eng",
   "perl-image-exiftool", "xdg-utils"
 ]
 

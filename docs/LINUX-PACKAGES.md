@@ -11,7 +11,9 @@ ForgeBox releases provide four Linux distribution formats:
 
 The Arch release includes a native Pacman package, plus its `PKGBUILD` and `.SRCINFO` for rebuilding. Package names are kept consistent as `forgebox`.
 
-The DEB and Pacman packages declare the native libraries and common conversion engines used by ForgeBox. The exact dependency names follow each distribution's package repositories.
+RPM, DEB, and Pacman packages declare the native libraries and common conversion engines used by ForgeBox. Install them through the distribution's package manager so it can resolve dependencies. The RPM and DEB packages require Tesseract and the English language data used by default OCR. Arch packages include both `tesseract` and `tesseract-data-eng`.
+
+The AppImage is different: it does not install host conversion engines or language data. Install the utilities required by the features you use.
 
 ## AppImage limitations
 
@@ -25,7 +27,7 @@ AppImage bundles ForgeBox, its icon and desktop entry, and the shared libraries 
 - ExifTool for EXIF extraction.
 - FFmpeg for video, audio and GIF features (optional).
 - `pdftk` for PDF watermarking.
-- `rembg` and its Python model environment for background removal.
+- `rembg` and its Python model environment for background removal. Fedora RPM users can run `/usr/share/doc/forgebox/install-rembg-fedora.sh` to set up the optional CPU backend in an isolated Python 3.13 environment.
 
 AppImage still relies on the host's Linux kernel and glibc baseline. It is not a replacement for a fully self-contained virtual machine.
 

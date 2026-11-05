@@ -16,22 +16,24 @@ permissions:
 
 jobs:
   lockfile:
-    name: Resolve locked Rust dependencies
+    name: Validate committed Rust lockfile
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Prepare native Wayland patch
         run: bash scripts/enable-native-wayland-dnd.sh
-      - name: Generate Cargo.lock
-        run: cargo generate-lockfile
+      - name: Validate committed Cargo.lock
+        run: |
+          test -s Cargo.lock
+          git ls-files --error-unmatch Cargo.lock
+          cargo metadata --locked --format-version 1 --no-deps
       - uses: actions/upload-artifact@v4
         with:
           name: internal-cargo-lock
           path: Cargo.lock
           if-no-files-found: error
           retention-days: 1
-
   test:
     name: Test Linux source
     needs: lockfile
@@ -50,9 +52,12 @@ jobs:
             build-essential pkg-config git \
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev \
             libxi-dev libxcursor-dev libxinerama-dev libgl1-mesa-dev \
-            libdbus-1-dev libfreetype6-dev libfontconfig1-dev
+            libdbus-1-dev libfreetype6-dev libfontconfig1-dev \
+            qpdf poppler-utils
       - name: Prepare native Wayland drag-and-drop backend
         run: bash scripts/enable-native-wayland-dnd.sh
+      - name: Validate optional Fedora installer script
+        run: bash -n scripts/install-rembg-fedora.sh
       - name: Run Rust tests
         run: cargo test --locked
       - name: Check Rust source
@@ -87,6 +92,7 @@ jobs:
           desktop-file-validate share/forgebox.desktop
           bash packaging/rpm/build-rpm.sh
           rpm -qp --requires dist/*.rpm
+          rpm -qpl dist/*.rpm | grep -F '/install-rembg-fedora.sh'
       - name: Sign RPM for tagged releases
         if: startsWith(github.ref, 'refs/tags/v')
         env:
