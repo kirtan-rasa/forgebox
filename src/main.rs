@@ -1385,37 +1385,9 @@ fn collect_nerd_fonts(root: &PathBuf, out: &mut Vec<PathBuf>, depth: usize) {
     }
 }
 
-fn load_nerd_font(ctx: &egui::Context) -> bool {
-    let mut candidates: Vec<PathBuf> = vec![
-        PathBuf::from("/usr/share/fonts/nerd-fonts/JetBrainsMonoNerdFont-Regular.ttf"),
-        PathBuf::from("/usr/share/fonts/JetBrainsMonoNerdFont-Regular.ttf"),
-        PathBuf::from("/usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf"),
-        PathBuf::from("/usr/share/fonts/truetype/nerd-fonts/JetBrainsMonoNerdFont-Regular.ttf"),
-    ];
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = PathBuf::from(home);
-        candidates.push(home.join(".local/share/fonts/JetBrainsMonoNerdFont-Regular.ttf"));
-        candidates.push(home.join(".local/share/fonts/JetBrainsMono/JetBrainsMonoNerdFont-Regular.ttf"));
-    }
-    for root in ["/usr/share/fonts", "/usr/local/share/fonts"] {
-        collect_nerd_fonts(&PathBuf::from(root), &mut candidates, 0);
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = PathBuf::from(home);
-        collect_nerd_fonts(&home.join(".local/share/fonts"), &mut candidates, 0);
-        collect_nerd_fonts(&home.join(".fonts"), &mut candidates, 0);
-    }
-    if let Ok(output) = std::process::Command::new("fc-match")
-        .args(["-f", "%{file}", "JetBrainsMono Nerd Font"])
-        .output()
-    {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if path.to_lowercase().contains("nerd") { candidates.insert(0, PathBuf::from(path)); }
-        }
-    }
+fn install_nerd_font(ctx: &egui::Context, bytes: Option<Vec<u8>>) -> bool {
     let mut fonts = egui::FontDefinitions::default();
-    let loaded = if let Some(bytes) = candidates.iter().find_map(|path| std::fs::read(path).ok()) {
+    let loaded = if let Some(bytes) = bytes {
         fonts.font_data.insert("forgebox-nerd".to_owned(), egui::FontData::from_owned(bytes));
         let mut icon_family = vec!["forgebox-nerd".to_owned()];
         if let Some(proportional) = fonts.families.get(&egui::FontFamily::Proportional) {
@@ -1432,6 +1404,49 @@ fn load_nerd_font(ctx: &egui::Context) -> bool {
 
     ctx.set_fonts(fonts);
     loaded
+}
+
+fn load_nerd_font(ctx: &egui::Context) -> bool {
+    // Fontconfig knows the active font directories. Prefer its direct answer and
+    // avoid recursively scanning every system/user font folder on normal startup.
+    if let Ok(output) = std::process::Command::new("fc-match")
+        .args(["-f", "%{file}", "JetBrainsMono Nerd Font"])
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.to_lowercase().contains("nerd") {
+                if let Ok(bytes) = std::fs::read(path) {
+                    return install_nerd_font(ctx, Some(bytes));
+                }
+            }
+        }
+    }
+
+    // Fallback for systems without Fontconfig or for fonts outside its database.
+    let mut candidates: Vec<PathBuf> = vec![
+        PathBuf::from("/usr/share/fonts/nerd-fonts/JetBrainsMonoNerdFont-Regular.ttf"),
+        PathBuf::from("/usr/share/fonts/JetBrainsMonoNerdFont-Regular.ttf"),
+        PathBuf::from("/usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf"),
+        PathBuf::from("/usr/share/fonts/truetype/nerd-fonts/JetBrainsMonoNerdFont-Regular.ttf"),
+    ];
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
+    #[cfg(not(windows))]
+    let home = std::env::var_os("HOME");
+
+    if let Some(home) = home {
+        let home = PathBuf::from(home);
+        candidates.push(home.join(".local/share/fonts/JetBrainsMonoNerdFont-Regular.ttf"));
+        candidates.push(home.join(".local/share/fonts/JetBrainsMono/JetBrainsMonoNerdFont-Regular.ttf"));
+        collect_nerd_fonts(&home.join(".local/share/fonts"), &mut candidates, 0);
+        collect_nerd_fonts(&home.join(".fonts"), &mut candidates, 0);
+    }
+    for root in ["/usr/share/fonts", "/usr/local/share/fonts"] {
+        collect_nerd_fonts(&PathBuf::from(root), &mut candidates, 0);
+    }
+
+    install_nerd_font(ctx, candidates.iter().find_map(|path| std::fs::read(path).ok()))
 }
 
 fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
@@ -1622,7 +1637,7 @@ fn paint_snowfall(painter: &egui::Painter, rect: egui::Rect, time: f64) {
         // Fade the tail from fully transparent at its far end to at most 3%
         // opacity near the head. Keep segment count modest for low-end hardware.
         const TAIL_SEGMENTS: u32 = 24;
-        const MAX_TAIL_ALPHA: f32 = 1.00; // 3% of 255
+        const MAX_TAIL_ALPHA: f32 = 7.65; // 3% of 255
         for segment in 0..TAIL_SEGMENTS {
             let start_t = segment as f32 / TAIL_SEGMENTS as f32;
             let end_t = (segment + 1) as f32 / TAIL_SEGMENTS as f32;
