@@ -11,7 +11,9 @@ ForgeBox releases provide four Linux distribution formats:
 
 The Arch release includes a native Pacman package, plus its `PKGBUILD` and `.SRCINFO` for rebuilding. Package names are kept consistent as `forgebox`.
 
-RPM, DEB, and Pacman packages declare the native libraries and common conversion engines used by ForgeBox. Install them through the distribution's package manager so it can resolve dependencies. The RPM and DEB packages require Tesseract and the English language data used by default OCR. Arch packages include both `tesseract` and `tesseract-data-eng`.
+RPM, DEB, and Pacman packages declare the native libraries and common conversion engines used by ForgeBox. Install them through the distribution's package manager so it can resolve dependencies. The RPM and DEB packages require Tesseract and the English language data used by default OCR. Arch packages include `tesseract`, `tesseract-data-eng`, and `pdftk` for PDF watermarking.
+
+FFmpeg is optional because it is only used by the audio and video tools. RPM packages recommend it, and the Arch package lists it as an optional dependency. On Arch, install it with `sudo pacman -S ffmpeg` when you need those media tools.
 
 The AppImage is different: it does not install host conversion engines or language data. Install the utilities required by the features you use.
 
