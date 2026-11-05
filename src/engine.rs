@@ -595,8 +595,8 @@ fn soffice_convert(input: &Path, extension: &str, output: &Path) -> Result<(), S
         // share the same user profile. A per-conversion profile avoids conflicts
         // with the user's desktop session and other headless conversions.
         run_ok("libreoffice", vec![
-            os("--headless"),
             os(format!("-env:UserInstallation={profile_url}")),
+            os("--headless"),
             os("--convert-to"),
             os(extension),
             os("--outdir"),
