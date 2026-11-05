@@ -5,15 +5,17 @@ ForgeBox releases provide four Linux distribution formats:
 | Format | Intended systems | Install |
 |---|---|---|
 | RPM | Fedora and other RPM distributions | `sudo dnf install ./forgebox-*.rpm` |
-| DEB | Debian and Ubuntu | `sudo apt install ./forgebox-*.deb` |
-| Pacman | Arch Linux | Extract the generated Pacman source archive and run `makepkg -si` in the directory containing `PKGBUILD` |
-| AppImage | Compatible x86_64 Linux distributions | `chmod +x ForgeBox-*.AppImage && ./ForgeBox-*.AppImage` |
+| DEB | Debian and Ubuntu | `sudo apt install ./forgebox_*.deb` |
+| Pacman | Arch Linux | `sudo pacman -U ./forgebox-*.pkg.tar.zst` |
+| AppImage | Compatible x86_64 Linux distributions | `chmod +x ./forgebox_*.AppImage && ./forgebox_*.AppImage` |
+
+The Arch release includes a native Pacman package, plus its `PKGBUILD` and `.SRCINFO` for rebuilding. Package names are kept consistent as `forgebox`.
 
 The DEB and Pacman packages declare the native libraries and common conversion engines used by ForgeBox. The exact dependency names follow each distribution's package repositories.
 
 ## AppImage limitations
 
-AppImage bundles ForgeBox and the shared libraries detected by the packager. It does **not** bundle every command-line conversion engine. Install the engines required by the features you use:
+AppImage bundles ForgeBox, its icon and desktop entry, and the shared libraries detected by the packager. It does **not** bundle every command-line conversion engine. Install the engines required by the features you use:
 
 - ImageMagick for image conversion and image-to-PDF.
 - Poppler utilities for PDF merge, split and rendering.
@@ -25,7 +27,7 @@ AppImage bundles ForgeBox and the shared libraries detected by the packager. It 
 - `pdftk` for PDF watermarking.
 - `rembg` and its Python model environment for background removal.
 
-AppImage also relies on the host's supported Linux kernel and glibc baseline. It is not a replacement for a fully self-contained virtual machine.
+AppImage still relies on the host's Linux kernel and glibc baseline. It is not a replacement for a fully self-contained virtual machine.
 
 ## RPM signing
 
@@ -44,7 +46,7 @@ Example key generation:
 gpg --full-generate-key
 ```
 
-Choose an RSA signing key (3072 bits or stronger), give it a clear ForgeBox release identity, and leave the passphrase empty so the isolated CI runner can sign without an interactive prompt. This key is for package signing only.
+Choose an RSA signing key (3072 bits or stronger), give it a clear ForgeBox release identity, and leave its passphrase empty so the isolated CI runner can sign without an interactive prompt. This key is for package signing only.
 
 Export the secret key to a local file:
 
@@ -67,6 +69,6 @@ The public-key fingerprint is also published in `forgebox-rpm-signing-key-id.txt
 
 ## Release workflow
 
-The Linux workflow runs tests and builds RPM, DEB, AppImage and Pacman outputs. A tag matching the version in `Cargo.toml` publishes the artifacts and a `SHA256SUMS` file as a GitHub Release.
+The Linux workflow runs tests, builds RPM, DEB and AppImage outputs, builds a native Arch package with `makepkg`, and publishes SHA-256 checksums with tagged GitHub releases.
 
 The current workflow does not publish to a signed APT or Pacman repository. DEB and Arch users install the downloaded release artifacts directly. AUR/Flathub-style repository publication can be added separately after the first package builds are verified.
