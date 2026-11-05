@@ -404,6 +404,9 @@ impl ForgeApp {
         match self.selected_tool {
             ToolId::GenerateQr => !self.text.trim().is_empty(),
             ToolId::PdfMerge => self.files.len() >= 2,
+            ToolId::PdfSplit | ToolId::PdfReorder => {
+                !self.files.is_empty() && !self.pages.trim().is_empty()
+            }
             ToolId::PdfWatermark => !self.files.is_empty() && self.secondary_file.is_some(),
             _ => !self.files.is_empty(),
         }
