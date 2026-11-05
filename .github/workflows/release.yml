@@ -45,6 +45,10 @@ jobs:
           name: internal-cargo-lock
           path: .
       - uses: dtolnay/rust-toolchain@stable
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Validate shell scripts
+        run: find scripts packaging -type f -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
       - name: Install native build dependencies
         run: |
           sudo apt-get update
