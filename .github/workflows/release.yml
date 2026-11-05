@@ -137,7 +137,7 @@ jobs:
           test -n "$(find dist/linux -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"
 
           dpkg-deb --info "$DEB"
-          dpkg-deb --contents "$DEB" | grep -q 'usr/bin/forgebox'
+          dpkg-deb --contents "$DEB" | grep 'usr/bin/forgebox' >/dev/null
 
           bash packaging/linux/prepare-pacman-pkgbuild.sh dist/linux/PKGBUILD
 
@@ -151,7 +151,7 @@ jobs:
           rm -rf "$APPIMAGE_CHECK_DIR"
           trap - EXIT
 
-          find dist/linux -maxdepth 1 -type f -printf '%P\\n' | sort
+          find dist/linux -maxdepth 1 -type f -printf '%P\n' | sort
       - uses: actions/upload-artifact@v4
         with:
           name: forgebox-deb-appimage-arch-x86_64
@@ -166,7 +166,7 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Install Arch packaging tools
-        run: pacman -Sy --noconfirm --needed base-devel git
+        run: pacman -Sy --noconfirm --needed base-devel git shadow
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
@@ -177,9 +177,10 @@ jobs:
         run: |
           set -euo pipefail
           useradd --create-home builder
+          WORKDIR="$GITHUB_WORKSPACE/dist/linux"
           chown -R builder:builder "$GITHUB_WORKSPACE/dist"
-          su builder -c 'cd "$GITHUB_WORKSPACE/dist/linux" && makepkg --nodeps --noconfirm'
-          su builder -c 'cd "$GITHUB_WORKSPACE/dist/linux" && makepkg --printsrcinfo > .SRCINFO'
+          su builder -c "cd '$WORKDIR' && makepkg --nodeps --noconfirm"
+          su builder -c "cd '$WORKDIR' && makepkg --printsrcinfo > .SRCINFO"
           test -n "$(find dist/linux -maxdepth 1 -type f -name '*.pkg.tar.*' -print -quit)"
           test -s dist/linux/.SRCINFO
           pacman -Qip dist/linux/*.pkg.tar.zst
