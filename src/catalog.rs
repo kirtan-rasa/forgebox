@@ -76,7 +76,7 @@ pub struct ToolInfo {
 
 pub const TOOLS: [ToolInfo; 23] = [
     ToolInfo { id: ToolId::ImagesToPdf, category: Category::Images, name: "Images to PDF", subtitle: "Multiple images in one multi-page PDF", description: "Combine selected images into a single PDF. Each image becomes a separate page in list order.", glyph: "󰈙", dependencies: "ImageMagick" },
-    ToolInfo { id: ToolId::ImageConvert, category: Category::Images, name: "Image Converter", subtitle: "PNG · JPG · WebP · TIFF · HEIC", description: "Convert images between popular formats. Select multiple files at once.", glyph: "󰓦", dependencies: "ImageMagick (magick command)" },
+    ToolInfo { id: ToolId::ImageConvert, category: Category::Images, name: "Image Converter", subtitle: "PNG · JPG · WebP · TIFF · HEIC", description: "Convert images between popular formats. Select multiple files at once.", glyph: "󰓦", dependencies: "ImageMagick (magick or convert)" },
     ToolInfo { id: ToolId::ImageResize, category: Category::Images, name: "Resize Image", subtitle: "Set width and height without distortion", description: "Resize an image to fit the requested dimensions while preserving its aspect ratio.", glyph: "󰩨", dependencies: "ImageMagick" },
     ToolInfo { id: ToolId::ImageCompress, category: Category::Images, name: "Compress Image", subtitle: "Smaller files, originals preserved", description: "Adjust quality for JPEG, WebP, and supported ImageMagick formats.", glyph: "󰍛", dependencies: "ImageMagick" },
     ToolInfo { id: ToolId::ImageGrayscale, category: Category::Images, name: "Grayscale", subtitle: "Black and white", description: "Convert an image to grayscale while preserving its format.", glyph: "󰔐", dependencies: "ImageMagick" },
