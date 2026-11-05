@@ -628,7 +628,20 @@ fn command_candidates(program: &str) -> Vec<OsString> {
     }
     #[cfg(not(windows))]
     {
-        vec![OsString::from(program)]
+        if program == "rembg" {
+            let mut candidates = Vec::new();
+            if let Some(home) = std::env::var_os("HOME") {
+                let home = PathBuf::from(home);
+                candidates.push(
+                    home.join(".local/share/forgebox/rembg-venv/bin/rembg").into_os_string()
+                );
+                candidates.push(home.join(".local/bin/rembg").into_os_string());
+            }
+            candidates.push(OsString::from(program));
+            candidates
+        } else {
+            vec![OsString::from(program)]
+        }
     }
 }
 
@@ -653,9 +666,15 @@ fn run_ok(program: &str, args: Vec<OsString>) -> Result<Output, String> {
             Err(error) => return Err(format!("Failed to launch `{program}` via `{label}`: {error}")),
         }
     }
+    let install_hint = match program {
+        "tesseract" => " On Fedora, install it with: sudo dnf install tesseract tesseract-langpack-eng.",
+        "rembg" => " On Fedora, run: bash /usr/share/doc/forgebox/install-rembg-fedora.sh. This installs the optional CPU backend in a dedicated Python environment.",
+        _ => " See the Installation section in the README for setup instructions.",
+    };
     Err(format!(
-        "Dependency `{program}` was not found. Tried: {}. See the Installation section in the README.",
-        tried.join(", ")
+        "Dependency `{program}` was not found. Tried: {}.{}",
+        tried.join(", "),
+        install_hint
     ))
 }
 
