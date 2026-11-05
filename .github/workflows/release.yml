@@ -53,6 +53,8 @@ jobs:
             libdbus-1-dev libfreetype6-dev libfontconfig1-dev
       - name: Prepare native Wayland drag-and-drop backend
         run: bash scripts/enable-native-wayland-dnd.sh
+      - name: Validate optional Fedora installer script
+        run: bash -n scripts/install-rembg-fedora.sh
       - name: Run Rust tests
         run: cargo test --locked
       - name: Check Rust source
@@ -87,6 +89,7 @@ jobs:
           desktop-file-validate share/forgebox.desktop
           bash packaging/rpm/build-rpm.sh
           rpm -qp --requires dist/*.rpm
+          rpm -qpl dist/*.rpm | grep -F '/install-rembg-fedora.sh'
       - name: Sign RPM for tagged releases
         if: startsWith(github.ref, 'refs/tags/v')
         env:
