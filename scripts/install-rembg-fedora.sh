@@ -12,9 +12,9 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   sudo dnf install -y python3.13
 fi
 
-# Fedora's pip wheel package supplies the wheel used to bootstrap pip inside venvs.
-if ! rpm -q python3-pip-wheel >/dev/null 2>&1; then
-  sudo dnf install -y python3-pip-wheel
+# Fedora ships pip wheels separately for each interpreter version.
+if ! rpm -q python3.13-pip-wheel >/dev/null 2>&1; then
+  sudo dnf install -y python3.13-pip-wheel
 fi
 
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
@@ -46,7 +46,7 @@ fi
 
 if ! "$VENV_DIR/bin/python" -m pip --version >/dev/null 2>&1; then
   echo "Could not initialise pip inside the Python 3.13 environment." >&2
-  echo "Install Fedora's python3-pip-wheel package and run this helper again." >&2
+  echo "Install Fedora's python3.13-pip-wheel package and run this helper again." >&2
   exit 3
 fi
 
