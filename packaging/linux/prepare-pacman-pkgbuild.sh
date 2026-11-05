@@ -44,6 +44,36 @@ replacement = """package() {
 }"""
 replace_one(package_pattern, replacement, "package()")
 
+# FFmpeg is intentionally optional: the image, PDF, document, and data tools do
+# not need the sizeable audio/video backend. cargo-packager does not currently
+# expose Pacman optdepends, so add the supported media backend to PKGBUILD here.
+optional_dependency = "ffmpeg: Enable audio, video, and GIF conversion"
+if re.search(r"(?m)^optdepends=", text):
+    optdepends_match = re.search(r"(?ms)^optdepends=\\((.*?)\\)", text)
+    if not optdepends_match:
+        raise SystemExit("Could not parse generated optdepends array.")
+    entries = optdepends_match.group(1).split()
+    if optional_dependency not in entries:
+        insertion = optdepends_match.end() - 1
+        text = text[:insertion] + f" '{optional_dependency}'" + text[insertion:]
+else:
+    depends_start = re.search(r"(?m)^depends=\\(", text)
+    if not depends_start:
+        raise SystemExit("Generated PKGBUILD does not contain depends.")
+    depth = 0
+    depends_end = None
+    for index in range(depends_start.start(), len(text)):
+        if text[index] == "(":
+            depth += 1
+        elif text[index] == ")":
+            depth -= 1
+            if depth == 0:
+                depends_end = index + 1
+                break
+    if depends_end is None:
+        raise SystemExit("Could not find the end of the generated depends array.")
+    text = text[:depends_end] + f"\\noptdepends=('{optional_dependency}')" + text[depends_end:]
+
 path.write_text(text, encoding="utf-8")
 PY
 
