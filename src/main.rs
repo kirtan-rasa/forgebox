@@ -1708,12 +1708,26 @@ fn file_glyph(path: &PathBuf) -> &'static str {
     }
 }
 
-fn default_output_dir() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        let downloads = PathBuf::from(home).join("Downloads");
-        if downloads.is_dir() { return downloads; }
+fn output_dir_for_home(home: &Path) -> PathBuf {
+    let downloads = home.join("Downloads");
+    if downloads.is_dir() {
+        downloads
+    } else {
+        home.to_path_buf()
     }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn default_output_dir() -> PathBuf {
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
+    #[cfg(not(windows))]
+    let home = std::env::var_os("HOME");
+
+    if let Some(home) = home.map(PathBuf::from).filter(|path| path.is_dir()) {
+        return output_dir_for_home(&home);
+    }
+
+    std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir())
 }
 
 fn main() -> eframe::Result<()> {
@@ -1757,6 +1771,24 @@ mod tests {
         assert_eq!(values, vec!["D", "B", "C", "A"]);
     }
 
+
+    #[test]
+    fn output_dir_prefers_downloads_when_it_exists() {
+        let home = std::env::temp_dir().join(format!("forgebox-output-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("Downloads")).unwrap();
+        assert_eq!(super::output_dir_for_home(&home), home.join("Downloads"));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn output_dir_falls_back_to_home_when_downloads_is_missing() {
+        let home = std::env::temp_dir().join(format!("forgebox-output-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        assert_eq!(super::output_dir_for_home(&home), home);
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn video_extension_filter_recognizes_common_containers() {
