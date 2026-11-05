@@ -16,6 +16,16 @@ Some compositors require the accepted MIME type to be reaffirmed as the pointer 
 
 These protocol details are intended to improve compatibility across native Wayland compositors. They still need to be verified on the affected GNOME setup; successful operation on one compositor does not prove equivalent behavior on all others.
 
+## GNOME clipboard / drag-and-drop interaction
+
+The eframe 0.29.1 dependency graph enables the `egui-winit` clipboard feature. Upstream `egui-winit` implements its Wayland clipboard backend with `smithay-clipboard 0.7.x`. That backend creates a second event queue and a second `wl_data_device` for the same Wayland seat. Its data-device drag-and-drop callbacks are empty.
+
+On the affected GNOME setup, the Wayland trace showed the Winit device receiving no DnD events while the device created by the clipboard worker received `data_offer`, `enter`, `motion`, and `drop`. The latter cannot forward the drag to Winit, so the application never receives `HoveredFile` or `DroppedFile`.
+
+ForgeBox therefore vendors the matching `egui-winit 0.29.1` sources under `patches/egui-winit` and changes the clipboard backend: it retains `arboard`, but does not initialize `smithay-clipboard`. On Linux, this means OS clipboard access uses the X11/XWayland backend when available. Without a usable X11 display, egui falls back to its in-process clipboard. The intent is to leave one Wayland data device, owned by Winit, responsible for native file drops.
+
+This is a targeted workaround for the duplicate data-device behavior observed on GNOME. It is not considered verified until a build containing this patch has been tested on GNOME.
+
 ## Pinned source
 
 The bootstrap script fetches the vendored crate from this pinned source:

@@ -23,6 +23,7 @@ panic = "abort"
 # Native Wayland external file drops for the current eframe/winit 0.30 stack.
 [patch.crates-io]
 winit = { path = "patches/winit" }
+egui-winit = { path = "patches/egui-winit" }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
