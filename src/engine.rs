@@ -4,7 +4,7 @@ use serde_json::{Map, Value};
 use qrcode::QrCode;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -626,11 +626,14 @@ fn soffice_convert(input: &Path, extension: &str, output: &Path) -> Result<(), S
     result
 }
 
-fn run_magick_owned(args: Vec<OsString>) -> Result<(), String> {
-    let program = *IMAGEMAGICK_PROGRAM.get_or_init(|| {
+pub(crate) fn image_magick_program() -> &'static str {
+    *IMAGEMAGICK_PROGRAM.get_or_init(|| {
         if has_command("magick") { "magick" } else { "convert" }
-    });
-    run_ok(program, args).map(|_| ())
+    })
+}
+
+fn run_magick_owned(args: Vec<OsString>) -> Result<(), String> {
+    run_ok(image_magick_program(), args).map(|_| ())
 }
 
 fn command_candidates(program: &str) -> Vec<OsString> {
@@ -777,8 +780,18 @@ fn parse_pdf_page_order(value: &str, page_count: u32) -> Result<Vec<u32>, String
     }).collect()
 }
 
+fn command_version_succeeds(candidate: &OsStr) -> bool {
+    Command::new(candidate)
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
 fn has_command(program: &str) -> bool {
-    command_candidates(program).iter().any(|candidate| Command::new(candidate).arg("--version").output().is_ok())
+    command_candidates(program)
+        .iter()
+        .any(|candidate| command_version_succeeds(candidate))
 }
 
 fn require_files(job: &Job, min: usize, message: &str) -> Result<(), String> {
@@ -1154,5 +1167,21 @@ mod video_tests {
             "wma",
         ).expect_err("WMA is not a supported audio output target");
         assert!(error.contains("is not supported"));
+    }
+}
+
+
+#[cfg(test)]
+mod command_detection_tests {
+    use super::command_version_succeeds;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn command_detection_requires_a_successful_exit_status() {
+        assert!(command_version_succeeds(OsStr::new("/bin/true")));
+        assert!(!command_version_succeeds(OsStr::new("/bin/false")));
+        assert!(!command_version_succeeds(OsStr::new(
+            "/definitely/missing/forgebox-command"
+        )));
     }
 }
