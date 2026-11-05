@@ -980,6 +980,142 @@ mod tests {
 
 
 #[cfg(test)]
+mod pdf_integration_tests {
+    use super::{execute, pdf_page_count, temp_dir, Job};
+    use crate::catalog::ToolId;
+    use std::fs;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    fn make_blank_pdf(page_count: u32) -> Vec<u8> {
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        ];
+        let kids = (0..page_count)
+            .map(|index| format!("{} 0 R", 3 + index * 2))
+            .collect::<Vec<_>>()
+            .join(" ");
+        objects.push(format!(
+            "<< /Type /Pages /Kids [{kids}] /Count {page_count} >>"
+        ));
+
+        for index in 0..page_count {
+            let page_id = 3 + index * 2;
+            let content_id = page_id + 1;
+            objects.push(format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {content_id} 0 R >>"
+            ));
+            objects.push("<< /Length 0 >>\nstream\n\nendstream".into());
+        }
+
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offsets = vec![0usize];
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            writeln!(&mut pdf, "{} 0 obj\n{}\nendobj", index + 1, object)
+                .expect("writing to a Vec cannot fail");
+        }
+
+        let xref_offset = pdf.len();
+        writeln!(&mut pdf, "xref\n0 {}\n0000000000 65535 f ", offsets.len())
+            .expect("writing to a Vec cannot fail");
+        for offset in offsets.iter().skip(1) {
+            writeln!(&mut pdf, "{offset:010} 00000 n ")
+                .expect("writing to a Vec cannot fail");
+        }
+        writeln!(
+            &mut pdf,
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF",
+            offsets.len(),
+            xref_offset
+        )
+        .expect("writing to a Vec cannot fail");
+        pdf
+    }
+
+    fn make_job(tool: ToolId, input: PathBuf, output_dir: PathBuf) -> Job {
+        Job {
+            tool,
+            files: vec![input],
+            secondary_file: None,
+            output_dir,
+            target_format: "png".into(),
+            text: String::new(),
+            width: "1600".into(),
+            height: "1200".into(),
+            quality: "82".into(),
+            compress_pdf: false,
+            pdf_profile: "ebook".into(),
+            rotation: "90".into(),
+            pages: String::new(),
+            fps: "12".into(),
+            video_preset: "fast".into(),
+            language: "eng".into(),
+            dpi: "150".into(),
+        }
+    }
+
+    fn qpdf_available() -> bool {
+        Command::new("qpdf").arg("--version").output()
+            .map(|output| output.status.success()).unwrap_or(false)
+    }
+
+    fn pdfseparate_available() -> bool {
+        Command::new("pdfseparate").arg("-v").output()
+            .map(|output| output.status.success()).unwrap_or(false)
+    }
+
+    #[test]
+    fn multi_page_pdf_split_rotate_and_reorder_work() {
+        if !qpdf_available() || !pdfseparate_available() {
+            eprintln!("Skipping PDF integration test: qpdf and pdfseparate are required.");
+            return;
+        }
+
+        let directory = temp_dir("pdf-integration").unwrap();
+        let input = directory.join("eight-pages.pdf");
+        fs::write(&input, make_blank_pdf(8)).unwrap();
+
+        let split = execute({
+            let mut job = make_job(
+                ToolId::PdfSplit,
+                input.clone(),
+                directory.join("split"),
+            );
+            job.pages = "1,last".into();
+            job
+        }).expect("splitting all eight pages should succeed");
+        assert_eq!(split.len(), 8);
+        for page in &split {
+            assert_eq!(pdf_page_count(page).unwrap(), 1);
+        }
+
+        let rotated = execute(make_job(
+            ToolId::PdfRotate,
+            input.clone(),
+            directory.join("rotated"),
+        )).expect("rotating a multi-page PDF should succeed");
+        assert_eq!(rotated.len(), 1);
+        assert_eq!(pdf_page_count(&rotated[0]).unwrap(), 8);
+
+        let reordered = execute({
+            let mut job = make_job(
+                ToolId::PdfReorder,
+                input,
+                directory.join("reordered"),
+            );
+            job.pages = "3,1,2,4".into();
+            job
+        }).expect("reordering pages should succeed");
+        assert_eq!(reordered.len(), 1);
+        assert_eq!(pdf_page_count(&reordered[0]).unwrap(), 4);
+
+        let _ = fs::remove_dir_all(directory);
+    }
+}
+
+#[cfg(test)]
 mod pdf_page_tests {
     use super::{parse_pdf_page_order, parse_pdf_page_range};
 
