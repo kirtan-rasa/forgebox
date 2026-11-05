@@ -2,7 +2,7 @@ Name:           forgebox
 Version:        %{forgebox_version}
 Release:        %{forgebox_release}%{?dist}
 Summary:        Local file conversion and utility studio
-License:        MIT
+License:        AGPL-3.0-only
 Source0:        forgebox
 Source1:        forgebox.png
 Source2:        forgebox.desktop
@@ -52,4 +52,3 @@ install -D -m 0644 %{SOURCE5} %{buildroot}%{_docdir}/%{name}/install-rembg-fedor
 %license %{_datadir}/licenses/%{name}/LICENSE
 %doc %{_docdir}/%{name}/README.md
 %doc %{_docdir}/%{name}/install-rembg-fedora.sh
-

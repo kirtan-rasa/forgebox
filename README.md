@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/kirtan-rasa/forgebox/releases">Releases</a>
   · <a href="CHANGELOG.md">Changelog</a>
-  · <a href="LICENSE">MIT License</a>
+  · <a href="LICENSE">GNU AGPL v3.0</a>
 </p>
 
 <p align="center">
@@ -125,4 +125,6 @@ The automated release workflow builds and publishes Linux packages.
 
 ## License
 
-ForgeBox is distributed under the [MIT License](LICENSE).
+ForgeBox's own code is distributed under the [GNU Affero General Public License v3.0 only](LICENSE) (SPDX identifier: `AGPL-3.0-only`).
+
+Third-party components, including the vendored `winit` and `egui-winit` sources, remain under their respective licenses. See their license files and Cargo manifests.
