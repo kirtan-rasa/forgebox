@@ -3,7 +3,7 @@ mod engine;
 
 use catalog::{info, Category, ToolId, TOOLS};
 use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Stroke, Vec2};
-use engine::{execute, Job};
+use engine::{execute, take_execution_warnings, Job};
 use std::path::{Path, PathBuf};
 use image::ImageDecoder;
 use std::collections::{HashMap, HashSet};
@@ -19,9 +19,11 @@ const ACCENT: Color32 = Color32::from_rgb(49, 165, 235);
 const CYAN: Color32 = Color32::from_rgb(71, 190, 250);
 const GREEN: Color32 = Color32::from_rgb(87, 190, 145);
 const RED: Color32 = Color32::from_rgb(235, 105, 123);
+const WARNING: Color32 = Color32::from_rgb(231, 177, 83);
 
 struct JobResult {
     result: Result<Vec<PathBuf>, String>,
+    warnings: Vec<String>,
 }
 
 enum DialogResult {
@@ -381,7 +383,8 @@ impl ForgeApp {
         self.running = true;
         thread::spawn(move || {
             let result = execute(job);
-            let _ = tx.send(JobResult { result });
+            let warnings = take_execution_warnings();
+            let _ = tx.send(JobResult { result, warnings });
         });
     }
 
@@ -397,6 +400,9 @@ impl ForgeApp {
                         for path in paths {
                             self.logs.push((true, format!("Done: {}", path.display())));
                         }
+                    }
+                    for warning in message.warnings {
+                        self.logs.push((true, format!("Warning: {warning}")));
                     }
                 }
                 Err(error) => self.logs.push((false, error)),
@@ -1187,11 +1193,14 @@ impl eframe::App for ForgeApp {
                         if self.running || !self.logs.is_empty() {
                             ui.add_space(12.0);
                             let has_error = self.logs.iter().any(|(ok, _)| !ok);
+                            let has_warning = self.logs.iter().any(|(ok, message)| *ok && message.starts_with("Warning:"));
                             let success_count = self.logs.iter().filter(|(ok, message)| *ok && message.starts_with("Done:")).count();
                             let (status_fill, status_edge) = if self.running {
                                 (Color32::from_rgb(19, 35, 48), Color32::from_rgb(35, 119, 160))
                             } else if has_error {
                                 (Color32::from_rgb(47, 23, 39), Color32::from_rgb(139, 60, 83))
+                            } else if has_warning {
+                                (Color32::from_rgb(48, 39, 23), Color32::from_rgb(139, 108, 51))
                             } else {
                                 (Color32::from_rgb(11, 43, 43), Color32::from_rgb(37, 103, 87))
                             };
@@ -1218,18 +1227,28 @@ impl eframe::App for ForgeApp {
                                                 }
                                             });
                                         } else {
-                                            let (check_rect, _) = ui.allocate_exact_size(Vec2::new(18.0, 22.0), egui::Sense::hover());
-                                            paint_check_mark(ui.painter(), check_rect.center(), 2.0, GREEN);
+                                            if has_warning {
+                                                let (icon_rect, _) = ui.allocate_exact_size(Vec2::new(18.0, 22.0), egui::Sense::hover());
+                                                ui.painter().text(icon_rect.center(), egui::Align2::CENTER_CENTER, "!", FontId::proportional(18.0), WARNING);
+                                            } else {
+                                                let (check_rect, _) = ui.allocate_exact_size(Vec2::new(18.0, 22.0), egui::Sense::hover());
+                                                paint_check_mark(ui.painter(), check_rect.center(), 2.0, GREEN);
+                                            }
                                             ui.vertical(|ui| {
-                                                let summary = if success_count > 0 {
+                                                let summary = if has_warning {
+                                                    format!("Done with warnings · outputs saved: {success_count}")
+                                                } else if success_count > 0 {
                                                     format!("Done · outputs saved: {success_count}")
                                                 } else {
                                                     self.logs.first().map(|(_, message)| message.clone()).unwrap_or_else(|| "Task completed".into())
                                                 };
-                                                ui.label(RichText::new(summary).strong().color(GREEN));
+                                                ui.label(RichText::new(summary).strong().color(if has_warning { WARNING } else { GREEN }));
                                                 if let Some((_, message)) = self.logs.iter().find(|(ok, message)| *ok && message.starts_with("Done:")) {
                                                     ui.add(egui::Label::new(RichText::new(message.trim_start_matches("Done:").trim()).size(11.5).color(MUTED)).truncate())
                                                         .on_hover_text(message.trim_start_matches("Done:").trim());
+                                                }
+                                                for (_, warning) in self.logs.iter().filter(|(ok, message)| *ok && message.starts_with("Warning:")) {
+                                                    ui.add(egui::Label::new(RichText::new(warning).size(11.5).color(WARNING)).wrap());
                                                 }
                                             });
                                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
