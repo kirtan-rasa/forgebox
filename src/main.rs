@@ -1317,10 +1317,9 @@ fn load_thumbnail(path: &Path) -> Result<egui::ColorImage, String> {
     if decoded.is_err() {
         let suffix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
         let temp = std::env::temp_dir().join(format!("forgebox-thumb-{}-{suffix}.png", std::process::id()));
-        let program = match std::process::Command::new("magick").arg("-version").output() {
-            Ok(output) if output.status.success() => "magick",
-            _ => "convert",
-        };
+        // Share the engine's cached ImageMagick probe instead of spawning a
+        // separate --version process for every unsupported preview.
+        let program = crate::engine::image_magick_program();
         let output = std::process::Command::new(program)
             .arg(path).args(["-auto-orient", "-thumbnail", "600x420"])
             .arg(&temp).output();
