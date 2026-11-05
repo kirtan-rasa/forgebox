@@ -11,7 +11,9 @@ ForgeBox releases provide four Linux distribution formats:
 
 The Arch release includes a native Pacman package, plus its `PKGBUILD` and `.SRCINFO` for rebuilding. Package names are kept consistent as `forgebox`.
 
-The DEB and Pacman packages declare the native libraries and common conversion engines used by ForgeBox. The exact dependency names follow each distribution's package repositories.
+RPM, DEB, and Pacman packages declare the native libraries and common conversion engines used by ForgeBox. Install them through the distribution's package manager so it can resolve dependencies. The RPM and DEB packages require Tesseract and the English language data used by default OCR. Arch packages include both `tesseract` and `tesseract-data-eng`.
+
+The AppImage is different: it does not install host conversion engines or language data. Install the utilities required by the features you use.
 
 ## AppImage limitations
 
