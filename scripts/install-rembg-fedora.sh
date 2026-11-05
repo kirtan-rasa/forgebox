@@ -34,8 +34,16 @@ DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 VENV_DIR="$DATA_HOME/forgebox/rembg-venv"
 mkdir -p "$(dirname "$VENV_DIR")"
 
+if [[ -x "$VENV_DIR/bin/python" ]]; then
+  existing_version="$("$VENV_DIR/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || true)"
+  if [[ "$existing_version" != "3.13" ]]; then
+    echo "Replacing an incompatible ForgeBox rembg environment (Python ${existing_version:-unknown})…"
+    rm -rf "$VENV_DIR"
+  fi
+fi
+
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
-  echo "Creating isolated environment at: $VENV_DIR"
+  echo "Creating isolated Python 3.13 environment at: $VENV_DIR"
   "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
 
