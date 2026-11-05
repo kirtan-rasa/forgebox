@@ -983,13 +983,13 @@ mod csv_conversion_tests {
         let input = directory.join("input.csv");
         let output = directory.join("output.json");
 
-        fs::write(&input, "name,city\\nAda\\n").unwrap();
+        fs::write(&input, "name,city\nAda\n").unwrap();
         csv_to_json(&input, &output).unwrap();
         let value: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
         assert_eq!(value[0]["name"], "Ada");
         assert_eq!(value[0]["city"], "");
 
-        fs::write(&input, "name,city\\nAda,London,extra\\n").unwrap();
+        fs::write(&input, "name,city\nAda,London,extra\n").unwrap();
         let error = csv_to_json(&input, &output).unwrap_err();
         assert!(error.contains("Extra fields would be lost"));
 
@@ -1002,7 +1002,7 @@ mod csv_conversion_tests {
         let input = directory.join("input.csv");
         let output = directory.join("output.json");
 
-        fs::write(&input, "name,name\\nAda,Byron\\n").unwrap();
+        fs::write(&input, "name,name\nAda,Byron\n").unwrap();
         let error = csv_to_json(&input, &output).unwrap_err();
         assert!(error.contains("duplicate column name"));
 
