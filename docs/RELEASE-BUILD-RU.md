@@ -28,11 +28,11 @@ Workflow также запускает `cargo test` и `cargo check`, прове
 4. Дождитесь успешного завершения проверок и сборок.
 5. Создайте тег, совпадающий с версией в `Cargo.toml`.
 
-Например, если в Cargo указана версия `0.2.0-beta.3`:
+Например, если в Cargo указана версия `0.3.0-beta.1`:
 
 ```bash
-git tag v0.2.0-beta.3
-git push origin v0.2.0-beta.3
+git tag v0.3.0-beta.1
+git push origin v0.3.0-beta.1
 ```
 
 Тег и `Cargo.toml` обязаны совпадать. Workflow проверяет это перед публикацией.
