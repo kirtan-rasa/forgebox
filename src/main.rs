@@ -203,28 +203,34 @@ impl ForgeApp {
     fn add_files(&mut self, mut paths: Vec<PathBuf>) {
         if self.selected_tool == ToolId::GenerateQr { return; }
         self.selection_notice = None;
-        paths.retain(|path| path.is_file());
-        if matches!(self.selected_tool, ToolId::VideoConvert | ToolId::VideoToGif) {
-            let before = paths.len();
-            paths.retain(|path| is_video_file(path));
-            let skipped = before.saturating_sub(paths.len());
-            if skipped > 0 {
-                self.selection_notice = Some(format!("Skipped {skipped} unsupported file(s). This tool requires video files."));
-            }
-            if paths.is_empty() { return; }
+
+        let requested = paths.len();
+        paths.retain(|path| path.is_file() && is_supported_input_file(self.selected_tool, path));
+        let skipped = requested.saturating_sub(paths.len());
+        let mut notices = Vec::new();
+        if skipped > 0 {
+            notices.push(format!(
+                "Skipped {skipped} unsupported item(s). This tool accepts {}.",
+                accepted_input_description(self.selected_tool)
+            ));
         }
+
         if self.is_single_file_tool() {
             if paths.len() > 1 {
-                self.selection_notice = Some("This tool accepts one file. The first file was selected; the others were ignored.".into());
+                notices.push("This tool accepts one file; only the first was selected.".into());
             }
             if let Some(path) = paths.into_iter().next() {
                 self.files.clear();
                 self.files.push(path);
             }
-            return;
+        } else {
+            for path in paths {
+                if !self.files.contains(&path) { self.files.push(path); }
+            }
         }
-        for path in paths {
-            if !self.files.contains(&path) { self.files.push(path); }
+
+        if !notices.is_empty() {
+            self.selection_notice = Some(notices.join(" "));
         }
     }
 
@@ -771,7 +777,11 @@ impl eframe::App for ForgeApp {
                             });
                         });
                         let _ = drop;
-                        ui.add_space(12.0);
+                        ui.add_space(8.0);
+                        if let Some(notice) = &self.selection_notice {
+                            ui.label(RichText::new(notice).size(11.5).color(CYAN));
+                        }
+                        ui.add_space(8.0);
                         if !self.files.is_empty() {
                             let mut remove_index = None;
                             let mut reorder_request: Option<(usize, usize)> = None;
@@ -1121,9 +1131,6 @@ impl eframe::App for ForgeApp {
                             if let Some(index) = remove_index { if index < self.files.len() && !self.running { self.files.remove(index); } }
                             ui.add_space(5.0);
                             ui.label(RichText::new(format!("Files selected: {}", self.files.len())).size(12.0).color(MUTED));
-                            if let Some(notice) = &self.selection_notice {
-                                ui.label(RichText::new(notice).size(11.5).color(CYAN));
-                            }
                             if self.selected_tool == ToolId::PdfWatermark {
                                 ui.add_space(10.0);
                                 ui.horizontal(|ui| {
@@ -1693,9 +1700,60 @@ fn glyph_text(icons_loaded: bool, glyph: &str) -> &str {
     }
 }
 
+fn file_extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+}
+
 fn is_video_file(path: &Path) -> bool {
-    matches!(path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase().as_str(),
+    matches!(file_extension(path).as_str(),
         "mp4" | "mkv" | "mov" | "webm" | "avi" | "m4v" | "mpeg" | "mpg" | "3gp" | "ogv" | "flv" | "mts" | "m2ts")
+}
+
+fn is_image_file(path: &Path) -> bool {
+    matches!(file_extension(path).as_str(),
+        "png" | "jpg" | "jpeg" | "webp" | "tif" | "tiff" | "bmp" | "heic" | "avif" | "gif")
+}
+
+fn is_audio_file(path: &Path) -> bool {
+    matches!(file_extension(path).as_str(),
+        "mp3" | "wav" | "flac" | "m4a" | "ogg" | "aac")
+}
+
+fn is_supported_input_file(tool: ToolId, path: &Path) -> bool {
+    match tool {
+        ToolId::GenerateQr => false,
+        ToolId::PdfMerge | ToolId::PdfSplit | ToolId::PdfCompress | ToolId::PdfRotate
+        | ToolId::PdfReorder | ToolId::PdfToImages | ToolId::PdfWatermark | ToolId::PdfToDoc => {
+            file_extension(path) == "pdf"
+        }
+        ToolId::DocToPdf => {
+            matches!(file_extension(path).as_str(), "doc" | "docx" | "odt" | "rtf")
+        }
+        ToolId::DataConvert => {
+            matches!(file_extension(path).as_str(), "csv" | "json" | "xlsx")
+        }
+        ToolId::ExtractAudio => is_video_file(path) || is_audio_file(path),
+        ToolId::VideoConvert | ToolId::VideoToGif => is_video_file(path),
+        ToolId::ImagesToPdf | ToolId::ImageConvert | ToolId::ImageResize | ToolId::ImageCompress
+        | ToolId::ImageGrayscale | ToolId::RemoveBackground | ToolId::ExtractExif
+        | ToolId::ImageOcr | ToolId::LongPngToPdf => is_image_file(path),
+    }
+}
+
+fn accepted_input_description(tool: ToolId) -> &'static str {
+    match tool {
+        ToolId::GenerateQr => "text",
+        ToolId::PdfMerge | ToolId::PdfSplit | ToolId::PdfCompress | ToolId::PdfRotate
+        | ToolId::PdfReorder | ToolId::PdfToImages | ToolId::PdfWatermark | ToolId::PdfToDoc => "PDF files",
+        ToolId::DocToPdf => "DOC, DOCX, ODT, or RTF files",
+        ToolId::DataConvert => "CSV, JSON, or XLSX files",
+        ToolId::ExtractAudio => "audio or video files",
+        ToolId::VideoConvert | ToolId::VideoToGif => "video files",
+        _ => "image files",
+    }
 }
 
 fn file_glyph(path: &PathBuf) -> &'static str {
@@ -1788,6 +1846,21 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
         assert_eq!(super::output_dir_for_home(&home), home);
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn input_file_filters_match_each_tool_category() {
+        use crate::catalog::ToolId;
+
+        assert!(super::is_supported_input_file(ToolId::PdfSplit, std::path::Path::new("input.PDF")));
+        assert!(!super::is_supported_input_file(ToolId::PdfSplit, std::path::Path::new("input.png")));
+        assert!(super::is_supported_input_file(ToolId::ImageConvert, std::path::Path::new("input.HEIC")));
+        assert!(!super::is_supported_input_file(ToolId::ImageConvert, std::path::Path::new("input.docx")));
+        assert!(super::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("track.FLAC")));
+        assert!(super::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("clip.mkv")));
+        assert!(!super::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("table.xlsx")));
+        assert!(super::is_supported_input_file(ToolId::DocToPdf, std::path::Path::new("report.docx")));
+        assert!(super::is_supported_input_file(ToolId::DataConvert, std::path::Path::new("data.csv")));
     }
 
     #[test]
