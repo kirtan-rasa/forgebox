@@ -37,6 +37,8 @@ const MAX_URI_LIST: usize = 16 << 20;
 pub struct DndState {
     window_id: WindowId,
     data_device: WlDataDevice,
+    /// The active offer, cached to avoid re-locking SCTK's offer mutex in callbacks.
+    data_offer: sctk::reexports::client::protocol::wl_data_offer::WlDataOffer,
     /// Reading the uri-list; `None` once it's read (or failed).
     reader: Option<RegistrationToken>,
     buf: Vec<u8>,
@@ -144,6 +146,7 @@ impl DataDeviceHandler for WinitState {
         let mut dnd = DndState {
             window_id,
             data_device: data_device.clone(),
+            data_offer: offer.inner().clone(),
             reader: None,
             buf: Vec::new(),
             paths: None,
@@ -263,9 +266,10 @@ impl DataOfferHandler for WinitState {
         offer: &mut DragOffer,
         _: DndAction,
     ) {
+        // SCTK calls this while holding DataOfferData's mutex. Do not call
+        // drag_offer() here: it would try to lock that same mutex recursively.
         let is_our_offer = self.dnd.as_ref().is_some_and(|dnd| {
-            Self::drag_offer(&dnd.data_device)
-                .is_some_and(|current| current.inner() == offer.inner())
+            dnd.data_offer.id() == offer.inner().id()
         });
         if is_our_offer {
             offer.accept_mime_type(offer.serial, Some(URI_LIST.into()));
