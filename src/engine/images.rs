@@ -67,7 +67,9 @@ pub(super) fn long_png_to_pdf(job: &Job) -> Result<Vec<PathBuf>, String> {
     let temp = temp_dir("long-png")?;
     let result = (|| -> Result<Vec<PathBuf>, String> {
         let pattern = temp.join("page-%05d.png");
-        run_magick_owned(vec![os(input), os("-auto-orient"), os("-crop"), os("100%x3508"), os("+repage"), os(&pattern)])?;
+        // Omitting the width makes ImageMagick tile the full source width into
+        // vertical strips. A percentage width is treated as one crop rectangle.
+        run_magick_owned(vec![os(input), os("-auto-orient"), os("-crop"), os("x3508"), os("+repage"), os(&pattern)])?;
         let mut pages = fs::read_dir(&temp).map_err(display_io)?.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.extension().and_then(|s| s.to_str()).map(|ext| ext.eq_ignore_ascii_case("png")).unwrap_or(false)).collect::<Vec<_>>();
         sort_numbered_paths(&mut pages);
         if pages.is_empty() { return Err("Could not create pages from the image.".into()); }
