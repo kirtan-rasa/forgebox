@@ -210,7 +210,7 @@ where
             formatter.write_str("an array of JSON objects")
         }
 
-        fn visit_seq<A>(mut self, mut sequence: A) -> Result<Self::Value, A::Error>
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
         where
             A: SeqAccess<'de>,
         {

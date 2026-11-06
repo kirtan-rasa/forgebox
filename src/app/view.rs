@@ -121,7 +121,11 @@ mod tests {
     fn thumbnail_respects_exif_orientation() {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/exif-orientation-6.jpg");
-        let image = super::thumbnails::load_thumbnail(&fixture).expect("EXIF fixture should load");
+        let image = super::thumbnails::load_thumbnail(
+            &fixture,
+            crate::engine::ExecutionControl::silent(),
+        )
+        .expect("EXIF fixture should load");
         assert!(image.size[1] > image.size[0], "EXIF orientation should display this image in portrait orientation");
     }
 }
