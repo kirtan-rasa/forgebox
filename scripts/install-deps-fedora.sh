@@ -29,7 +29,7 @@ find_working_rembg() {
     "$HOME/.local/bin/rembg"
   do
     if [[ -x "$candidate" ]] && "$candidate" --help >/dev/null 2>&1; then
-      printf '%s\\n' "$candidate"
+      printf '%s\n' "$candidate"
       return 0
     fi
   done
