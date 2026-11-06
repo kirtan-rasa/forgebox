@@ -65,6 +65,20 @@ impl ForgeApp {
             ui.add_space(4.0);
         }
 
+        let pending_count = self.queue.iter()
+            .filter(|entry| entry.status == QueueStatus::Pending)
+            .count();
+        if !self.running && pending_count > 0 {
+            ui.add_space(8.0);
+            if ui.add_sized(
+                [ui.available_width(), 40.0],
+                egui::Button::new(RichText::new(format!("▶  Run queue ({pending_count})")).strong())
+                    .fill(Color32::from_rgb(15, 73, 85)),
+            ).clicked() {
+                self.start_queue();
+            }
+        }
+
         if !self.running {
             ui.horizontal(|ui| {
                 if ui.small_button("Clear queue").clicked() {

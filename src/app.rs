@@ -529,6 +529,10 @@ impl ForgeApp {
             return;
         }
 
+        // Queue execution is independent of the editor's current step.
+        // Always show the live queue monitor while tasks are running.
+        self.wizard_step = 2;
+
         let total = jobs.len();
         let queue_tx = self.queue_tx.clone();
         let control = ExecutionControl::new(self.status_tx.clone());

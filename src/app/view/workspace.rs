@@ -642,13 +642,6 @@ impl ForgeApp {
                         if !self.running && ui.add_enabled(can_run, egui::Button::new(RichText::new("＋  Add to queue").size(15.0).strong()).fill(if can_run { ACCENT } else { Color32::from_rgb(15, 35, 52) }).min_size(Vec2::new(ui.available_width(), 44.0))).clicked() {
                             self.start_job();
                         }
-                        let pending_count = self.queue.iter().filter(|entry| entry.status == super::super::QueueStatus::Pending).count();
-                        if !self.running && pending_count > 0 {
-                            ui.add_space(6.0);
-                            if ui.add(egui::Button::new(RichText::new(format!("▶  Run queue ({pending_count})")).strong()).fill(Color32::from_rgb(15, 73, 85)).min_size(Vec2::new(ui.available_width(), 40.0))).clicked() {
-                                self.start_queue();
-                            }
-                        }
                         if !self.running && !can_run {
                             let reason = match self.selected_tool {
                                 ToolId::GenerateQr => "Enter text or a URL in the Options step first.",
@@ -659,8 +652,6 @@ impl ForgeApp {
                             ui.add_space(4.0);
                             ui.label(RichText::new(reason).size(11.5).color(MUTED));
                         }
-
-                        self.render_queue(ui);
 
                         // One live status area for running, success or error; never duplicate status below the card.
                         if self.running || !self.logs.is_empty() {
@@ -763,6 +754,9 @@ impl ForgeApp {
                         }
                     }
                 }
+                // Keep the queue visible while preparing the next task, including
+                // immediately after Add to queue resets the editor to the Files step.
+                self.render_queue(ui);
             });
 
             });
