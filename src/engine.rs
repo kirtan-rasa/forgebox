@@ -1,4 +1,12 @@
 use crate::catalog::ToolId;
+mod command;
+
+use self::command::{
+    command_version_succeeds, configure_command_environment, image_magick_program,
+    image_magick_thread_limit, recommended_image_magick_threads, run_capture,
+    run_magick_owned, run_ok, run_qpdf,
+};
+
 use csv::{ReaderBuilder, WriterBuilder};
 use serde_json::{Map, Value};
 use qrcode::QrCode;
@@ -8,10 +16,8 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
-
-static IMAGEMAGICK_PROGRAM: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
 
 thread_local! {
     static EXECUTION_WARNINGS: RefCell<Vec<String>> = RefCell::new(Vec::new());
@@ -626,139 +632,6 @@ fn soffice_convert(input: &Path, extension: &str, output: &Path) -> Result<(), S
     result
 }
 
-pub(crate) fn image_magick_program() -> &'static str {
-    *IMAGEMAGICK_PROGRAM.get_or_init(|| {
-        if has_command("magick") { "magick" } else { "convert" }
-    })
-}
-
-/// Reserve at least one available CPU thread for the desktop UI and the rest
-/// of the system. Cap ImageMagick's parallelism to avoid saturating low-core CPUs.
-pub(crate) fn image_magick_thread_limit() -> usize {
-    recommended_image_magick_threads(
-        std::thread::available_parallelism()
-            .map(|parallelism| parallelism.get())
-            .unwrap_or(1),
-    )
-}
-
-fn recommended_image_magick_threads(available: usize) -> usize {
-    available.saturating_sub(1).clamp(1, 4)
-}
-
-fn run_magick_owned(args: Vec<OsString>) -> Result<(), String> {
-    let mut limited_args = Vec::with_capacity(args.len() + 3);
-    limited_args.extend([
-        os("-limit"),
-        os("thread"),
-        os(image_magick_thread_limit().to_string()),
-    ]);
-    limited_args.extend(args);
-    run_ok(image_magick_program(), limited_args).map(|_| ())
-}
-
-fn command_candidates(program: &str) -> Vec<OsString> {
-    if program == "rembg" {
-        let mut candidates = Vec::new();
-        let data_home = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .filter(|path| !path.as_os_str().is_empty())
-            .or_else(|| {
-                std::env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .map(|home| home.join(".local/share"))
-            });
-        if let Some(data_home) = data_home {
-            candidates.push(
-                data_home.join("forgebox/rembg-venv/bin/rembg").into_os_string()
-            );
-        }
-        if let Some(home) = std::env::var_os("HOME") {
-            candidates.push(PathBuf::from(home).join(".local/bin/rembg").into_os_string());
-        }
-        candidates.push(OsString::from(program));
-        candidates
-    } else {
-        vec![OsString::from(program)]
-    }
-}
-
-/// Do not leak an AppImage's bundled Python paths into the optional
-/// rembg virtual environment. Python uses PYTHONHOME/PYTHONPATH before the
-/// venv's own stdlib and can fail before importing the CLI.
-fn configure_command_environment(program: &str, command: &mut Command) {
-    if program == "rembg" {
-        command.env_remove("PYTHONHOME");
-        command.env_remove("PYTHONPATH");
-    }
-}
-
-fn run_ok(program: &str, args: Vec<OsString>) -> Result<Output, String> {
-    let candidates = command_candidates(program);
-    let mut tried: Vec<String> = Vec::new();
-    for candidate in candidates {
-        let label = candidate.to_string_lossy().into_owned();
-        let mut command = Command::new(&candidate);
-        configure_command_environment(program, &mut command);
-        match command.args(args.iter()).output() {
-            Ok(output) if output.status.success() => return Ok(output),
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let detail = if !stderr.is_empty() { stderr } else { stdout };
-                return Err(if detail.is_empty() {
-                    format!("`{program}` exited with code {}.", output.status)
-                } else {
-                    format!("`{program}`: {detail}")
-                });
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => tried.push(label),
-            Err(error) => return Err(format!("Failed to launch `{program}` via `{label}`: {error}")),
-        }
-    }
-    let install_hint = match (program, std::env::consts::OS) {
-        ("tesseract", "linux") => {
-            " Install Tesseract and the matching language data with your distribution's package manager. On Fedora: sudo dnf install tesseract tesseract-langpack-eng."
-        }
-        ("tesseract", "macos") => {
-            " Install Tesseract and make sure its executable is available on PATH."
-        }
-        ("rembg", "linux") => {
-            " Install the optional rembg CPU backend in a Python 3.11–3.13 environment. Fedora RPM users can run: bash /usr/share/doc/forgebox/install-rembg-fedora.sh."
-        }
-        ("rembg", "macos") => {
-            " Install the optional rembg CPU backend in a Python 3.11–3.13 virtual environment and make its bin directory available on PATH."
-        }
-        _ => " See the Installation section in the README for setup instructions.",
-    };
-    Err(format!(
-        "Dependency `{program}` was not found. Tried: {}.{}",
-        tried.join(", "),
-        install_hint
-    ))
-}
-
-fn run_capture(program: &str, args: Vec<OsString>) -> Result<Vec<u8>, String> {
-    Ok(run_ok(program, args)?.stdout)
-}
-
-/// qpdf uses exit code 3 for recoverable warnings. Treat warnings as a
-/// successful operation while leaving their messages available on stderr.
-fn run_qpdf(args: Vec<OsString>) -> Result<Output, String> {
-    let mut qpdf_args = Vec::with_capacity(args.len() + 1);
-    qpdf_args.push(os("--warning-exit-0"));
-    qpdf_args.extend(args);
-
-    let output = run_ok("qpdf", qpdf_args)?;
-    if !output.stderr.is_empty() {
-        record_execution_warning(format!(
-            "qpdf: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    Ok(output)
-}
-
 fn pdf_page_count(input: &Path) -> Result<u32, String> {
     let output = run_qpdf(vec![os("--show-npages"), os(input)])?;
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -811,20 +684,6 @@ fn parse_pdf_page_order(value: &str, page_count: u32) -> Result<Vec<u32>, String
         }
         Ok(page)
     }).collect()
-}
-
-fn command_version_succeeds(candidate: &OsStr) -> bool {
-    Command::new(candidate)
-        .arg("--version")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-}
-
-fn has_command(program: &str) -> bool {
-    command_candidates(program)
-        .iter()
-        .any(|candidate| command_version_succeeds(candidate))
 }
 
 fn require_files(job: &Job, min: usize, message: &str) -> Result<(), String> {
