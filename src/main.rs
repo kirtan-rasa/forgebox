@@ -561,12 +561,15 @@ impl eframe::App for ForgeApp {
             let (snow_time, window_focused) = ctx.input(|input| {
                 (input.time, input.viewport().focused.unwrap_or(true))
             });
-            paint_snowfall(ui.painter(), snow_rect, snow_time);
-            // Animation is decorative: cap it at ~15 FPS and stop scheduling
-            // frames while the window is in the background. Keep the drawing
-            // budget small enough for low-power integrated graphics and CPUs.
-            if window_focused {
-                ctx.request_repaint_after(std::time::Duration::from_millis(67));
+            // Decorative animation is disabled while a conversion is running.
+            // This keeps the UI thread focused on input, status updates, and
+            // rendering the task monitor while external engines use the CPU.
+            if !self.running {
+                paint_snowfall(ui.painter(), snow_rect, snow_time);
+                // Cap idle animation at ~15 FPS and pause it in the background.
+                if window_focused {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(67));
+                }
             }
 
             // Keep title, stepper and navigation outside the scroll area. Only the active step content scrolls.
