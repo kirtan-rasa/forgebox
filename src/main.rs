@@ -562,11 +562,11 @@ impl eframe::App for ForgeApp {
                 (input.time, input.viewport().focused.unwrap_or(true))
             });
             paint_snowfall(ui.painter(), snow_rect, snow_time);
-            // Animation is decorative: cap it at ~30 FPS and stop scheduling
-            // animation frames while the window is in the background. This keeps
-            // the UI thread from burning CPU when the user works in another app.
+            // Animation is decorative: cap it at ~15 FPS and stop scheduling
+            // frames while the window is in the background. Keep the drawing
+            // budget small enough for low-power integrated graphics and CPUs.
             if window_focused {
-                ctx.request_repaint_after(std::time::Duration::from_millis(33));
+                ctx.request_repaint_after(std::time::Duration::from_millis(67));
             }
 
             // Keep title, stepper and navigation outside the scroll area. Only the active step content scrolls.
@@ -1641,9 +1641,10 @@ fn paint_snowfall(painter: &egui::Painter, rect: egui::Rect, time: f64) {
     let t = time as f32;
 
     // A lightweight comet field with independently hash-distributed attributes.
+    // The count and tail detail are deliberately capped to keep UI frame work low.
     // Positions stay stable between frames, so comets drift naturally instead of
     // jittering; each one moves vertically and recycles only after its full tail exits.
-    for i in 0..180_u32 {
+    for i in 0..80_u32 {
         let seed_x = comet_random(i.wrapping_mul(4).wrapping_add(1));
         let seed_y = comet_random(i.wrapping_mul(4).wrapping_add(2));
         let speed_seed = comet_random(i.wrapping_mul(4).wrapping_add(3));
@@ -1663,7 +1664,7 @@ fn paint_snowfall(painter: &egui::Painter, rect: egui::Rect, time: f64) {
 
         // Fade the tail from fully transparent at its far end to at most 3%
         // opacity near the head. Keep segment count modest for low-end hardware.
-        const TAIL_SEGMENTS: u32 = 24;
+        const TAIL_SEGMENTS: u32 = 12;
         const MAX_TAIL_ALPHA: f32 = 7.65; // 3% of 255
         for segment in 0..TAIL_SEGMENTS {
             let start_t = segment as f32 / TAIL_SEGMENTS as f32;
