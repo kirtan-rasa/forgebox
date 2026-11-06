@@ -5,10 +5,10 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub(super) fn data_convert(job: &Job) -> Result<Vec<PathBuf>, String> {
+pub(super) fn data_convert(job: &Job, target_format: &str) -> Result<Vec<PathBuf>, String> {
     let input = first_file(job)?;
     let source_ext = input.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-    let target_ext = normalized_ext(&job.target_format);
+    let target_ext = normalized_ext(target_format);
     if !["csv", "json", "xlsx"].contains(&source_ext.as_str()) {
         return Err("Supported input formats are CSV, JSON, and XLSX.".into());
     }

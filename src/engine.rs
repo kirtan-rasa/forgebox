@@ -6,6 +6,7 @@ mod images;
 mod media;
 mod pdf;
 mod command;
+mod job;
 
 pub(crate) use self::command::{image_magick_program, image_magick_thread_limit};
 use self::command::{
@@ -13,14 +14,18 @@ use self::command::{
     run_capture, run_magick_owned, run_ok, run_qpdf,
 };
 use self::common::{
-    display_io, files_with_prefix, first_file, normalized_ext, os, output_for_input,
-    positive, process_each, process_each_capture, process_each_convert, require_files,
-    sort_numbered_paths, temp_dir, unique_path, unique_pattern, unique_prefix,
+    files_with_prefix, first_file, os, output_for_input, process_each,
+    process_each_capture, process_each_convert, require_files, sort_numbered_paths,
+    temp_dir, unique_path, unique_pattern, unique_prefix,
 };
-use self::data::{csv_to_json, data_convert, encode_file_url_path, soffice_convert};
+use self::data::{csv_to_json, encode_file_url_path};
 use self::images::{images_to_pdf, long_png_to_pdf};
 use self::media::{convert_video, extract_audio};
 use self::pdf::{parse_pdf_page_order, parse_pdf_page_range, pdf_page_count};
+pub use self::job::{
+    AudioFormat, DataFormat, ImageFormat, Job, JobOptions, PdfCompressionProfile,
+    PdfImageFormat, PdfRotation, VideoFormat, VideoPreset,
+};
 
 use qrcode::QrCode;
 use std::cell::RefCell;
@@ -53,67 +58,47 @@ fn record_execution_warning(message: String) {
     });
 }
 
-#[derive(Clone, Debug)]
-pub struct Job {
-    pub tool: ToolId,
-    pub files: Vec<PathBuf>,
-    pub secondary_file: Option<PathBuf>,
-    pub output_dir: PathBuf,
-    pub target_format: String,
-    pub text: String,
-    pub width: String,
-    pub height: String,
-    pub quality: String,
-    pub compress_pdf: bool,
-    pub pdf_profile: String,
-    pub rotation: String,
-    pub pages: String,
-    pub fps: String,
-    pub video_preset: String,
-    pub language: String,
-    pub dpi: String,
-}
-
 pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
     clear_execution_warnings();
     fs::create_dir_all(&job.output_dir)
-        .map_err(|e| format!("Failed to create the output folder: {e}"))?;
+        .map_err(|error| format!("Failed to create the output folder: {error}"))?;
 
-    use ToolId::*;
-    match job.tool {
-        ImagesToPdf => images_to_pdf(&job),
-        ImageConvert => process_each(&job, |input, out| {
-            let target = normalized_ext(&job.target_format);
+    use JobOptions as Options;
+    use ToolId as Tool;
+
+    match (&job.tool, &job.options) {
+        (Tool::ImagesToPdf, Options::ImagesToPdf { compress, quality }) => {
+            images_to_pdf(&job, *compress, *quality)
+        }
+        (Tool::ImageConvert, Options::ImageConvert { format }) => process_each(&job, |input, out| {
             let mut args = vec![os(input), os("-auto-orient")];
-            if target == "jpg" || target == "jpeg" {
-                // Transparent pixels have no direct representation in JPEG; use a predictable white background.
+            if matches!(format, ImageFormat::Jpeg) {
                 args.extend([os("-background"), os("white"), os("-alpha"), os("remove"), os("-alpha"), os("off")]);
             }
             args.push(os(out));
             run_magick_owned(args)
         }),
-        ImageResize => process_each(&job, |input, out| {
-            let size = format!("{}x{}", positive(&job.width, 1600), positive(&job.height, 1200));
-            let args = vec![os(input), os("-auto-orient"), os("-resize"), os(&size), os(out)];
-            run_magick_owned(args)
+        (Tool::ImageResize, Options::ImageResize { width, height }) => process_each(&job, |input, out| {
+            let size = format!("{width}x{height}");
+            run_magick_owned(vec![os(input), os("-auto-orient"), os("-resize"), os(&size), os(out)])
         }),
-        ImageCompress => process_each(&job, |input, out| {
-            let quality = positive(&job.quality, 82).clamp(1, 100).to_string();
+        (Tool::ImageCompress, Options::ImageCompress { quality }) => process_each(&job, |input, out| {
+            let quality = quality.to_string();
             run_magick_owned(vec![os(input), os("-auto-orient"), os("-quality"), os(&quality), os(out)])
         }),
-        ImageGrayscale => process_each(&job, |input, out| {
+        (Tool::ImageGrayscale, Options::None) => process_each(&job, |input, out| {
             run_magick_owned(vec![os(input), os("-auto-orient"), os("-colorspace"), os("Gray"), os(out)])
         }),
-        RemoveBackground => process_each(&job, |input, out| {
+        (Tool::RemoveBackground, Options::None) => process_each(&job, |input, out| {
             run_ok("rembg", vec![os("i"), os(input), os(out)]).map(|_| ())
         }),
-        ExtractExif => process_each_capture(&job, |input, out| {
+        (Tool::ExtractExif, Options::None) => process_each_capture(&job, |input, out| {
             let output = run_capture("exiftool", vec![os("-json"), os(input)])?;
-            fs::write(out, output).map_err(|e| format!("Failed to write JSON: {e}"))
+            fs::write(out, output).map_err(|error| format!("Failed to write JSON: {error}"))
         }),
-        ImageOcr => process_each(&job, |input, out| {
+        (Tool::ImageOcr, Options::ImageOcr { language }) => process_each(&job, |input, out| {
             let base = out.with_extension("");
-            let lang = if job.language.trim().is_empty() { "eng" } else { job.language.trim() };
+            let lang = if language.trim().is_empty() { "eng" } else { language.trim() };
             run_ok("tesseract", vec![os(input), os(&base), os("-l"), os(lang), os("txt")])
                 .map(|_| ())
                 .map_err(|error| {
@@ -135,12 +120,12 @@ pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
                     }
                 })
         }),
-        GenerateQr => {
-            if job.text.trim().is_empty() {
+        (Tool::GenerateQr, Options::GenerateQr { text }) => {
+            if text.trim().is_empty() {
                 return Err("Enter text or a URL for the QR code.".into());
             }
             let out = unique_path(&job.output_dir, "qr-code", "png");
-            let code = QrCode::new(job.text.as_bytes())
+            let code = QrCode::new(text.as_bytes())
                 .map_err(|error| format!("Could not generate the QR code: {error}"))?;
             let qr_image = code
                 .render::<image::Luma<u8>>()
@@ -149,11 +134,11 @@ pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
             qr_image.save(&out).map_err(|error| format!("Failed to save the QR code: {error}"))?;
             Ok(vec![out])
         }
-        LongPngToPdf => long_png_to_pdf(&job),
-        PdfMerge => {
+        (Tool::LongPngToPdf, Options::None) => long_png_to_pdf(&job),
+        (Tool::PdfMerge, Options::None) => {
             require_files(&job, 2, "Select at least two PDF files to merge.")?;
             let out = unique_path(&job.output_dir, "merged", "pdf");
-            let mut args: Vec<OsString> = job.files.iter().map(|p| os(p)).collect();
+            let mut args: Vec<OsString> = job.files.iter().map(|path| os(path)).collect();
             args.push(os(&out));
             if let Err(error) = run_ok("pdfunite", args) {
                 let _ = fs::remove_file(&out);
@@ -161,56 +146,51 @@ pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
             }
             Ok(vec![out])
         }
-        PdfSplit => {
+        (Tool::PdfSplit, Options::PdfSplit { range }) => {
             let input = first_file(&job)?;
             let page_count = pdf_page_count(input)?;
-            let (first, end) = parse_pdf_page_range(&job.pages, page_count)?;
-            let pattern = unique_pattern(&job.output_dir, &input.file_stem().and_then(|s| s.to_str()).unwrap_or("document"));
-            let pattern_prefix = pattern.file_name().and_then(|s| s.to_str()).unwrap_or("split-%d.pdf").split("%d").next().unwrap_or("split-").to_string();
+            let (first, end) = parse_pdf_page_range(range, page_count)?;
+            let pattern = unique_pattern(&job.output_dir, &input.file_stem().and_then(|value| value.to_str()).unwrap_or("document"));
+            let pattern_prefix = pattern.file_name().and_then(|value| value.to_str()).unwrap_or("split-%d.pdf")
+                .split("%d").next().unwrap_or("split-").to_string();
             if let Err(error) = run_ok("pdfseparate", vec![os("-f"), os(&first.to_string()), os("-l"), os(&end.to_string()), os(input), os(&pattern)]) {
                 for created in files_with_prefix(&job.output_dir, &pattern_prefix) { let _ = fs::remove_file(created); }
                 return Err(error);
             }
             let mut outputs = files_with_prefix(&job.output_dir, &pattern_prefix);
-            outputs.retain(|p| p.extension().and_then(|s| s.to_str()).map(|ext| ext.eq_ignore_ascii_case("pdf")).unwrap_or(false));
+            outputs.retain(|path| path.extension().and_then(|value| value.to_str()).map(|extension| extension.eq_ignore_ascii_case("pdf")).unwrap_or(false));
             sort_numbered_paths(&mut outputs);
             if outputs.is_empty() {
                 for created in files_with_prefix(&job.output_dir, &pattern_prefix) { let _ = fs::remove_file(created); }
                 Err("The PDF was processed, but no output pages were found. Check the page range.".into())
-            } else { Ok(outputs) }
+            } else {
+                Ok(outputs)
+            }
         }
-        PdfCompress => {
+        (Tool::PdfCompress, Options::PdfCompress { profile }) => {
             let input = first_file(&job)?;
             let out = output_for_input(&job, input, "compressed", "pdf");
-            let profile = match job.pdf_profile.as_str() {
-                "screen" => "screen",
-                "printer" => "printer",
-                "prepress" => "prepress",
-                _ => "ebook",
-            };
             let result = run_ok("gs", vec![
                 os("-sDEVICE=pdfwrite"), os("-dCompatibilityLevel=1.4"),
-                os(&format!("-dPDFSETTINGS=/{profile}")),
+                os(&format!("-dPDFSETTINGS=/{}", profile.as_str())),
                 os("-dNOPAUSE"), os("-dQUIET"), os("-dBATCH"),
                 os(&format!("-sOutputFile={}", out.display())), os(input),
             ]);
             if let Err(error) = result { let _ = fs::remove_file(&out); return Err(error); }
             Ok(vec![out])
         }
-        PdfRotate => {
+        (Tool::PdfRotate, Options::PdfRotate { rotation }) => {
             let input = first_file(&job)?;
-            let angle = match job.rotation.as_str() { "180" => "180", "270" => "270", _ => "90" };
             let out = output_for_input(&job, input, "rotated", "pdf");
-            if let Err(error) = run_qpdf(vec![os(input), os(format!("--rotate=+{}:1-z", angle)), os(&out)]) {
+            if let Err(error) = run_qpdf(vec![os(input), os(format!("--rotate=+{}:1-z", rotation.degrees())), os(&out)]) {
                 let _ = fs::remove_file(&out);
                 return Err(error);
             }
             Ok(vec![out])
         }
-        PdfReorder => {
+        (Tool::PdfReorder, Options::PdfReorder { order }) => {
             let input = first_file(&job)?;
-            let order = job.pages.trim();
-            if order.is_empty() {
+            if order.trim().is_empty() {
                 return Err("Enter a page order, for example 3,1,2,4.".into());
             }
             let page_count = pdf_page_count(input)?;
@@ -223,55 +203,52 @@ pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
             }
             Ok(vec![out])
         }
-        PdfToImages => {
+        (Tool::PdfToImages, Options::PdfToImages { format, dpi }) => {
             let input = first_file(&job)?;
-            let dpi = positive(&job.dpi, 150).clamp(36, 600).to_string();
-            let prefix = unique_prefix(&job.output_dir, &format!("{}-page", input.file_stem().and_then(|s| s.to_str()).unwrap_or("pdf")));
-            let format = if job.target_format.eq_ignore_ascii_case("jpg") { "-jpeg" } else { "-png" };
-            let prefix_name = prefix.file_name().and_then(|s| s.to_str()).unwrap_or("pdf-page").to_string();
-            if let Err(error) = run_ok("pdftoppm", vec![os(format), os("-r"), os(&dpi), os(input), os(&prefix)]) {
+            let dpi = dpi.to_string();
+            let prefix = unique_prefix(&job.output_dir, &format!("{}-page", input.file_stem().and_then(|value| value.to_str()).unwrap_or("pdf")));
+            let format_arg = if matches!(format, PdfImageFormat::Jpeg) { "-jpeg" } else { "-png" };
+            let prefix_name = prefix.file_name().and_then(|value| value.to_str()).unwrap_or("pdf-page").to_string();
+            if let Err(error) = run_ok("pdftoppm", vec![os(format_arg), os("-r"), os(&dpi), os(input), os(&prefix)]) {
                 for created in files_with_prefix(&job.output_dir, &prefix_name) { let _ = fs::remove_file(created); }
                 return Err(error);
             }
             let mut found = files_with_prefix(&job.output_dir, &prefix_name);
-            let expected_ext = if format == "-jpeg" { "jpg" } else { "png" };
-            found.retain(|path| path.extension().and_then(|s| s.to_str()).map(|ext| ext.eq_ignore_ascii_case(expected_ext)).unwrap_or(false));
+            let expected_ext = format.as_str();
+            found.retain(|path| path.extension().and_then(|value| value.to_str()).map(|extension| extension.eq_ignore_ascii_case(expected_ext)).unwrap_or(false));
             sort_numbered_paths(&mut found);
             if found.is_empty() {
                 for created in files_with_prefix(&job.output_dir, &prefix_name) { let _ = fs::remove_file(created); }
                 Err("Poppler finished, but no images were found.".into())
-            } else { Ok(found) }
+            } else {
+                Ok(found)
+            }
         }
-        PdfWatermark => {
+        (Tool::PdfWatermark, Options::PdfWatermark { watermark_file }) => {
             let input = first_file(&job)?;
-            let mark = job.secondary_file.as_ref().ok_or("Select the second PDF to use as a watermark.")?;
             let out = output_for_input(&job, input, "watermarked", "pdf");
-            if let Err(error) = run_ok("pdftk", vec![os(input), os("stamp"), os(mark), os("output"), os(&out)]) {
+            if let Err(error) = run_ok("pdftk", vec![os(input), os("stamp"), os(watermark_file), os("output"), os(&out)]) {
                 let _ = fs::remove_file(&out);
                 return Err(error);
             }
             Ok(vec![out])
         }
-        DocToPdf => process_each_convert(&job, "pdf"),
-        PdfToDoc => process_each_convert(&job, "docx"),
-        DataConvert => data_convert(&job),
-        ExtractAudio => process_each(&job, |input, out| extract_audio(input, out, &job.target_format)),
-        VideoConvert => process_each(&job, |input, out| convert_video(input, out, &job.target_format, &job.video_preset, &job.quality)),
-        VideoToGif => process_each(&job, |input, out| {
-            let fps = positive(&job.fps, 12).clamp(1, 30).to_string();
-            let width = positive(&job.width, 480).clamp(64, 1280).to_string();
-            // Palette generation dramatically improves GIF color quality without adding a second encode pass.
+        (Tool::DocToPdf, Options::None) => process_each_convert(&job, "pdf"),
+        (Tool::PdfToDoc, Options::None) => process_each_convert(&job, "docx"),
+        (Tool::DataConvert, Options::DataConvert { format }) => data_convert(&job, format.as_str()),
+        (Tool::ExtractAudio, Options::ExtractAudio { format }) => process_each(&job, |input, out| {
+            extract_audio(input, out, format.as_str())
+        }),
+        (Tool::VideoConvert, Options::VideoConvert { format, preset, quality }) => process_each(&job, |input, out| {
+            convert_video(input, out, format.as_str(), preset.as_str(), &quality.to_string())
+        }),
+        (Tool::VideoToGif, Options::VideoToGif { width, fps }) => process_each(&job, |input, out| {
             let filter = format!("fps={fps},scale={width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer");
             run_ok("ffmpeg", vec![os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"), os("-i"), os(input), os("-filter_complex"), os(&filter), os("-threads"), os("2"), os("-loop"), os("0"), os(out)]).map(|_| ())
         }),
+        _ => Err(format!("The settings do not match the selected tool ({:?}).", job.tool)),
     }
 }
-
-
-
-
-
-
 
 #[cfg(test)]
 mod tests {
@@ -347,25 +324,13 @@ mod pdf_integration_tests {
     }
 
     fn make_job(tool: ToolId, input: PathBuf, output_dir: PathBuf) -> Job {
-        Job {
-            tool,
-            files: vec![input],
-            secondary_file: None,
-            output_dir,
-            target_format: "png".into(),
-            text: String::new(),
-            width: "1600".into(),
-            height: "1200".into(),
-            quality: "82".into(),
-            compress_pdf: false,
-            pdf_profile: "ebook".into(),
-            rotation: "90".into(),
-            pages: String::new(),
-            fps: "12".into(),
-            video_preset: "fast".into(),
-            language: "eng".into(),
-            dpi: "150".into(),
-        }
+        let options = match tool {
+            ToolId::PdfSplit => JobOptions::PdfSplit { range: "1,last".into() },
+            ToolId::PdfReorder => JobOptions::PdfReorder { order: "3,1,2,4".into() },
+            ToolId::PdfRotate => JobOptions::PdfRotate { rotation: PdfRotation::Degrees90 },
+            _ => JobOptions::None,
+        };
+        Job::new(tool, vec![input], output_dir, options).expect("test job settings should match the tool")
     }
 
     fn qpdf_available() -> bool {
@@ -390,13 +355,11 @@ mod pdf_integration_tests {
         fs::write(&input, make_blank_pdf(8)).unwrap();
 
         let split = execute({
-            let mut job = make_job(
+            make_job(
                 ToolId::PdfSplit,
                 input.clone(),
                 directory.join("split"),
-            );
-            job.pages = "1,last".into();
-            job
+            )
         }).expect("splitting all eight pages should succeed");
         assert_eq!(split.len(), 8);
         for page in &split {
@@ -412,13 +375,11 @@ mod pdf_integration_tests {
         assert_eq!(pdf_page_count(&rotated[0]).unwrap(), 8);
 
         let reordered = execute({
-            let mut job = make_job(
+            make_job(
                 ToolId::PdfReorder,
                 input,
                 directory.join("reordered"),
-            );
-            job.pages = "3,1,2,4".into();
-            job
+            )
         }).expect("reordering pages should succeed");
         assert_eq!(reordered.len(), 1);
         assert_eq!(pdf_page_count(&reordered[0]).unwrap(), 4);

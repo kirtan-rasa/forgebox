@@ -1,5 +1,8 @@
 use crate::catalog::{info, Category, ToolId};
-use crate::engine::{execute, take_execution_warnings, Job};
+use crate::engine::{
+    execute, take_execution_warnings, AudioFormat, DataFormat, ImageFormat, Job, JobOptions,
+    PdfCompressionProfile, PdfImageFormat, PdfRotation, VideoFormat, VideoPreset,
+};
 use eframe::egui::{self, Vec2};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -327,6 +330,80 @@ impl ForgeApp {
         // edits cannot accidentally launch unlimited thumbnail decoders in parallel.
     }
 
+    fn build_job(&self) -> Result<Job, String> {
+        let positive_u32 = |value: &str, fallback: u32| {
+            value.trim().parse::<u32>().ok().filter(|number| *number > 0).unwrap_or(fallback)
+        };
+        let positive_u8 = |value: &str, fallback: u8, min: u8, max: u8| {
+            value.trim().parse::<u8>().ok().filter(|number| *number > 0).unwrap_or(fallback).clamp(min, max)
+        };
+
+        let options = match self.selected_tool {
+            ToolId::ImageConvert => JobOptions::ImageConvert {
+                format: ImageFormat::parse(&self.target_format)?,
+            },
+            ToolId::ImageResize => JobOptions::ImageResize {
+                width: positive_u32(&self.width, 1600),
+                height: positive_u32(&self.height, 1200),
+            },
+            ToolId::ImageCompress => JobOptions::ImageCompress {
+                quality: positive_u8(&self.quality, 82, 1, 100),
+            },
+            ToolId::ImagesToPdf => JobOptions::ImagesToPdf {
+                compress: self.compress_pdf,
+                quality: positive_u8(&self.quality, 82, 20, 100),
+            },
+            ToolId::ImageOcr => JobOptions::ImageOcr {
+                language: if self.language.trim().is_empty() { "eng".into() } else { self.language.trim().to_owned() },
+            },
+            ToolId::GenerateQr => JobOptions::GenerateQr { text: self.text.clone() },
+            ToolId::PdfSplit => JobOptions::PdfSplit { range: self.pages.trim().to_owned() },
+            ToolId::PdfCompress => JobOptions::PdfCompress {
+                profile: PdfCompressionProfile::parse(&self.pdf_profile)?,
+            },
+            ToolId::PdfRotate => JobOptions::PdfRotate {
+                rotation: PdfRotation::parse(&self.rotation)?,
+            },
+            ToolId::PdfReorder => JobOptions::PdfReorder { order: self.pages.trim().to_owned() },
+            ToolId::PdfToImages => JobOptions::PdfToImages {
+                format: PdfImageFormat::parse(&self.target_format)?,
+                dpi: positive_u32(&self.dpi, 150).clamp(36, 600) as u16,
+            },
+            ToolId::PdfWatermark => JobOptions::PdfWatermark {
+                watermark_file: self.secondary_file.clone().ok_or("Select the watermark PDF in the first step.")?,
+            },
+            ToolId::DataConvert => JobOptions::DataConvert {
+                format: DataFormat::parse(&self.target_format)?,
+            },
+            ToolId::ExtractAudio => JobOptions::ExtractAudio {
+                format: AudioFormat::parse(&self.target_format)?,
+            },
+            ToolId::VideoConvert => JobOptions::VideoConvert {
+                format: VideoFormat::parse(&self.target_format)?,
+                preset: VideoPreset::parse(&self.video_preset)?,
+                quality: positive_u8(&self.quality, 23, 18, 30),
+            },
+            ToolId::VideoToGif => JobOptions::VideoToGif {
+                width: positive_u32(&self.width, 480).clamp(64, 1280) as u16,
+                fps: positive_u32(&self.fps, 12).clamp(1, 30) as u8,
+            },
+            ToolId::ImageGrayscale
+            | ToolId::RemoveBackground
+            | ToolId::ExtractExif
+            | ToolId::LongPngToPdf
+            | ToolId::PdfMerge
+            | ToolId::DocToPdf
+            | ToolId::PdfToDoc => JobOptions::None,
+        };
+
+        Job::new(
+            self.selected_tool,
+            self.files.clone(),
+            self.output_dir.clone(),
+            options,
+        )
+    }
+
     fn start_job(&mut self) {
         if self.running { return; }
         if !matches!(self.selected_tool, ToolId::GenerateQr) && self.files.is_empty() {
@@ -347,24 +424,12 @@ impl ForgeApp {
             self.wizard_step = 1;
             return;
         }
-        let job = Job {
-            tool: self.selected_tool,
-            files: self.files.clone(),
-            secondary_file: self.secondary_file.clone(),
-            output_dir: self.output_dir.clone(),
-            target_format: self.target_format.clone(),
-            text: self.text.clone(),
-            width: self.width.clone(),
-            height: self.height.clone(),
-            quality: self.quality.clone(),
-            compress_pdf: self.compress_pdf,
-            pdf_profile: self.pdf_profile.clone(),
-            rotation: self.rotation.clone(),
-            pages: self.pages.clone(),
-            fps: self.fps.clone(),
-            video_preset: self.video_preset.clone(),
-            language: self.language.clone(),
-            dpi: self.dpi.clone(),
+        let job = match self.build_job() {
+            Ok(job) => job,
+            Err(error) => {
+                self.logs.push((false, error));
+                return;
+            }
         };
         let tx = self.tx.clone();
         let name = info(self.selected_tool).name.to_string();

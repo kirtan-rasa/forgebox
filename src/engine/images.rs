@@ -6,7 +6,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
 
-pub(super) fn images_to_pdf(job: &Job) -> Result<Vec<PathBuf>, String> {
+pub(super) fn images_to_pdf(job: &Job, compress: bool, quality: u8) -> Result<Vec<PathBuf>, String> {
     require_files(job, 1, "Add at least one image to create a PDF.")?;
     let allowed = ["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "heic", "avif", "gif"];
     for input in &job.files {
@@ -38,8 +38,8 @@ pub(super) fn images_to_pdf(job: &Job) -> Result<Vec<PathBuf>, String> {
         }
 
         let mut args: Vec<OsString> = normalized.iter().map(|p| os(p)).collect();
-        if job.compress_pdf {
-            args.extend([os("-background"), os("white"), os("-alpha"), os("remove"), os("-alpha"), os("off"), os("-compress"), os("JPEG"), os("-quality"), os(&positive(&job.quality, 82).clamp(20, 100).to_string())]);
+        if compress {
+            args.extend([os("-background"), os("white"), os("-alpha"), os("remove"), os("-alpha"), os("off"), os("-compress"), os("JPEG"), os("-quality"), os(&quality.to_string())]);
         }
         args.push(os(&out));
         run_magick_owned(args)?;

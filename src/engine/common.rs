@@ -6,6 +6,28 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+fn output_details<'a>(job: &Job, input: &Path) -> (&'static str, String) {
+    use super::JobOptions as Options;
+    use crate::catalog::ToolId as Tool;
+
+    let source_extension = || {
+        input.extension().and_then(|value| value.to_str()).unwrap_or("png").to_lowercase()
+    };
+    match (&job.tool, &job.options) {
+        (Tool::ImageConvert, Options::ImageConvert { format }) => ("converted", format.as_str().to_owned()),
+        (Tool::ImageResize, Options::ImageResize { .. }) => ("resized", source_extension()),
+        (Tool::ImageCompress, Options::ImageCompress { .. }) => ("compressed", source_extension()),
+        (Tool::ImageGrayscale, Options::None) => ("grayscale", source_extension()),
+        (Tool::RemoveBackground, Options::None) => ("no-background", "png".into()),
+        (Tool::ExtractExif, Options::None) => ("exif", "json".into()),
+        (Tool::ImageOcr, Options::ImageOcr { .. }) => ("ocr", "txt".into()),
+        (Tool::ExtractAudio, Options::ExtractAudio { format }) => ("audio", format.as_str().to_owned()),
+        (Tool::VideoConvert, Options::VideoConvert { format, .. }) => ("converted", format.as_str().to_owned()),
+        (Tool::VideoToGif, Options::VideoToGif { .. }) => ("animation", "gif".into()),
+        _ => ("output", source_extension()),
+    }
+}
+
 pub(super) fn process_each<F>(job: &Job, mut operation: F) -> Result<Vec<PathBuf>, String>
 where
     F: FnMut(&Path, &Path) -> Result<(), String>,
@@ -13,30 +35,8 @@ where
     require_files(job, 1, "Add files to process first.")?;
     let mut outputs: Vec<PathBuf> = Vec::new();
     for input in &job.files {
-        let ext = match job.tool {
-            ToolId::ImageConvert => normalized_ext(&job.target_format),
-            ToolId::RemoveBackground => "png".to_string(),
-            ToolId::ImageOcr => "txt".to_string(),
-            ToolId::ExtractExif => "json".to_string(),
-            ToolId::ExtractAudio => normalized_ext(&job.target_format),
-            ToolId::VideoConvert => normalized_ext(&job.target_format),
-            ToolId::VideoToGif => "gif".to_string(),
-            _ => input.extension().and_then(|s| s.to_str()).unwrap_or("png").to_lowercase(),
-        };
-        let suffix = match job.tool {
-            ToolId::ImageConvert => "converted",
-            ToolId::ImageResize => "resized",
-            ToolId::ImageCompress => "compressed",
-            ToolId::ImageGrayscale => "grayscale",
-            ToolId::RemoveBackground => "no-background",
-            ToolId::ExtractExif => "exif",
-            ToolId::ImageOcr => "ocr",
-            ToolId::ExtractAudio => "audio",
-            ToolId::VideoConvert => "converted",
-            ToolId::VideoToGif => "animation",
-            _ => "output",
-        };
-        let out = output_for_input(job, input, suffix, &ext);
+        let (suffix, extension) = output_details(job, input);
+        let out = output_for_input(job, input, suffix, extension);
         if let Err(error) = operation(input, &out) {
             let _ = fs::remove_file(&out);
             for created in &outputs { let _ = fs::remove_file(created); }
