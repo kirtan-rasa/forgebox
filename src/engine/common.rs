@@ -1,4 +1,4 @@
-use super::{soffice_convert, Job};
+use super::{check_cancelled, report_status, soffice_convert, Job};
 use std::ffi::OsString;
 use std::fs;
 use std::io;
@@ -33,7 +33,10 @@ where
 {
     require_files(job, 1, "Add files to process first.")?;
     let mut outputs: Vec<PathBuf> = Vec::new();
-    for input in &job.files {
+    for (index, input) in job.files.iter().enumerate() {
+        check_cancelled()?;
+        let name = input.file_name().and_then(|value| value.to_str()).unwrap_or("file");
+        report_status(format!("Processing {name} ({}/{})", index + 1, job.files.len()));
         let (suffix, extension) = output_details(job, input);
         let out = output_for_input(job, input, suffix, &extension);
         if let Err(error) = operation(input, &out) {
@@ -53,7 +56,10 @@ where
 {
     require_files(job, 1, "Add files to process first.")?;
     let mut outputs: Vec<PathBuf> = Vec::new();
-    for input in &job.files {
+    for (index, input) in job.files.iter().enumerate() {
+        check_cancelled()?;
+        let name = input.file_name().and_then(|value| value.to_str()).unwrap_or("file");
+        report_status(format!("Reading metadata from {name} ({}/{})", index + 1, job.files.len()));
         let out = output_for_input(job, input, "exif", "json");
         if let Err(error) = operation(input, &out) {
             let _ = fs::remove_file(&out);
@@ -69,7 +75,10 @@ where
 pub(super) fn process_each_convert(job: &Job, target_ext: &str) -> Result<Vec<PathBuf>, String> {
     require_files(job, 1, "Add documents first.")?;
     let mut outputs: Vec<PathBuf> = Vec::new();
-    for input in &job.files {
+    for (index, input) in job.files.iter().enumerate() {
+        check_cancelled()?;
+        let name = input.file_name().and_then(|value| value.to_str()).unwrap_or("document");
+        report_status(format!("Converting {name} ({}/{})", index + 1, job.files.len()));
         let out = output_for_input(job, input, "converted", target_ext);
         if let Err(error) = soffice_convert(input, target_ext, &out) {
             let _ = fs::remove_file(&out);

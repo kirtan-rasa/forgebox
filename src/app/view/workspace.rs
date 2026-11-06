@@ -661,6 +661,8 @@ impl ForgeApp {
                             let success_count = self.logs.iter().filter(|(ok, message)| *ok && message.starts_with("Done:")).count();
                             let (status_fill, status_edge) = if self.running {
                                 (Color32::from_rgb(19, 35, 48), Color32::from_rgb(35, 119, 160))
+                            } else if self.completed_cancelled {
+                                (Color32::from_rgb(48, 39, 23), Color32::from_rgb(139, 108, 51))
                             } else if has_error {
                                 (Color32::from_rgb(47, 23, 39), Color32::from_rgb(139, 60, 83))
                             } else if has_warning {
@@ -680,7 +682,27 @@ impl ForgeApp {
                                             ui.spinner();
                                             ui.vertical(|ui| {
                                                 ui.label(RichText::new(format!("Processing: {}", info(self.selected_tool).name)).strong().color(CYAN));
-                                                ui.label(RichText::new("ForgeBox will show the result here when the task finishes.").size(11.5).color(MUTED));
+                                                let detail = if self.cancel_requested {
+                                                    "Waiting for the active process to stop…"
+                                                } else if self.execution_status.is_empty() {
+                                                    "ForgeBox will show the result here when the task finishes."
+                                                } else {
+                                                    self.execution_status.as_str()
+                                                };
+                                                ui.label(RichText::new(detail).size(11.5).color(MUTED));
+                                            });
+                                            ui.add_space(8.0);
+                                            ui.add_enabled_ui(!self.cancel_requested, |ui| {
+                                                if ui.button(if self.cancel_requested { "Stopping…" } else { "Cancel" }).clicked() {
+                                                    self.cancel_job();
+                                                }
+                                            });
+                                        } else if self.completed_cancelled {
+                                            let (icon_rect, _) = ui.allocate_exact_size(Vec2::new(18.0, 22.0), egui::Sense::hover());
+                                            ui.painter().text(icon_rect.center(), egui::Align2::CENTER_CENTER, "!", FontId::proportional(18.0), WARNING);
+                                            ui.vertical(|ui| {
+                                                ui.label(RichText::new("Task cancelled").strong().color(WARNING));
+                                                ui.label(RichText::new("The active process was stopped. Completed files may remain.").size(11.5).color(MUTED));
                                             });
                                         } else if has_error {
                                             ui.label(RichText::new("✕").size(18.0).strong().color(RED));

@@ -4,6 +4,7 @@ mod images;
 mod media;
 mod pdf;
 mod command;
+mod control;
 mod job;
 
 pub(crate) use self::command::{image_magick_program, image_magick_thread_limit};
@@ -24,6 +25,7 @@ pub use self::job::{
     AudioFormat, DataFormat, ImageFormat, Job, JobOptions, PdfCompressionProfile,
     PdfImageFormat, PdfRotation, VideoFormat, VideoPreset,
 };
+pub use self::control::ExecutionControl;
 
 use qrcode::QrCode;
 use std::cell::RefCell;
@@ -33,6 +35,44 @@ use std::path::PathBuf;
 
 thread_local! {
     static EXECUTION_WARNINGS: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    static EXECUTION_CONTROL: RefCell<Option<ExecutionControl>> = const { RefCell::new(None) };
+}
+
+pub(super) fn with_execution_control<R>(
+    control: ExecutionControl,
+    operation: impl FnOnce() -> R,
+) -> R {
+    let previous = EXECUTION_CONTROL.with(|current| current.replace(Some(control)));
+    let result = operation();
+    EXECUTION_CONTROL.with(|current| {
+        current.replace(previous);
+    });
+    result
+}
+
+pub(super) fn check_cancelled() -> Result<(), String> {
+    let cancelled = EXECUTION_CONTROL.with(|current| {
+        current.borrow().as_ref().map(ExecutionControl::is_cancelled).unwrap_or(false)
+    });
+    if cancelled {
+        Err("Operation cancelled by user.".into())
+    } else {
+        Ok(())
+    }
+}
+
+pub(super) fn execution_cancelled() -> bool {
+    EXECUTION_CONTROL.with(|current| {
+        current.borrow().as_ref().map(ExecutionControl::is_cancelled).unwrap_or(false)
+    })
+}
+
+pub(super) fn report_status(status: impl Into<String>) {
+    EXECUTION_CONTROL.with(|current| {
+        if let Some(control) = current.borrow().as_ref() {
+            control.report_status(status);
+        }
+    });
 }
 
 pub fn take_execution_warnings() -> Vec<String> {
@@ -57,7 +97,16 @@ fn record_execution_warning(message: String) {
 }
 
 pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
+    execute_with_control(job, ExecutionControl::silent())
+}
+
+pub fn execute_with_control(job: Job, control: ExecutionControl) -> Result<Vec<PathBuf>, String> {
     clear_execution_warnings();
+    with_execution_control(control, || execute_job(job))
+}
+
+fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
+    check_cancelled()?;
     fs::create_dir_all(&job.output_dir)
         .map_err(|error| format!("Failed to create the output folder: {error}"))?;
 

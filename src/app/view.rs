@@ -15,6 +15,7 @@ pub(super) use self::thumbnails::load_thumbnail;
 
 impl eframe::App for ForgeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_execution_status();
         self.poll_results();
         self.poll_dialogs();
         self.poll_thumbnails(ctx);

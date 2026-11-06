@@ -1,8 +1,10 @@
 use super::record_execution_warning;
 use std::ffi::{OsStr, OsString};
-use std::io;
+use std::io::{self, Read};
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 fn os<T: AsRef<OsStr>>(value: T) -> OsString {
     value.as_ref().to_os_string()
@@ -77,14 +79,70 @@ pub(super) fn configure_command_environment(program: &str, command: &mut Command
     }
 }
 
+fn run_cancellable(command: &mut Command) -> io::Result<Output> {
+    super::check_cancelled()
+        .map_err(|message| io::Error::new(io::ErrorKind::Interrupted, message))?;
+
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let stdout = child.stdout.take().expect("stdout was configured as piped");
+    let stderr = child.stderr.take().expect("stderr was configured as piped");
+    let stdout_reader = read_pipe(stdout);
+    let stderr_reader = read_pipe(stderr);
+
+    let status = loop {
+        if super::execution_cancelled() {
+            stop_child(&mut child);
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "Operation cancelled by user."));
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(error) => {
+                stop_child(&mut child);
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(error);
+            }
+        }
+    };
+
+    let stdout = join_pipe(stdout_reader)?;
+    let stderr = join_pipe(stderr_reader)?;
+    Ok(Output { status, stdout, stderr })
+}
+
+fn read_pipe<R: Read + Send + 'static>(mut pipe: R) -> JoinHandle<io::Result<Vec<u8>>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    })
+}
+
+fn join_pipe(reader: JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Vec<u8>> {
+    reader.join().map_err(|_| io::Error::new(io::ErrorKind::Other, "Process output reader panicked"))?
+}
+
+fn stop_child(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 pub(super) fn run_ok(program: &str, args: Vec<OsString>) -> Result<Output, String> {
+    super::check_cancelled()?;
+    super::report_status(format!("Running {program}…"));
     let candidates = command_candidates(program);
     let mut tried: Vec<String> = Vec::new();
     for candidate in candidates {
         let label = candidate.to_string_lossy().into_owned();
         let mut command = Command::new(&candidate);
         configure_command_environment(program, &mut command);
-        match command.args(args.iter()).output() {
+        command.args(args.iter());
+        match run_cancellable(&mut command) {
             Ok(output) if output.status.success() => return Ok(output),
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -97,6 +155,9 @@ pub(super) fn run_ok(program: &str, args: Vec<OsString>) -> Result<Output, Strin
                 });
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => tried.push(label),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                return Err("Operation cancelled by user.".into());
+            }
             Err(error) => return Err(format!("Failed to launch `{program}` via `{label}`: {error}")),
         }
     }
@@ -155,5 +216,33 @@ fn has_command(program: &str) -> bool {
     command_candidates(program)
         .iter()
         .any(|candidate| command_version_succeeds(candidate))
+}
+
+#[cfg(all(test, unix))]
+mod cancellation_tests {
+    use super::{os, run_ok};
+    use crate::engine::{with_execution_control, ExecutionControl};
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn cancellation_stops_a_running_external_command() {
+        let (status_tx, _status_rx) = mpsc::channel();
+        let control = ExecutionControl::new(status_tx);
+        let cancel_handle = control.clone();
+
+        let worker = thread::spawn(move || {
+            with_execution_control(control, || run_ok("sleep", vec![os("15")]))
+        });
+
+        thread::sleep(Duration::from_millis(150));
+        let started = Instant::now();
+        cancel_handle.cancel();
+        let result = worker.join().expect("command worker should not panic");
+
+        assert!(result.unwrap_err().contains("cancelled"));
+        assert!(started.elapsed() < Duration::from_secs(3), "cancellation should stop the command promptly");
+    }
 }
 

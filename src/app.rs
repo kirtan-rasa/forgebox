@@ -1,7 +1,8 @@
 use crate::catalog::{info, Category, ToolId};
 use crate::engine::{
-    execute, take_execution_warnings, AudioFormat, DataFormat, ImageFormat, Job, JobOptions,
-    PdfCompressionProfile, PdfImageFormat, PdfRotation, VideoFormat, VideoPreset,
+    execute_with_control, take_execution_warnings, AudioFormat, DataFormat, ExecutionControl,
+    ImageFormat, Job, JobOptions, PdfCompressionProfile, PdfImageFormat, PdfRotation,
+    VideoFormat, VideoPreset,
 };
 use eframe::egui::{self, Vec2};
 use std::collections::{HashMap, HashSet};
@@ -15,6 +16,7 @@ mod view;
 struct JobResult {
     result: Result<Vec<PathBuf>, String>,
     warnings: Vec<String>,
+    cancelled: bool,
 }
 
 enum DialogResult {
@@ -46,6 +48,12 @@ struct ForgeApp {
     language: String,
     dpi: String,
     running: bool,
+    execution_control: Option<ExecutionControl>,
+    execution_status: String,
+    status_tx: Sender<String>,
+    status_rx: Receiver<String>,
+    cancel_requested: bool,
+    completed_cancelled: bool,
     wizard_step: usize,
     dragging_file: Option<PathBuf>,
     drag_insert_index: Option<usize>,
@@ -70,6 +78,7 @@ impl ForgeApp {
         let (tx, rx) = mpsc::channel();
         let (dialog_tx, dialog_rx) = mpsc::channel();
         let (thumbnail_tx, thumbnail_rx) = mpsc::channel();
+        let (status_tx, status_rx) = mpsc::channel();
         Self {
             selected_tool: ToolId::ImageConvert,
             icons_loaded,
@@ -93,6 +102,12 @@ impl ForgeApp {
             language: "eng".into(),
             dpi: "150".into(),
             running: false,
+            execution_control: None,
+            execution_status: String::new(),
+            status_tx,
+            status_rx,
+            cancel_requested: false,
+            completed_cancelled: false,
             wizard_step: 0,
             dragging_file: None,
             drag_insert_index: None,
@@ -121,6 +136,7 @@ impl ForgeApp {
         self.drag_insert_index = None;
         self.drag_card_size = None;
         self.logs.clear();
+        self.completed_cancelled = false;
         match id {
             ToolId::ImageConvert => self.target_format = "png".into(),
             ToolId::ImagesToPdf => self.target_format = "pdf".into(),
@@ -431,23 +447,53 @@ impl ForgeApp {
                 return;
             }
         };
+        while self.status_rx.try_recv().is_ok() {}
         let tx = self.tx.clone();
         let name = info(self.selected_tool).name.to_string();
+        let control = ExecutionControl::new(self.status_tx.clone());
+        self.execution_control = Some(control.clone());
+        self.execution_status = "Preparing task…".into();
+        self.cancel_requested = false;
+        self.completed_cancelled = false;
         self.logs.clear();
         self.logs.push((true, format!("Processing: {name}")));
         self.running = true;
         thread::spawn(move || {
-            let result = execute(job);
+            let result = execute_with_control(job, control.clone());
+            let cancelled = control.is_cancelled() && result.is_err();
             let warnings = take_execution_warnings();
-            let _ = tx.send(JobResult { result, warnings });
+            let _ = tx.send(JobResult { result, warnings, cancelled });
         });
+    }
+
+    fn cancel_job(&mut self) {
+        if let Some(control) = &self.execution_control {
+            if !self.cancel_requested {
+                control.cancel();
+                self.cancel_requested = true;
+                self.execution_status = "Stopping current process…".into();
+            }
+        }
+    }
+
+    fn poll_execution_status(&mut self) {
+        while let Ok(status) = self.status_rx.try_recv() {
+            self.execution_status = status;
+        }
     }
 
     fn poll_results(&mut self) {
         while let Ok(message) = self.rx.try_recv() {
             self.running = false;
+            self.execution_control = None;
+            self.execution_status.clear();
+            self.cancel_requested = false;
+            self.completed_cancelled = message.cancelled;
             self.logs.clear();
-            match message.result {
+            if message.cancelled {
+                self.logs.push((true, "Task cancelled. Incomplete outputs are cleaned up where supported.".into()));
+            } else {
+                match message.result {
                 Ok(paths) => {
                     if paths.is_empty() {
                         self.logs.push((true, "Done. The command completed successfully.".into()));
@@ -461,6 +507,7 @@ impl ForgeApp {
                     }
                 }
                 Err(error) => self.logs.push((false, error)),
+                }
             }
             if self.logs.len() > 200 { self.logs.drain(0..self.logs.len() - 200); }
         }
