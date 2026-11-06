@@ -224,6 +224,15 @@ jobs:
           su builder -c "cd '$WORKDIR' && makepkg --printsrcinfo > .SRCINFO"
           grep -Fq 'depends = pdftk' dist/linux/.SRCINFO
           grep -Fq 'optdepends = ffmpeg: Enable audio, video, and GIF conversion' dist/linux/.SRCINFO
+
+          # makepkg --nodeps validates package construction but deliberately
+          # skips dependency resolution. Ask pacman to resolve every mandatory
+          # runtime dependency against the official sync databases without
+          # downloading or installing the application dependencies.
+          mapfile -t RUNTIME_DEPENDS < <(sed -n 's/^depends = //p' dist/linux/.SRCINFO)
+          test "${#RUNTIME_DEPENDS[@]}" -gt 0
+          pacman -Sp --print-format '%n' "${RUNTIME_DEPENDS[@]}" >/dev/null
+
           test -n "$(find dist/linux -maxdepth 1 -type f -name '*.pkg.tar.*' -print -quit)"
           test -s dist/linux/.SRCINFO
           pacman -Qip dist/linux/*.pkg.tar.zst
