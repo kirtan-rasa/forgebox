@@ -74,6 +74,7 @@ struct ForgeApp {
     dpi: String,
     running: bool,
     execution_control: Option<ExecutionControl>,
+    queue_worker: Option<thread::JoinHandle<()>>,
     execution_status: String,
     status_tx: Sender<String>,
     status_rx: Receiver<String>,
@@ -135,6 +136,7 @@ impl ForgeApp {
             dpi: "150".into(),
             running: false,
             execution_control: None,
+            queue_worker: None,
             execution_status: String::new(),
             status_tx,
             status_rx,
@@ -554,7 +556,7 @@ impl ForgeApp {
 
         // A single worker processes queued tasks in order. A failure is recorded
         // but does not prevent later independent tasks from running.
-        thread::spawn(move || {
+        self.queue_worker = Some(thread::spawn(move || {
             for (position, (index, job, tool_name)) in jobs.iter().cloned().enumerate() {
                 if control.is_cancelled() {
                     let _ = queue_tx.send(QueueEvent::Skipped { index });
@@ -591,7 +593,7 @@ impl ForgeApp {
             let _ = queue_tx.send(QueueEvent::QueueFinished {
                 cancelled: control.is_cancelled(),
             });
-        });
+        }));
     }
 
     fn cancel_job(&mut self) {
@@ -669,6 +671,11 @@ impl ForgeApp {
                     self.queue_finished += 1;
                 }
                 QueueEvent::QueueFinished { cancelled } => {
+                    // QueueFinished is sent only after all tasks have stopped.
+                    // Reap the worker instead of leaving a detached thread behind.
+                    if let Some(worker) = self.queue_worker.take() {
+                        let _ = worker.join();
+                    }
                     self.running = false;
                     self.execution_control = None;
                     self.execution_status.clear();
@@ -728,6 +735,20 @@ impl ForgeApp {
     }
 }
 
+
+impl Drop for ForgeApp {
+    fn drop(&mut self) {
+        // Closing the window must have the same cancellation semantics as Stop.
+        // Keep the application process alive until the worker has reaped its
+        // active child process and finished cleaning up its temporary files.
+        if let Some(control) = self.execution_control.as_ref() {
+            control.cancel();
+        }
+        if let Some(worker) = self.queue_worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
 
 pub fn run() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
