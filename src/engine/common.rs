@@ -3,7 +3,10 @@ use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static TEMP_DIR_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn output_details(job: &Job, input: &Path) -> (&'static str, String) {
     use super::JobOptions as Options;
@@ -153,9 +156,47 @@ pub(super) fn files_with_prefix(dir: &Path, prefix: &str) -> Vec<PathBuf> {
 }
 
 pub(super) fn temp_dir(prefix: &str) -> Result<PathBuf, String> {
-    let path = std::env::temp_dir().join(format!("forgebox-{prefix}-{}-{}", std::process::id(), timestamp()));
-    fs::create_dir_all(&path).map_err(display_io)?;
-    Ok(path)
+    let base = std::env::temp_dir();
+
+    // A millisecond timestamp alone can collide when two conversions create
+    // temporary directories at nearly the same time. Use an in-process
+    // sequence and create the directory atomically rather than accepting an
+    // already-existing path.
+    for _ in 0..128 {
+        let sequence = TEMP_DIR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = base.join(format!(
+            "forgebox-{prefix}-{}-{}-{sequence}",
+            std::process::id(),
+            timestamp()
+        ));
+
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(display_io(error)),
+        }
+    }
+
+    Err("Could not create a unique temporary directory after 128 attempts.".into())
+}
+
+#[cfg(test)]
+mod temp_dir_tests {
+    use super::temp_dir;
+    use std::fs;
+
+    #[test]
+    fn temporary_directories_with_same_prefix_are_unique() {
+        let first = temp_dir("unique-test").unwrap();
+        let second = temp_dir("unique-test").unwrap();
+
+        assert_ne!(first, second);
+        assert!(first.is_dir());
+        assert!(second.is_dir());
+
+        fs::remove_dir_all(first).unwrap();
+        fs::remove_dir_all(second).unwrap();
+    }
 }
 
 fn timestamp() -> u128 {
