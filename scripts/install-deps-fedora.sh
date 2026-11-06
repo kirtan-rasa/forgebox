@@ -19,7 +19,37 @@ sudo dnf install "${DNF_FLAGS[@]}" \
   ImageMagick poppler-utils ghostscript qpdf pdftk-java libreoffice \
   tesseract tesseract-langpack-eng tesseract-langpack-rus perl-Image-ExifTool
 
-if [[ -t 0 ]]; then
+find_working_rembg() {
+  local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+  local candidate
+
+  # Keep this search order aligned with ForgeBox's runtime command lookup.
+  for candidate in \
+    "$data_home/forgebox/rembg-venv/bin/rembg" \
+    "$HOME/.local/bin/rembg"
+  do
+    if [[ -x "$candidate" ]] && "$candidate" --help >/dev/null 2>&1; then
+      printf '%s\\n' "$candidate"
+      return 0
+    fi
+  done
+
+  if command -v rembg >/dev/null 2>&1; then
+    candidate="$(command -v rembg)"
+    if "$candidate" --help >/dev/null 2>&1; then
+      printf '%s\\n' "$candidate"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+if rembg_path="$(find_working_rembg)"; then
+  echo
+  echo "A working rembg installation was found at: $rembg_path"
+  echo "Skipping the optional rembg installation prompt."
+elif [[ -t 0 ]]; then
   echo
   read -r -p "Set up the optional rembg CPU backend now? [y/N] " install_rembg
   case "$install_rembg" in
