@@ -63,8 +63,8 @@ pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
     fs::create_dir_all(&job.output_dir)
         .map_err(|error| format!("Failed to create the output folder: {error}"))?;
 
-    use JobOptions as Options;
-    use ToolId as Tool;
+    use self::job::JobOptions as Options;
+    use crate::catalog::ToolId as Tool;
 
     match (&job.tool, &job.options) {
         (Tool::ImagesToPdf, Options::ImagesToPdf { compress, quality }) => {
@@ -270,7 +270,7 @@ mod tests {
 
 #[cfg(test)]
 mod pdf_integration_tests {
-    use super::{execute, pdf_page_count, temp_dir, Job};
+    use super::{execute, pdf_page_count, temp_dir, Job, JobOptions, PdfRotation};
     use crate::catalog::ToolId;
     use std::fs;
     use std::io::Write;

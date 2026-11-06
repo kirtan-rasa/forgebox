@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-fn output_details<'a>(job: &Job, input: &Path) -> (&'static str, String) {
+fn output_details(job: &Job, input: &Path) -> (&'static str, String) {
     use super::JobOptions as Options;
     use crate::catalog::ToolId as Tool;
 
@@ -36,7 +36,7 @@ where
     let mut outputs: Vec<PathBuf> = Vec::new();
     for input in &job.files {
         let (suffix, extension) = output_details(job, input);
-        let out = output_for_input(job, input, suffix, extension);
+        let out = output_for_input(job, input, suffix, &extension);
         if let Err(error) = operation(input, &out) {
             let _ = fs::remove_file(&out);
             for created in &outputs { let _ = fs::remove_file(created); }
@@ -152,10 +152,6 @@ pub(super) fn temp_dir(prefix: &str) -> Result<PathBuf, String> {
 
 fn timestamp() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
-}
-
-pub(super) fn positive(value: &str, fallback: i32) -> i32 {
-    value.trim().parse::<i32>().ok().filter(|n| *n > 0).unwrap_or(fallback)
 }
 
 pub(super) fn normalized_ext(value: &str) -> String {

@@ -206,13 +206,10 @@ pub enum JobOptions {
 
 impl JobOptions {
     pub fn matches_tool(&self, tool: ToolId) -> bool {
-        use JobOptions as Options;
-        use ToolId as Tool;
-
         matches!(
             (tool, self),
-            (Tool::ImageConvert, Options::ImageConvert { .. })
-                | (Tool::ImageResize, Options::ImageResize { .. })
+            (ToolId::ImageConvert, Self::ImageConvert { .. })
+                | (ToolId::ImageResize, Options::ImageResize { .. })
                 | (Tool::ImageCompress, Options::ImageCompress { .. })
                 | (Tool::ImagesToPdf, Options::ImagesToPdf { .. })
                 | (Tool::ImageOcr, Options::ImageOcr { .. })
