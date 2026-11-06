@@ -6,13 +6,15 @@ The RPM declares the common conversion engines as package dependencies. Install 
 sudo dnf install ./forgebox-*.rpm
 ```
 
-The RPM requires Tesseract and its English language data because English is the default OCR language. Russian OCR data and FFmpeg are weak/recommended dependencies, not hard requirements. FFmpeg may require RPM Fusion to be enabled.
+The RPM requires Tesseract and its English language data because English is the default OCR language. It also installs `python3-img2pdf` for image-to-PDF assembly; this avoids relying on ImageMagick's PDF coder, which is disabled by default on some distributions. Russian OCR data and FFmpeg are weak/recommended dependencies, not hard requirements. FFmpeg may require RPM Fusion to be enabled.
 
 Do not use `rpm -i` when you expect dependencies to be installed automatically: RPM itself does not perform DNF's dependency resolution. AppImage also does not install host conversion engines.
 
 ## Background removal
 
 Background removal is optional because `rembg` is a Python application with its own runtime and model. The current upstream release requires Python 3.11 or newer, but does not support Python 3.14 and later. Fedora 45 provides Python 3.13 alongside its newer system interpreter, so ForgeBox uses that version in a dedicated environment instead of changing the system Python or declaring `rembg` as a normal RPM requirement.
+
+The source setup script installs required tools, including img2pdf and Tesseract with its English/Russian language data. In an interactive terminal, DNF asks you to confirm the package transaction; afterward, the script separately asks whether to install optional `rembg`. Declining it does not affect the other conversion tools.
 
 The RPM includes a helper that creates a dedicated CPU environment using Python 3.13:
 

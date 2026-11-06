@@ -28,7 +28,7 @@ ForgeBox brings common image, PDF, document, spreadsheet, and media tools into o
 |---|---|
 | **Images** | Convert, resize, compress, grayscale, remove backgrounds, extract EXIF, OCR, generate QR codes, create PDFs from images |
 | **PDF** | Merge, split, compress, rotate, reorder pages, render pages to images, add watermarks |
-| **Documents** | DOC/DOCX → PDF and experimental PDF → DOCX conversion |
+| **Documents** | DOC/DOCX → PDF and text-first PDF → DOCX conversion |
 | **Data** | CSV ↔ JSON, CSV ↔ XLSX, JSON ↔ XLSX |
 | **Audio & video** | Convert video, extract audio, and create GIFs with frame-rate and size controls |
 
@@ -44,7 +44,21 @@ Background removal uses the optional `rembg` CPU backend; its model may be downl
 
 ## Download
 
-Get the current packages from [GitHub Releases](https://github.com/kirtan-rasa/forgebox/releases).
+### Quick install
+
+On supported x86_64 Linux systems, run:
+
+```bash
+curl -f https://kirtan-rasa.github.io/forgebox/install.sh | sh
+```
+
+The installer selects the newest published release with a package matching your distribution, verifies the package's SHA-256 digest, and installs it through the native package manager. It supports Fedora versions with a matching RPM build, Debian/Ubuntu-based systems, and Arch-based systems. A POSIX-compatible sh, curl, and sha256sum are required; Python 3 is installed automatically if it is missing. The package manager runs in automatic-confirmation mode, while sudo may still ask for your password.
+
+On Arch Linux, keep the system fully updated before installing. The installer does not trigger a system-wide upgrade.
+
+### Manual downloads
+
+Get individual packages from [GitHub Releases](https://github.com/kirtan-rasa/forgebox/releases).
 
 | Linux distribution | Package | Install |
 |---|---|---|
@@ -63,7 +77,8 @@ ForgeBox uses external tools only for the features that need them.
 
 | Utility | Used for |
 |---|---|
-| ImageMagick | Image conversion, resizing, compression, grayscale, image-to-PDF |
+| ImageMagick | Image conversion, resizing, compression, and grayscale |
+| img2pdf | Assemble image pages into PDFs without relying on ImageMagick's PDF coder |
 | Poppler | PDF merge, split, and page rendering |
 | Ghostscript, qpdf, pdftk | PDF compression, page operations, and watermarking |
 | LibreOffice | Office document and spreadsheet conversion |
@@ -117,7 +132,7 @@ The automated release workflow builds and publishes Linux packages.
 
 ## Known limitations
 
-- PDF → DOCX conversion depends on LibreOffice's PDF import and may alter complex layouts.
+- PDF → DOCX extracts selectable text with Poppler and creates an editable DOCX with LibreOffice. It does not preserve page layout or embedded images; scanned PDFs need OCR first.
 - Tall-image PDF export currently uses a fixed page-fragment height; paper size and page overlap are not configurable.
 - OCR quality depends on the installed Tesseract language data.
 - Background removal requires a separately configured `rembg` environment and model.

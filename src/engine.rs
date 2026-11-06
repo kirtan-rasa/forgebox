@@ -1,20 +1,80 @@
-use crate::catalog::ToolId;
-use csv::{ReaderBuilder, WriterBuilder};
-use serde_json::{Map, Value};
+mod common;
+#[cfg(test)]
+mod integration_tests;
+mod data;
+mod images;
+mod media;
+mod pdf;
+mod command;
+mod control;
+mod job;
+
+pub(crate) use self::command::{image_magick_program, image_magick_thread_limit};
+use self::command::{
+    command_version_succeeds, configure_command_environment, recommended_image_magick_threads,
+    run_capture, run_magick_owned, run_ok, run_qpdf,
+};
+use self::common::{
+    display_io, files_with_prefix, first_file, normalized_ext, os, output_for_input, positive,
+    process_each, process_each_capture, process_each_convert, require_files,
+    sort_numbered_paths, temp_dir, unique_path, unique_pattern, unique_prefix,
+};
+use self::data::{csv_to_json, data_convert, encode_file_url_path, pdf_to_docx, soffice_convert};
+use self::images::{images_to_pdf, long_png_to_pdf};
+use self::media::{convert_video, extract_audio};
+use self::pdf::{parse_pdf_page_order, parse_pdf_page_range, pdf_page_count};
+pub use self::job::{
+    AudioFormat, DataFormat, ImageFormat, Job, JobOptions, PdfCompressionProfile,
+    PdfImageFormat, PdfRotation, VideoFormat, VideoPreset,
+};
+pub use self::control::ExecutionControl;
+
 use qrcode::QrCode;
 use std::cell::RefCell;
-use std::collections::BTreeSet;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-static IMAGEMAGICK_PROGRAM: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
 
 thread_local! {
     static EXECUTION_WARNINGS: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    static EXECUTION_CONTROL: RefCell<Option<ExecutionControl>> = const { RefCell::new(None) };
+}
+
+pub(super) fn with_execution_control<R>(
+    control: ExecutionControl,
+    operation: impl FnOnce() -> R,
+) -> R {
+    let previous = EXECUTION_CONTROL.with(|current| current.replace(Some(control)));
+    let result = operation();
+    EXECUTION_CONTROL.with(|current| {
+        current.replace(previous);
+    });
+    result
+}
+
+pub(super) fn check_cancelled() -> Result<(), String> {
+    let cancelled = EXECUTION_CONTROL.with(|current| {
+        current.borrow().as_ref().map(ExecutionControl::is_cancelled).unwrap_or(false)
+    });
+    if cancelled {
+        Err("Operation cancelled by user.".into())
+    } else {
+        Ok(())
+    }
+}
+
+pub(super) fn execution_cancelled() -> bool {
+    EXECUTION_CONTROL.with(|current| {
+        current.borrow().as_ref().map(ExecutionControl::is_cancelled).unwrap_or(false)
+    })
+}
+
+pub(super) fn report_status(status: impl Into<String>) {
+    EXECUTION_CONTROL.with(|current| {
+        if let Some(control) = current.borrow().as_ref() {
+            control.report_status(status);
+        }
+    });
 }
 
 pub fn take_execution_warnings() -> Vec<String> {
@@ -38,107 +98,132 @@ fn record_execution_warning(message: String) {
     });
 }
 
-#[derive(Clone, Debug)]
-pub struct Job {
-    pub tool: ToolId,
-    pub files: Vec<PathBuf>,
-    pub secondary_file: Option<PathBuf>,
-    pub output_dir: PathBuf,
-    pub target_format: String,
-    pub text: String,
-    pub width: String,
-    pub height: String,
-    pub quality: String,
-    pub compress_pdf: bool,
-    pub pdf_profile: String,
-    pub rotation: String,
-    pub pages: String,
-    pub fps: String,
-    pub video_preset: String,
-    pub language: String,
-    pub dpi: String,
+pub(crate) fn image_thumbnail_png(
+    path: &Path,
+    control: ExecutionControl,
+) -> Result<Vec<u8>, String> {
+    let args = vec![
+        os("-limit"),
+        os("thread"),
+        os(image_magick_thread_limit().to_string()),
+        os("-define"),
+        os("jpeg:size=1200x840"),
+        os(path),
+        os("-auto-orient"),
+        os("-thumbnail"),
+        os("600x420"),
+        os("png:-"),
+    ];
+
+    with_execution_control(control, || run_capture(image_magick_program(), args))
 }
 
 pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
-    clear_execution_warnings();
-    fs::create_dir_all(&job.output_dir)
-        .map_err(|e| format!("Failed to create the output folder: {e}"))?;
+    execute_with_control(job, ExecutionControl::silent())
+}
 
-    use ToolId::*;
-    match job.tool {
-        ImagesToPdf => images_to_pdf(&job),
-        ImageConvert => process_each(&job, |input, out| {
-            let target = normalized_ext(&job.target_format);
+pub fn execute_with_control(job: Job, control: ExecutionControl) -> Result<Vec<PathBuf>, String> {
+    clear_execution_warnings();
+    with_execution_control(control, || execute_job(job))
+}
+
+fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
+    check_cancelled()?;
+    fs::create_dir_all(&job.output_dir)
+        .map_err(|error| format!("Failed to create the output folder: {error}"))?;
+
+    use self::job::JobOptions as Options;
+    use crate::catalog::ToolId as Tool;
+
+    match (&job.tool, &job.options) {
+        (Tool::ImagesToPdf, Options::ImagesToPdf { compress, quality }) => {
+            images_to_pdf(&job, *compress, *quality)
+        }
+        (Tool::ImageConvert, Options::ImageConvert { format }) => process_each(&job, |input, out| {
             let mut args = vec![os(input), os("-auto-orient")];
-            if target == "jpg" || target == "jpeg" {
-                // Transparent pixels have no direct representation in JPEG; use a predictable white background.
+            if matches!(format, ImageFormat::Jpeg) {
                 args.extend([os("-background"), os("white"), os("-alpha"), os("remove"), os("-alpha"), os("off")]);
             }
             args.push(os(out));
             run_magick_owned(args)
         }),
-        ImageResize => process_each(&job, |input, out| {
-            let size = format!("{}x{}", positive(&job.width, 1600), positive(&job.height, 1200));
-            let args = vec![os(input), os("-auto-orient"), os("-resize"), os(&size), os(out)];
-            run_magick_owned(args)
+        (Tool::ImageResize, Options::ImageResize { width, height }) => process_each(&job, |input, out| {
+            let size = format!("{width}x{height}");
+            run_magick_owned(vec![os(input), os("-auto-orient"), os("-resize"), os(&size), os(out)])
         }),
-        ImageCompress => process_each(&job, |input, out| {
-            let quality = positive(&job.quality, 82).clamp(1, 100).to_string();
+        (Tool::ImageCompress, Options::ImageCompress { quality }) => process_each(&job, |input, out| {
+            let quality = quality.to_string();
             run_magick_owned(vec![os(input), os("-auto-orient"), os("-quality"), os(&quality), os(out)])
         }),
-        ImageGrayscale => process_each(&job, |input, out| {
+        (Tool::ImageGrayscale, Options::None) => process_each(&job, |input, out| {
             run_magick_owned(vec![os(input), os("-auto-orient"), os("-colorspace"), os("Gray"), os(out)])
         }),
-        RemoveBackground => process_each(&job, |input, out| {
+        (Tool::RemoveBackground, Options::None) => process_each(&job, |input, out| {
             run_ok("rembg", vec![os("i"), os(input), os(out)]).map(|_| ())
         }),
-        ExtractExif => process_each_capture(&job, |input, out| {
+        (Tool::ExtractExif, Options::None) => process_each_capture(&job, |input, out| {
             let output = run_capture("exiftool", vec![os("-json"), os(input)])?;
-            fs::write(out, output).map_err(|e| format!("Failed to write JSON: {e}"))
+            fs::write(out, output).map_err(|error| format!("Failed to write JSON: {error}"))
         }),
-        ImageOcr => process_each(&job, |input, out| {
+        (Tool::ImageOcr, Options::ImageOcr { language }) => process_each(&job, |input, out| {
             let base = out.with_extension("");
-            let lang = if job.language.trim().is_empty() { "eng" } else { job.language.trim() };
+            let lang = if language.trim().is_empty() { "eng" } else { language.trim() };
             run_ok("tesseract", vec![os(input), os(&base), os("-l"), os(lang), os("txt")])
                 .map(|_| ())
                 .map_err(|error| {
                     if error.contains("Error opening data file")
                         || error.contains("Failed loading language")
                     {
-                        let fedora_packages = lang
+                        let languages = lang
                             .split('+')
                             .map(str::trim)
                             .filter(|language| !language.is_empty())
+                            .collect::<Vec<_>>();
+                        let fedora_packages = languages
+                            .iter()
                             .map(|language| format!("tesseract-langpack-{language}"))
                             .collect::<Vec<_>>()
                             .join(" ");
+                        let debian_packages = languages
+                            .iter()
+                            .map(|language| format!("tesseract-ocr-{language}"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let arch_packages = languages
+                            .iter()
+                            .map(|language| format!("tesseract-data-{language}"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
                         format!(
-                            "Tesseract language data for `{lang}` is missing. Install the matching language package and try again. On Fedora, use `sudo dnf install {fedora_packages}`."
+                            "Tesseract language data for `{lang}` is missing. Install the matching language package and try again. Examples: Fedora: `sudo dnf install {fedora_packages}`; Debian/Ubuntu: `sudo apt install {debian_packages}`; Arch: `sudo pacman -S {arch_packages}`."
                         )
                     } else {
                         error
                     }
                 })
         }),
-        GenerateQr => {
-            if job.text.trim().is_empty() {
+        (Tool::GenerateQr, Options::GenerateQr { text }) => {
+            if text.trim().is_empty() {
                 return Err("Enter text or a URL for the QR code.".into());
             }
             let out = unique_path(&job.output_dir, "qr-code", "png");
-            let code = QrCode::new(job.text.as_bytes())
+            let code = QrCode::new(text.as_bytes())
                 .map_err(|error| format!("Could not generate the QR code: {error}"))?;
             let qr_image = code
                 .render::<image::Luma<u8>>()
                 .min_dimensions(320, 320)
                 .build();
-            qr_image.save(&out).map_err(|error| format!("Failed to save the QR code: {error}"))?;
+            if let Err(error) = qr_image.save(&out) {
+                let _ = fs::remove_file(&out);
+                return Err(format!("Failed to save the QR code: {error}"));
+            }
             Ok(vec![out])
         }
-        LongPngToPdf => long_png_to_pdf(&job),
-        PdfMerge => {
+        (Tool::LongPngToPdf, Options::None) => long_png_to_pdf(&job),
+        (Tool::PdfMerge, Options::None) => {
             require_files(&job, 2, "Select at least two PDF files to merge.")?;
             let out = unique_path(&job.output_dir, "merged", "pdf");
-            let mut args: Vec<OsString> = job.files.iter().map(|p| os(p)).collect();
+            let mut args: Vec<OsString> = job.files.iter().map(|path| os(path)).collect();
             args.push(os(&out));
             if let Err(error) = run_ok("pdfunite", args) {
                 let _ = fs::remove_file(&out);
@@ -146,56 +231,55 @@ pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
             }
             Ok(vec![out])
         }
-        PdfSplit => {
+        (Tool::PdfSplit, Options::PdfSplit { range }) => {
             let input = first_file(&job)?;
             let page_count = pdf_page_count(input)?;
-            let (first, end) = parse_pdf_page_range(&job.pages, page_count)?;
-            let pattern = unique_pattern(&job.output_dir, &input.file_stem().and_then(|s| s.to_str()).unwrap_or("document"));
-            let pattern_prefix = pattern.file_name().and_then(|s| s.to_str()).unwrap_or("split-%d.pdf").split("%d").next().unwrap_or("split-").to_string();
+            let (first, end) = parse_pdf_page_range(range, page_count)?;
+            let pattern = unique_pattern(&job.output_dir, &input.file_stem().and_then(|value| value.to_str()).unwrap_or("document"));
+            let pattern_prefix = pattern.file_name().and_then(|value| value.to_str()).unwrap_or("split-%d.pdf")
+                .split("%d").next().unwrap_or("split-").to_string();
             if let Err(error) = run_ok("pdfseparate", vec![os("-f"), os(&first.to_string()), os("-l"), os(&end.to_string()), os(input), os(&pattern)]) {
                 for created in files_with_prefix(&job.output_dir, &pattern_prefix) { let _ = fs::remove_file(created); }
                 return Err(error);
             }
             let mut outputs = files_with_prefix(&job.output_dir, &pattern_prefix);
-            outputs.retain(|p| p.extension().and_then(|s| s.to_str()).map(|ext| ext.eq_ignore_ascii_case("pdf")).unwrap_or(false));
+            outputs.retain(|path| path.extension().and_then(|value| value.to_str()).map(|extension| extension.eq_ignore_ascii_case("pdf")).unwrap_or(false));
             sort_numbered_paths(&mut outputs);
             if outputs.is_empty() {
                 for created in files_with_prefix(&job.output_dir, &pattern_prefix) { let _ = fs::remove_file(created); }
                 Err("The PDF was processed, but no output pages were found. Check the page range.".into())
-            } else { Ok(outputs) }
+            } else {
+                Ok(outputs)
+            }
         }
-        PdfCompress => {
+        (Tool::PdfCompress, Options::PdfCompress { profile }) => {
             let input = first_file(&job)?;
             let out = output_for_input(&job, input, "compressed", "pdf");
-            let profile = match job.pdf_profile.as_str() {
-                "screen" => "screen",
-                "printer" => "printer",
-                "prepress" => "prepress",
-                _ => "ebook",
-            };
+            let mut output_argument = OsString::from("-sOutputFile=");
+            // Preserve non-UTF-8 Linux path bytes instead of round-tripping
+            // through Path::display(), which is intentionally lossy.
+            output_argument.push(out.as_os_str());
             let result = run_ok("gs", vec![
                 os("-sDEVICE=pdfwrite"), os("-dCompatibilityLevel=1.4"),
-                os(&format!("-dPDFSETTINGS=/{profile}")),
+                os(&format!("-dPDFSETTINGS=/{}", profile.as_str())),
                 os("-dNOPAUSE"), os("-dQUIET"), os("-dBATCH"),
-                os(&format!("-sOutputFile={}", out.display())), os(input),
+                output_argument, os(input),
             ]);
             if let Err(error) = result { let _ = fs::remove_file(&out); return Err(error); }
             Ok(vec![out])
         }
-        PdfRotate => {
+        (Tool::PdfRotate, Options::PdfRotate { rotation }) => {
             let input = first_file(&job)?;
-            let angle = match job.rotation.as_str() { "180" => "180", "270" => "270", _ => "90" };
             let out = output_for_input(&job, input, "rotated", "pdf");
-            if let Err(error) = run_qpdf(vec![os(input), os(format!("--rotate=+{}:1-z", angle)), os(&out)]) {
+            if let Err(error) = run_qpdf(vec![os(input), os(format!("--rotate=+{}:1-z", rotation.degrees())), os(&out)]) {
                 let _ = fs::remove_file(&out);
                 return Err(error);
             }
             Ok(vec![out])
         }
-        PdfReorder => {
+        (Tool::PdfReorder, Options::PdfReorder { order }) => {
             let input = first_file(&job)?;
-            let order = job.pages.trim();
-            if order.is_empty() {
+            if order.trim().is_empty() {
                 return Err("Enter a page order, for example 3,1,2,4.".into());
             }
             let page_count = pdf_page_count(input)?;
@@ -208,709 +292,52 @@ pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
             }
             Ok(vec![out])
         }
-        PdfToImages => {
+        (Tool::PdfToImages, Options::PdfToImages { format, dpi }) => {
             let input = first_file(&job)?;
-            let dpi = positive(&job.dpi, 150).clamp(36, 600).to_string();
-            let prefix = unique_prefix(&job.output_dir, &format!("{}-page", input.file_stem().and_then(|s| s.to_str()).unwrap_or("pdf")));
-            let format = if job.target_format.eq_ignore_ascii_case("jpg") { "-jpeg" } else { "-png" };
-            let prefix_name = prefix.file_name().and_then(|s| s.to_str()).unwrap_or("pdf-page").to_string();
-            if let Err(error) = run_ok("pdftoppm", vec![os(format), os("-r"), os(&dpi), os(input), os(&prefix)]) {
+            let dpi = dpi.to_string();
+            let prefix = unique_prefix(&job.output_dir, &format!("{}-page", input.file_stem().and_then(|value| value.to_str()).unwrap_or("pdf")));
+            let format_arg = if matches!(format, PdfImageFormat::Jpeg) { "-jpeg" } else { "-png" };
+            let prefix_name = prefix.file_name().and_then(|value| value.to_str()).unwrap_or("pdf-page").to_string();
+            if let Err(error) = run_ok("pdftoppm", vec![os(format_arg), os("-r"), os(&dpi), os(input), os(&prefix)]) {
                 for created in files_with_prefix(&job.output_dir, &prefix_name) { let _ = fs::remove_file(created); }
                 return Err(error);
             }
             let mut found = files_with_prefix(&job.output_dir, &prefix_name);
-            let expected_ext = if format == "-jpeg" { "jpg" } else { "png" };
-            found.retain(|path| path.extension().and_then(|s| s.to_str()).map(|ext| ext.eq_ignore_ascii_case(expected_ext)).unwrap_or(false));
+            let expected_ext = format.as_str();
+            found.retain(|path| path.extension().and_then(|value| value.to_str()).map(|extension| extension.eq_ignore_ascii_case(expected_ext)).unwrap_or(false));
             sort_numbered_paths(&mut found);
             if found.is_empty() {
                 for created in files_with_prefix(&job.output_dir, &prefix_name) { let _ = fs::remove_file(created); }
                 Err("Poppler finished, but no images were found.".into())
-            } else { Ok(found) }
+            } else {
+                Ok(found)
+            }
         }
-        PdfWatermark => {
+        (Tool::PdfWatermark, Options::PdfWatermark { watermark_file }) => {
             let input = first_file(&job)?;
-            let mark = job.secondary_file.as_ref().ok_or("Select the second PDF to use as a watermark.")?;
             let out = output_for_input(&job, input, "watermarked", "pdf");
-            if let Err(error) = run_ok("pdftk", vec![os(input), os("stamp"), os(mark), os("output"), os(&out)]) {
+            if let Err(error) = run_ok("pdftk", vec![os(input), os("stamp"), os(watermark_file), os("output"), os(&out)]) {
                 let _ = fs::remove_file(&out);
                 return Err(error);
             }
             Ok(vec![out])
         }
-        DocToPdf => process_each_convert(&job, "pdf"),
-        PdfToDoc => process_each_convert(&job, "docx"),
-        DataConvert => data_convert(&job),
-        ExtractAudio => process_each(&job, |input, out| extract_audio(input, out, &job.target_format)),
-        VideoConvert => process_each(&job, |input, out| convert_video(input, out, &job.target_format, &job.video_preset, &job.quality)),
-        VideoToGif => process_each(&job, |input, out| {
-            let fps = positive(&job.fps, 12).clamp(1, 30).to_string();
-            let width = positive(&job.width, 480).clamp(64, 1280).to_string();
-            // Palette generation dramatically improves GIF color quality without adding a second encode pass.
+        (Tool::DocToPdf, Options::None) => process_each_convert(&job, "pdf"),
+        (Tool::PdfToDoc, Options::None) => process_each(&job, pdf_to_docx),
+        (Tool::DataConvert, Options::DataConvert { format }) => data_convert(&job, format.as_str()),
+        (Tool::ExtractAudio, Options::ExtractAudio { format }) => process_each(&job, |input, out| {
+            extract_audio(input, out, format.as_str())
+        }),
+        (Tool::VideoConvert, Options::VideoConvert { format, preset, quality }) => process_each(&job, |input, out| {
+            convert_video(input, out, format.as_str(), preset.as_str(), &quality.to_string())
+        }),
+        (Tool::VideoToGif, Options::VideoToGif { width, fps }) => process_each(&job, |input, out| {
             let filter = format!("fps={fps},scale={width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer");
             run_ok("ffmpeg", vec![os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"), os("-i"), os(input), os("-filter_complex"), os(&filter), os("-threads"), os("2"), os("-loop"), os("0"), os(out)]).map(|_| ())
         }),
+        _ => Err(format!("The settings do not match the selected tool ({:?}).", job.tool)),
     }
 }
-
-fn convert_video(input: &Path, output: &Path, target_format: &str, preset: &str, quality: &str) -> Result<(), String> {
-    let format = normalized_ext(target_format);
-    let crf = positive(quality, 23).clamp(18, 30).to_string();
-    let (preset_label, x264_preset, vp9_cpu_used) = match preset {
-        "balanced" => ("balanced", "medium", "4"),
-        "smaller" => ("smaller", "slow", "2"),
-        _ => ("fast", "veryfast", "6"),
-    };
-    let mut args = vec![
-        os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"),
-        os("-i"), os(input), os("-map"), os("0:v:0"), os("-map"), os("0:a?"),
-        os("-map_metadata"), os("0"), os("-threads"), os("2"),
-    ];
-    match format.as_str() {
-        "mp4" | "mov" | "mkv" => {
-            args.extend([
-                os("-c:v"), os("libx264"), os("-preset"), os(x264_preset),
-                os("-crf"), os(&crf), os("-pix_fmt"), os("yuv420p"),
-                os("-c:a"), os("aac"), os("-b:a"), os("160k"),
-            ]);
-            if format == "mp4" || format == "mov" {
-                args.extend([os("-movflags"), os("+faststart")]);
-            }
-        }
-        "webm" => {
-            let vp9_crf = (positive(quality, 23) + 9).clamp(24, 39).to_string();
-            args.extend([
-                os("-c:v"), os("libvpx-vp9"), os("-deadline"), os("good"),
-                os("-cpu-used"), os(vp9_cpu_used), os("-crf"), os(&vp9_crf), os("-b:v"), os("0"),
-                os("-c:a"), os("libopus"), os("-b:a"), os("128k"),
-            ]);
-        }
-        _ => return Err(format!("Video format \"{format}\" is not supported. Choose MP4, WebM, MKV, or MOV.")),
-    }
-    args.push(os(output));
-    run_ok("ffmpeg", args).map(|_| ()).map_err(|error| {
-        if error.contains("Unknown encoder") || error.contains("Encoder not found") {
-            format!("This FFmpeg build does not include a codec for {}. Install an FFmpeg build with {} support.", format.to_uppercase(), if format == "webm" { "VP9 and Opus" } else { "H.264/AAC" })
-        } else if error.contains("does not contain any stream") || error.contains("matches no streams") {
-            format!("No video stream found in {}.", input.file_name().and_then(|v| v.to_str()).unwrap_or("file"))
-        } else {
-            format!("FFmpeg error while encoding {} ({preset_label}): {error}", format.to_uppercase())
-        }
-    })
-}
-
-fn extract_audio(input: &Path, output: &Path, target_format: &str) -> Result<(), String> {
-    let format = normalized_ext(target_format);
-    let mut args = vec![os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"), os("-i"), os(input), os("-map"), os("0:a:0"), os("-vn")];
-    match format.as_str() {
-        "mp3" => args.extend([os("-c:a"), os("libmp3lame"), os("-b:a"), os("192k")]),
-        "wav" => args.extend([os("-c:a"), os("pcm_s16le")]),
-        "aac" => args.extend([os("-c:a"), os("aac"), os("-b:a"), os("192k")]),
-        "ogg" => args.extend([os("-c:a"), os("libvorbis"), os("-q:a"), os("5")]),
-        "flac" => args.extend([os("-c:a"), os("flac")]),
-        "m4a" => args.extend([os("-c:a"), os("aac"), os("-b:a"), os("192k")]),
-        _ => return Err(format!(r#"Audio format "{format}" is not supported."#)),
-    }
-    args.push(os(output));
-    run_ok("ffmpeg", args).map(|_| ()).map_err(|error| {
-        if error.contains("matches no streams") || error.contains("does not contain any stream") {
-            "No audio stream was found in the selected file.".into()
-        } else { error }
-    })
-}
-
-fn process_each<F>(job: &Job, mut operation: F) -> Result<Vec<PathBuf>, String>
-where
-    F: FnMut(&Path, &Path) -> Result<(), String>,
-{
-    require_files(job, 1, "Add files to process first.")?;
-    let mut outputs: Vec<PathBuf> = Vec::new();
-    for input in &job.files {
-        let ext = match job.tool {
-            ToolId::ImageConvert => normalized_ext(&job.target_format),
-            ToolId::RemoveBackground => "png".to_string(),
-            ToolId::ImageOcr => "txt".to_string(),
-            ToolId::ExtractExif => "json".to_string(),
-            ToolId::ExtractAudio => normalized_ext(&job.target_format),
-            ToolId::VideoConvert => normalized_ext(&job.target_format),
-            ToolId::VideoToGif => "gif".to_string(),
-            _ => input.extension().and_then(|s| s.to_str()).unwrap_or("png").to_lowercase(),
-        };
-        let suffix = match job.tool {
-            ToolId::ImageConvert => "converted",
-            ToolId::ImageResize => "resized",
-            ToolId::ImageCompress => "compressed",
-            ToolId::ImageGrayscale => "grayscale",
-            ToolId::RemoveBackground => "no-background",
-            ToolId::ExtractExif => "exif",
-            ToolId::ImageOcr => "ocr",
-            ToolId::ExtractAudio => "audio",
-            ToolId::VideoConvert => "converted",
-            ToolId::VideoToGif => "animation",
-            _ => "output",
-        };
-        let out = output_for_input(job, input, suffix, &ext);
-        if let Err(error) = operation(input, &out) {
-            let _ = fs::remove_file(&out);
-            for created in &outputs { let _ = fs::remove_file(created); }
-            let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-            return Err(format!(r#"Failed to process "{name}": {error}"#));
-        }
-        outputs.push(out);
-    }
-    Ok(outputs)
-}
-
-fn process_each_capture<F>(job: &Job, mut operation: F) -> Result<Vec<PathBuf>, String>
-where
-    F: FnMut(&Path, &Path) -> Result<(), String>,
-{
-    require_files(job, 1, "Add files to process first.")?;
-    let mut outputs: Vec<PathBuf> = Vec::new();
-    for input in &job.files {
-        let out = output_for_input(job, input, "exif", "json");
-        if let Err(error) = operation(input, &out) {
-            let _ = fs::remove_file(&out);
-            for created in &outputs { let _ = fs::remove_file(created); }
-            let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-            return Err(format!(r#"Failed to read metadata from "{name}": {error}"#));
-        }
-        outputs.push(out);
-    }
-    Ok(outputs)
-}
-
-fn process_each_convert(job: &Job, target_ext: &str) -> Result<Vec<PathBuf>, String> {
-    require_files(job, 1, "Add documents first.")?;
-    let mut outputs: Vec<PathBuf> = Vec::new();
-    for input in &job.files {
-        let out = output_for_input(job, input, "converted", target_ext);
-        if let Err(error) = soffice_convert(input, target_ext, &out) {
-            let _ = fs::remove_file(&out);
-            for created in &outputs { let _ = fs::remove_file(created); }
-            let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("document");
-            return Err(format!(r#"Failed to convert "{name}": {error}"#));
-        }
-        outputs.push(out);
-    }
-    Ok(outputs)
-}
-
-fn images_to_pdf(job: &Job) -> Result<Vec<PathBuf>, String> {
-    require_files(job, 1, "Add at least one image to create a PDF.")?;
-    let allowed = ["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "heic", "avif", "gif"];
-    for input in &job.files {
-        let ext = input.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
-        if !allowed.contains(&ext.as_str()) {
-            return Err(format!(r#"File "{}" does not appear to be a supported image."#, input.file_name().and_then(|s| s.to_str()).unwrap_or("unnamed file")));
-        }
-    }
-
-    let out = unique_path(&job.output_dir, "images", "pdf");
-    let temp = temp_dir("images-pdf")?;
-    let result = (|| -> Result<Vec<PathBuf>, String> {
-        let mut normalized: Vec<PathBuf> = Vec::with_capacity(job.files.len());
-        for (index, input) in job.files.iter().enumerate() {
-            // Normalize each file separately before assembling the PDF. This applies EXIF
-            // orientation exactly once and writes standalone PNG pages so the orientation
-            // cannot be applied again by the PDF encoder. Preserve density metadata so physical
-            // page dimensions remain consistent with the source image.
-            let page = temp.join(format!("page-{:05}.png", index + 1));
-            let mut input_arg = input.as_os_str().to_os_string();
-            if input.extension().and_then(|ext| ext.to_str()).map(|ext| ext.eq_ignore_ascii_case("gif")).unwrap_or(false) {
-                input_arg.push("[0]");
-            }
-            if let Err(error) = run_magick_owned(vec![input_arg, os("-auto-orient"), os("+repage"), os(&page)]) {
-                let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("image");
-                return Err(format!(r#"Failed to prepare "{name}": {error}"#));
-            }
-            normalized.push(page);
-        }
-
-        let mut args: Vec<OsString> = normalized.iter().map(|p| os(p)).collect();
-        if job.compress_pdf {
-            args.extend([os("-background"), os("white"), os("-alpha"), os("remove"), os("-alpha"), os("off"), os("-compress"), os("JPEG"), os("-quality"), os(&positive(&job.quality, 82).clamp(20, 100).to_string())]);
-        }
-        args.push(os(&out));
-        run_magick_owned(args)?;
-        Ok(vec![out.clone()])
-    })();
-    let _ = fs::remove_dir_all(&temp);
-    if result.is_err() { let _ = fs::remove_file(&out); }
-    result
-}
-
-fn long_png_to_pdf(job: &Job) -> Result<Vec<PathBuf>, String> {
-    let input = first_file(job)?;
-    let temp = temp_dir("long-png")?;
-    let result = (|| -> Result<Vec<PathBuf>, String> {
-        let pattern = temp.join("page-%05d.png");
-        run_magick_owned(vec![os(input), os("-auto-orient"), os("-crop"), os("100%x3508+0+0"), os("+repage"), os(&pattern)])?;
-        let mut pages = fs::read_dir(&temp).map_err(display_io)?.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.extension().and_then(|s| s.to_str()).map(|ext| ext.eq_ignore_ascii_case("png")).unwrap_or(false)).collect::<Vec<_>>();
-        sort_numbered_paths(&mut pages);
-        if pages.is_empty() { return Err("Could not create pages from the image.".into()); }
-        let out = output_for_input(job, input, "paginated", "pdf");
-        let mut args: Vec<OsString> = pages.iter().map(|p| os(p)).collect();
-        args.push(os(&out));
-        if let Err(error) = run_magick_owned(args) { let _ = fs::remove_file(&out); return Err(error); }
-        Ok(vec![out])
-    })();
-    let _ = fs::remove_dir_all(&temp);
-    result
-}
-
-fn data_convert(job: &Job) -> Result<Vec<PathBuf>, String> {
-    let input = first_file(job)?;
-    let source_ext = input.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-    let target_ext = normalized_ext(&job.target_format);
-    if !["csv", "json", "xlsx"].contains(&source_ext.as_str()) {
-        return Err("Supported input formats are CSV, JSON, and XLSX.".into());
-    }
-    if !["csv", "json", "xlsx"].contains(&target_ext.as_str()) {
-        return Err("The output format must be CSV, JSON, or XLSX.".into());
-    }
-    if source_ext == target_ext {
-        return Err("The input and output formats are the same.".into());
-    }
-
-    let out = output_for_input(job, input, "converted", &target_ext);
-    let result = (|| -> Result<(), String> {
-        match (source_ext.as_str(), target_ext.as_str()) {
-            ("csv", "json") => csv_to_json(input, &out)?,
-            ("json", "csv") => json_to_csv(input, &out)?,
-            ("csv", "xlsx") => soffice_convert(input, "xlsx", &out)?,
-            ("xlsx", "csv") => soffice_convert(input, "csv", &out)?,
-            ("json", "xlsx") => {
-                let temp = temp_dir("json-xlsx")?;
-                let result = (|| {
-                    let temp_csv = temp.join("table.csv");
-                    json_to_csv(input, &temp_csv)?;
-                    soffice_convert(&temp_csv, "xlsx", &out)
-                })();
-                let _ = fs::remove_dir_all(&temp);
-                result?;
-            }
-            ("xlsx", "json") => {
-                let temp = temp_dir("xlsx-json")?;
-                let result = (|| {
-                    let temp_csv = temp.join("data.csv");
-                    soffice_convert(input, "csv", &temp_csv)?;
-                    csv_to_json(&temp_csv, &out)
-                })();
-                let _ = fs::remove_dir_all(&temp);
-                result?;
-            }
-            _ => return Err("This format combination is not supported.".into()),
-        }
-        Ok(())
-    })();
-    if let Err(error) = result {
-        let _ = fs::remove_file(&out);
-        return Err(error);
-    }
-    Ok(vec![out])
-}
-
-fn csv_to_json(input: &Path, output: &Path) -> Result<(), String> {
-    // Keep short rows compatible by filling missing cells with empty strings,
-    // but reject extra cells and duplicate headers instead of silently losing data.
-    let mut reader = ReaderBuilder::new().flexible(true).from_path(input).map_err(|e| format!("Could not read CSV: {e}"))?;
-    let headers = reader.headers().map_err(|e| format!("Failed to read CSV headers: {e}"))?.clone();
-    let mut unique_headers = BTreeSet::new();
-    for header in &headers {
-        if !unique_headers.insert(header) {
-            return Err(format!("CSV contains a duplicate column name: {header}"));
-        }
-    }
-
-    let mut rows = Vec::new();
-    for (row_index, row) in reader.records().enumerate() {
-        let record = row.map_err(|e| format!("CSV row {}: {e}", row_index + 2))?;
-        if record.len() > headers.len() {
-            return Err(format!(
-                "CSV row {} contains {} fields, but the header has {} columns. Extra fields would be lost; check the source CSV.",
-                row_index + 2,
-                record.len(),
-                headers.len()
-            ));
-        }
-
-        let mut object = Map::new();
-        for (i, header) in headers.iter().enumerate() {
-            object.insert(header.to_string(), Value::String(record.get(i).unwrap_or("").to_string()));
-        }
-        rows.push(Value::Object(object));
-    }
-    fs::write(output, serde_json::to_vec_pretty(&Value::Array(rows)).map_err(|e| e.to_string())?).map_err(display_io)
-}
-
-fn json_to_csv(input: &Path, output: &Path) -> Result<(), String> {
-    let text = fs::read_to_string(input).map_err(display_io)?;
-    let value: Value = serde_json::from_str(&text).map_err(|e| format!("Invalid JSON: {e}"))?;
-    let rows = value.as_array().ok_or("JSON must contain an array of objects, for example [{\"name\":\"Ada\"}].")?;
-    let mut header_set = BTreeSet::new();
-    for row in rows {
-        let object = row.as_object().ok_or("Each JSON row must be an object.")?;
-        header_set.extend(object.keys().cloned());
-    }
-    let headers: Vec<String> = header_set.into_iter().collect();
-    let mut writer = WriterBuilder::new().from_path(output).map_err(|e| format!("Failed to create CSV: {e}"))?;
-    writer.write_record(&headers).map_err(|e| e.to_string())?;
-    for row in rows {
-        let object = row.as_object().expect("validated above");
-        let record = headers.iter().map(|key| object.get(key).map(json_cell).unwrap_or_default()).collect::<Vec<_>>();
-        writer.write_record(record).map_err(|e| e.to_string())?;
-    }
-    writer.flush().map_err(display_io)
-}
-
-fn json_cell(value: &Value) -> String {
-    match value {
-        Value::Null => String::new(),
-        Value::String(s) => s.clone(),
-        Value::Number(_) | Value::Bool(_) => value.to_string(),
-        Value::Array(_) | Value::Object(_) => value.to_string(),
-    }
-}
-
-fn encode_file_url_path(path: &str) -> String {
-    let mut encoded = String::with_capacity(path.len());
-    for byte in path.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
-            | b'/' | b':' | b'-' | b'_' | b'.' | b'~' => encoded.push(byte as char),
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
-}
-
-fn path_to_file_url(path: &Path) -> Result<String, String> {
-    let absolute = fs::canonicalize(path)
-        .map_err(|error| format!("Could not resolve the LibreOffice profile path: {error}"))?;
-    let path_text = absolute.to_string_lossy().replace('\\', "/");
-    let encoded = encode_file_url_path(&path_text);
-
-    Ok(format!("file://{encoded}"))
-}
-
-fn soffice_convert(input: &Path, extension: &str, output: &Path) -> Result<(), String> {
-    let temp = temp_dir("office-convert")?;
-    let result = (|| -> Result<(), String> {
-        let profile = temp.join("profile");
-        fs::create_dir_all(&profile).map_err(|error| {
-            format!("Failed to create a temporary LibreOffice profile: {error}")
-        })?;
-        let profile_url = path_to_file_url(&profile)?;
-
-        // LibreOffice forwards requests to an already-running instance when they
-        // share the same user profile. A per-conversion profile avoids conflicts
-        // with the user's desktop session and other headless conversions.
-        run_ok("libreoffice", vec![
-            os(format!("-env:UserInstallation={profile_url}")),
-            os("--headless"),
-            os("--convert-to"),
-            os(extension),
-            os("--outdir"),
-            os(&temp),
-            os(input),
-        ])?;
-        let generated = temp.join(format!("{}.{}", input.file_stem().and_then(|s| s.to_str()).unwrap_or("output"), extension));
-        if !generated.exists() {
-            return Err(format!("LibreOffice did not create the expected file {}. Check whether the input format is supported.", generated.display()));
-        }
-        fs::copy(&generated, output).map_err(|e| format!("Failed to save the output: {e}"))?;
-        Ok(())
-    })();
-    let _ = fs::remove_dir_all(&temp);
-    if result.is_err() { let _ = fs::remove_file(output); }
-    result
-}
-
-pub(crate) fn image_magick_program() -> &'static str {
-    *IMAGEMAGICK_PROGRAM.get_or_init(|| {
-        if has_command("magick") { "magick" } else { "convert" }
-    })
-}
-
-/// Reserve at least one available CPU thread for the desktop UI and the rest
-/// of the system. Cap ImageMagick's parallelism to avoid saturating low-core CPUs.
-pub(crate) fn image_magick_thread_limit() -> usize {
-    recommended_image_magick_threads(
-        std::thread::available_parallelism()
-            .map(|parallelism| parallelism.get())
-            .unwrap_or(1),
-    )
-}
-
-fn recommended_image_magick_threads(available: usize) -> usize {
-    available.saturating_sub(1).clamp(1, 4)
-}
-
-fn run_magick_owned(args: Vec<OsString>) -> Result<(), String> {
-    let mut limited_args = Vec::with_capacity(args.len() + 3);
-    limited_args.extend([
-        os("-limit"),
-        os("thread"),
-        os(image_magick_thread_limit().to_string()),
-    ]);
-    limited_args.extend(args);
-    run_ok(image_magick_program(), limited_args).map(|_| ())
-}
-
-fn command_candidates(program: &str) -> Vec<OsString> {
-    if program == "rembg" {
-        let mut candidates = Vec::new();
-        let data_home = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .filter(|path| !path.as_os_str().is_empty())
-            .or_else(|| {
-                std::env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .map(|home| home.join(".local/share"))
-            });
-        if let Some(data_home) = data_home {
-            candidates.push(
-                data_home.join("forgebox/rembg-venv/bin/rembg").into_os_string()
-            );
-        }
-        if let Some(home) = std::env::var_os("HOME") {
-            candidates.push(PathBuf::from(home).join(".local/bin/rembg").into_os_string());
-        }
-        candidates.push(OsString::from(program));
-        candidates
-    } else {
-        vec![OsString::from(program)]
-    }
-}
-
-/// Do not leak an AppImage's bundled Python paths into the optional
-/// rembg virtual environment. Python uses PYTHONHOME/PYTHONPATH before the
-/// venv's own stdlib and can fail before importing the CLI.
-fn configure_command_environment(program: &str, command: &mut Command) {
-    if program == "rembg" {
-        command.env_remove("PYTHONHOME");
-        command.env_remove("PYTHONPATH");
-    }
-}
-
-fn run_ok(program: &str, args: Vec<OsString>) -> Result<Output, String> {
-    let candidates = command_candidates(program);
-    let mut tried: Vec<String> = Vec::new();
-    for candidate in candidates {
-        let label = candidate.to_string_lossy().into_owned();
-        let mut command = Command::new(&candidate);
-        configure_command_environment(program, &mut command);
-        match command.args(args.iter()).output() {
-            Ok(output) if output.status.success() => return Ok(output),
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let detail = if !stderr.is_empty() { stderr } else { stdout };
-                return Err(if detail.is_empty() {
-                    format!("`{program}` exited with code {}.", output.status)
-                } else {
-                    format!("`{program}`: {detail}")
-                });
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => tried.push(label),
-            Err(error) => return Err(format!("Failed to launch `{program}` via `{label}`: {error}")),
-        }
-    }
-    let install_hint = match (program, std::env::consts::OS) {
-        ("tesseract", "linux") => {
-            " Install Tesseract and the matching language data with your distribution's package manager. On Fedora: sudo dnf install tesseract tesseract-langpack-eng."
-        }
-        ("tesseract", "macos") => {
-            " Install Tesseract and make sure its executable is available on PATH."
-        }
-        ("rembg", "linux") => {
-            " Install the optional rembg CPU backend in a Python 3.11–3.13 environment. Fedora RPM users can run: bash /usr/share/doc/forgebox/install-rembg-fedora.sh."
-        }
-        ("rembg", "macos") => {
-            " Install the optional rembg CPU backend in a Python 3.11–3.13 virtual environment and make its bin directory available on PATH."
-        }
-        _ => " See the Installation section in the README for setup instructions.",
-    };
-    Err(format!(
-        "Dependency `{program}` was not found. Tried: {}.{}",
-        tried.join(", "),
-        install_hint
-    ))
-}
-
-fn run_capture(program: &str, args: Vec<OsString>) -> Result<Vec<u8>, String> {
-    Ok(run_ok(program, args)?.stdout)
-}
-
-/// qpdf uses exit code 3 for recoverable warnings. Treat warnings as a
-/// successful operation while leaving their messages available on stderr.
-fn run_qpdf(args: Vec<OsString>) -> Result<Output, String> {
-    let mut qpdf_args = Vec::with_capacity(args.len() + 1);
-    qpdf_args.push(os("--warning-exit-0"));
-    qpdf_args.extend(args);
-
-    let output = run_ok("qpdf", qpdf_args)?;
-    if !output.stderr.is_empty() {
-        record_execution_warning(format!(
-            "qpdf: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    Ok(output)
-}
-
-fn pdf_page_count(input: &Path) -> Result<u32, String> {
-    let output = run_qpdf(vec![os("--show-npages"), os(input)])?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let page_count = stdout.trim().parse::<u32>().map_err(|_| {
-        format!("Could not read the page count from this PDF. qpdf returned: {}", stdout.trim())
-    })?;
-    if page_count == 0 {
-        return Err("This PDF contains no pages.".into());
-    }
-    Ok(page_count)
-}
-
-fn parse_pdf_page_range(value: &str, page_count: u32) -> Result<(u32, u32), String> {
-    let parts: Vec<&str> = value.split(',').map(str::trim).collect();
-    if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
-        return Err("Enter a page range as start,end. Use last for the final page, for example 1,last.".into());
-    }
-
-    let first = parts[0].parse::<u32>().ok().filter(|page| *page > 0)
-        .ok_or_else(|| "The start page must be a positive number.".to_string())?;
-    let end = if parts[1].eq_ignore_ascii_case("last") {
-        page_count
-    } else {
-        parts[1].parse::<u32>().ok().filter(|page| *page > 0)
-            .ok_or_else(|| "The end page must be a positive number or last.".to_string())?
-    };
-
-    if first > page_count {
-        return Err(format!("Page {first} does not exist. This PDF has {page_count} pages."));
-    }
-    if end > page_count {
-        return Err(format!("Page {end} does not exist. This PDF has {page_count} pages. Use last for the final page."));
-    }
-    if end < first {
-        return Err("The end page must not be less than the start page.".into());
-    }
-    Ok((first, end))
-}
-
-fn parse_pdf_page_order(value: &str, page_count: u32) -> Result<Vec<u32>, String> {
-    if value.trim().is_empty() {
-        return Err("Enter a page order, for example 3,1,2,4.".into());
-    }
-
-    value.split(',').map(str::trim).map(|part| {
-        let page = part.parse::<u32>().ok().filter(|page| *page > 0)
-            .ok_or_else(|| "The order must contain positive page numbers separated by commas.".to_string())?;
-        if page > page_count {
-            return Err(format!("Page {page} does not exist. This PDF has {page_count} pages."));
-        }
-        Ok(page)
-    }).collect()
-}
-
-fn command_version_succeeds(candidate: &OsStr) -> bool {
-    Command::new(candidate)
-        .arg("--version")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-}
-
-fn has_command(program: &str) -> bool {
-    command_candidates(program)
-        .iter()
-        .any(|candidate| command_version_succeeds(candidate))
-}
-
-fn require_files(job: &Job, min: usize, message: &str) -> Result<(), String> {
-    if job.files.len() < min { Err(message.into()) } else { Ok(()) }
-}
-
-fn first_file(job: &Job) -> Result<&Path, String> {
-    job.files.first().map(PathBuf::as_path).ok_or_else(|| "Add a file first.".to_string())
-}
-
-fn output_for_input(job: &Job, input: &Path, suffix: &str, extension: &str) -> PathBuf {
-    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
-    unique_path(&job.output_dir, &format!("{stem}-{suffix}"), extension)
-}
-
-fn unique_path(dir: &Path, stem: &str, extension: &str) -> PathBuf {
-    let ext = normalized_ext(extension);
-    let first = dir.join(format!("{stem}.{ext}"));
-    if !first.exists() { return first; }
-    for index in 2..10_000 {
-        let candidate = dir.join(format!("{stem}-{index}.{ext}"));
-        if !candidate.exists() { return candidate; }
-    }
-    dir.join(format!("{stem}-{}.{}", timestamp(), ext))
-}
-
-fn unique_prefix(dir: &Path, stem: &str) -> PathBuf {
-    let base = dir.join(stem);
-    if !base.exists() && files_with_prefix(dir, stem).is_empty() { return base; }
-    for index in 2..10_000 {
-        let candidate = dir.join(format!("{stem}-{index}"));
-        if !candidate.exists() && files_with_prefix(dir, candidate.file_name().and_then(|s| s.to_str()).unwrap_or(stem)).is_empty() { return candidate; }
-    }
-    dir.join(format!("{stem}-{}", timestamp()))
-}
-
-fn unique_pattern(dir: &Path, stem: &str) -> PathBuf {
-    let name = unique_prefix(dir, &format!("{stem}-split"));
-    dir.join(format!("{}-%d.pdf", name.file_stem().and_then(|s| s.to_str()).unwrap_or("split")))
-}
-
-fn sort_numbered_paths(paths: &mut [PathBuf]) {
-    fn trailing_number(path: &Path) -> Option<u64> {
-        let stem = path.file_stem()?.to_str()?;
-        let digits: String = stem.chars().rev().take_while(|ch| ch.is_ascii_digit()).collect::<String>().chars().rev().collect();
-        if digits.is_empty() { None } else { digits.parse().ok() }
-    }
-    paths.sort_by(|left, right| {
-        match (trailing_number(left), trailing_number(right)) {
-            (Some(a), Some(b)) => a.cmp(&b).then_with(|| left.file_name().cmp(&right.file_name())),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => left.file_name().cmp(&right.file_name()),
-        }
-    });
-}
-
-fn files_with_prefix(dir: &Path, prefix: &str) -> Vec<PathBuf> {
-    fs::read_dir(dir).ok().into_iter().flatten().filter_map(Result::ok).map(|e| e.path()).filter(|p| {
-        p.file_name().and_then(|n| n.to_str()).map(|n| n.starts_with(prefix)).unwrap_or(false)
-    }).collect()
-}
-
-fn temp_dir(prefix: &str) -> Result<PathBuf, String> {
-    let path = std::env::temp_dir().join(format!("forgebox-{prefix}-{}-{}", std::process::id(), timestamp()));
-    fs::create_dir_all(&path).map_err(display_io)?;
-    Ok(path)
-}
-
-fn timestamp() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
-}
-
-fn positive(value: &str, fallback: i32) -> i32 {
-    value.trim().parse::<i32>().ok().filter(|n| *n > 0).unwrap_or(fallback)
-}
-
-fn normalized_ext(value: &str) -> String {
-    value.trim().trim_start_matches('.').to_lowercase()
-}
-
-fn os<T: AsRef<std::ffi::OsStr>>(value: T) -> OsString {
-    value.as_ref().to_os_string()
-}
-
-fn display_io(error: io::Error) -> String { error.to_string() }
 
 #[cfg(test)]
 mod tests {
@@ -932,7 +359,7 @@ mod tests {
 
 #[cfg(test)]
 mod pdf_integration_tests {
-    use super::{execute, pdf_page_count, temp_dir, Job};
+    use super::{execute, pdf_page_count, temp_dir, Job, JobOptions, PdfRotation};
     use crate::catalog::ToolId;
     use std::fs;
     use std::io::Write;
@@ -986,25 +413,13 @@ mod pdf_integration_tests {
     }
 
     fn make_job(tool: ToolId, input: PathBuf, output_dir: PathBuf) -> Job {
-        Job {
-            tool,
-            files: vec![input],
-            secondary_file: None,
-            output_dir,
-            target_format: "png".into(),
-            text: String::new(),
-            width: "1600".into(),
-            height: "1200".into(),
-            quality: "82".into(),
-            compress_pdf: false,
-            pdf_profile: "ebook".into(),
-            rotation: "90".into(),
-            pages: String::new(),
-            fps: "12".into(),
-            video_preset: "fast".into(),
-            language: "eng".into(),
-            dpi: "150".into(),
-        }
+        let options = match tool {
+            ToolId::PdfSplit => JobOptions::PdfSplit { range: "1,last".into() },
+            ToolId::PdfReorder => JobOptions::PdfReorder { order: "3,1,2,4".into() },
+            ToolId::PdfRotate => JobOptions::PdfRotate { rotation: PdfRotation::Degrees90 },
+            _ => JobOptions::None,
+        };
+        Job::new(tool, vec![input], output_dir, options).expect("test job settings should match the tool")
     }
 
     fn qpdf_available() -> bool {
@@ -1029,13 +444,11 @@ mod pdf_integration_tests {
         fs::write(&input, make_blank_pdf(8)).unwrap();
 
         let split = execute({
-            let mut job = make_job(
+            make_job(
                 ToolId::PdfSplit,
                 input.clone(),
                 directory.join("split"),
-            );
-            job.pages = "1,last".into();
-            job
+            )
         }).expect("splitting all eight pages should succeed");
         assert_eq!(split.len(), 8);
         for page in &split {
@@ -1051,13 +464,11 @@ mod pdf_integration_tests {
         assert_eq!(pdf_page_count(&rotated[0]).unwrap(), 8);
 
         let reordered = execute({
-            let mut job = make_job(
+            make_job(
                 ToolId::PdfReorder,
                 input,
                 directory.join("reordered"),
-            );
-            job.pages = "3,1,2,4".into();
-            job
+            )
         }).expect("reordering pages should succeed");
         assert_eq!(reordered.len(), 1);
         assert_eq!(pdf_page_count(&reordered[0]).unwrap(), 4);
@@ -1268,5 +679,28 @@ mod subprocess_environment_tests {
                 .get_envs()
                 .any(|(key, _)| key == OsStr::new("PYTHONPATH"))
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod ghostscript_path_tests {
+    use super::OsString;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    use std::path::PathBuf;
+
+    #[test]
+    fn ghostscript_output_argument_preserves_non_utf8_path_bytes() {
+        let path = PathBuf::from(OsString::from_vec(
+            b"/tmp/forgebox-output-\xff.pdf".to_vec(),
+        ));
+        let mut argument = OsString::from("-sOutputFile=");
+        argument.push(path.as_os_str());
+
+        let expected = [
+            &b"-sOutputFile="[..],
+            path.as_os_str().as_bytes(),
+        ]
+        .concat();
+        assert_eq!(argument.as_os_str().as_bytes(), expected);
     }
 }

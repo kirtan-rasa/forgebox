@@ -13,6 +13,7 @@ BuildArch:      x86_64
 
 # Required command-line engines used by the app's conversion tools.
 Requires:       ImageMagick
+Requires:       python3-img2pdf
 Requires:       poppler-utils
 Requires:       ghostscript
 Requires:       qpdf

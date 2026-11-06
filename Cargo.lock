@@ -1069,8 +1069,10 @@ dependencies = [
  "csv",
  "eframe",
  "image",
+ "libc",
  "qrcode",
  "rfd",
+ "serde",
  "serde_json",
 ]
 

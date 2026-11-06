@@ -65,9 +65,38 @@ jobs:
       - name: Check Rust source
         run: cargo check --locked
 
+  integration:
+    name: Test conversion integrations
+    needs: [lockfile, test]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: internal-cargo-lock
+          path: .
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install conversion engines and fixture fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            imagemagick img2pdf ghostscript qpdf poppler-utils pdftk-java \
+            libreoffice tesseract-ocr tesseract-ocr-eng \
+            libimage-exiftool-perl ffmpeg fonts-dejavu-core
+      - name: Verify required integration commands
+        shell: bash
+        run: |
+          set -euo pipefail
+          for command in convert img2pdf gs qpdf pdfunite pdfseparate pdftoppm pdftk \
+            libreoffice tesseract exiftool ffmpeg; do
+            command -v "$command"
+          done
+      - name: Run real conversion integration tests
+        run: cargo test --locked integration_tests -- --test-threads=1
+
   build-fedora:
     name: Build Fedora RPM
-    needs: [lockfile, test]
+    needs: [lockfile, test, integration]
     runs-on: ubuntu-latest
     container: fedora:45
     steps:
@@ -95,6 +124,63 @@ jobs:
           bash packaging/rpm/build-rpm.sh
           rpm -qp --requires dist/*.rpm
           rpm -qpl dist/*.rpm | grep -F '/install-rembg-fedora.sh'
+
+      - name: Resolve RPM runtime dependencies without installing
+        shell: bash
+        run: |
+          set -euo pipefail
+          DNF_LOG="$(mktemp)"
+          trap 'rm -f "$DNF_LOG"' EXIT
+
+          # --assumeno performs dependency resolution but refuses the
+          # transaction, so the Fedora runner remains unchanged.
+          set +e
+          dnf install --assumeno --nogpgcheck \
+            --setopt=install_weak_deps=False ./dist/*.rpm >"$DNF_LOG" 2>&1
+          dnf_status=$?
+          set -e
+
+          # DNF 5 exits non-zero when --assumeno rejects an otherwise valid
+          # transaction. A transaction summary followed by the expected abort
+          # confirms the dependency solver completed without installing.
+          if grep -Fq 'Transaction Summary:' "$DNF_LOG" \
+            && grep -Fq 'Operation aborted by the user.' "$DNF_LOG"; then
+            echo "DNF resolved the RPM runtime dependencies; the transaction was intentionally declined."
+          elif grep -Fq 'Nothing to do.' "$DNF_LOG"; then
+            echo "DNF reports no additional RPM dependencies are required."
+          else
+            cat "$DNF_LOG"
+            echo "DNF could not resolve the RPM runtime dependencies (exit $dnf_status)." >&2
+            exit 1
+          fi
+
+      - name: Test RPM signing in an isolated environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          TEST_ROOT="$(mktemp -d)"
+          trap 'rm -rf "$TEST_ROOT"' EXIT
+          install -d -m 0700 "$TEST_ROOT/gnupg"
+          mkdir -p "$TEST_ROOT/dist"
+
+          cat > "$TEST_ROOT/key.batch" <<'KEY'
+          %no-protection
+          Key-Type: RSA
+          Key-Length: 2048
+          Name-Real: ForgeBox CI Signing Test
+          Name-Email: forgebox-ci@example.invalid
+          Expire-Date: 0
+          %commit
+          KEY
+
+          gpg --batch --homedir "$TEST_ROOT/gnupg" --generate-key "$TEST_ROOT/key.batch"
+          gpg --batch --homedir "$TEST_ROOT/gnupg" --armor --export-secret-keys > "$TEST_ROOT/private.asc"
+          cp dist/*.rpm "$TEST_ROOT/dist/"
+
+          RPM_SIGNING_PRIVATE_KEY="$(cat "$TEST_ROOT/private.asc")" \
+            bash scripts/sign-rpm.sh "$TEST_ROOT/dist"
+          test -s "$TEST_ROOT/dist/forgebox-rpm-signing-key.asc"
+          test -s "$TEST_ROOT/dist/forgebox-rpm-signing-key-id.txt"
       - name: Sign RPM for tagged releases
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -109,7 +195,7 @@ jobs:
 
   build-deb-appimage-arch:
     name: Build DEB, AppImage and Arch package
-    needs: [lockfile, test]
+    needs: [lockfile, test, integration]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -150,6 +236,11 @@ jobs:
 
           dpkg-deb --info "$DEB"
           dpkg-deb --contents "$DEB" | grep 'usr/bin/forgebox' >/dev/null
+
+          # Building a DEB does not prove that every declared runtime
+          # dependency exists in Ubuntu's enabled repositories. Resolve the
+          # local package in simulation mode without installing it.
+          sudo apt-get --simulate install "./$DEB"
 
           bash packaging/linux/prepare-pacman-pkgbuild.sh dist/linux/PKGBUILD
           grep -Fq 'pdftk' dist/linux/PKGBUILD
@@ -195,8 +286,35 @@ jobs:
           chown -R builder:builder "$GITHUB_WORKSPACE/dist"
           su builder -c "cd '$WORKDIR' && makepkg --nodeps --noconfirm"
           su builder -c "cd '$WORKDIR' && makepkg --printsrcinfo > .SRCINFO"
-          grep -Fq 'depends = pdftk' dist/linux/.SRCINFO
-          grep -Fq 'optdepends = ffmpeg: Enable audio, video, and GIF conversion' dist/linux/.SRCINFO
+          echo "Generated Arch .SRCINFO:"
+          cat dist/linux/.SRCINFO
+          grep -Fq 'depends = pdftk' dist/linux/.SRCINFO || {
+            echo "Generated .SRCINFO is missing the mandatory pdftk dependency." >&2
+            exit 1
+          }
+          grep -Fq 'optdepends = ffmpeg: Enable audio, video, and GIF conversion' dist/linux/.SRCINFO || {
+            echo "Generated .SRCINFO is missing the optional FFmpeg dependency." >&2
+            exit 1
+          }
+
+          # makepkg --nodeps validates package construction but deliberately
+          # skips dependency resolution. Ask pacman to resolve every mandatory
+          # runtime dependency against the official sync databases without
+          # downloading or installing the application dependencies.
+          mapfile -t RUNTIME_DEPENDS < <(sed -n 's/^[[:space:]]*depends = //p' dist/linux/.SRCINFO)
+          test "${#RUNTIME_DEPENDS[@]}" -gt 0
+
+          # Query each package directly from the official sync databases.
+          # This is read-only and reports the exact missing target, unlike
+          # makepkg --nodeps which deliberately skips runtime dependency checks.
+          for dependency in "${RUNTIME_DEPENDS[@]}"; do
+            if ! pacman -Si "$dependency" >/dev/null 2>&1; then
+              echo "Required Arch package is missing from the sync databases: $dependency" >&2
+              exit 1
+            fi
+            echo "Resolved Arch dependency: $dependency"
+          done
+
           test -n "$(find dist/linux -maxdepth 1 -type f -name '*.pkg.tar.*' -print -quit)"
           test -s dist/linux/.SRCINFO
           pacman -Qip dist/linux/*.pkg.tar.zst
