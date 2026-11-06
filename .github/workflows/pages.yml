@@ -25,8 +25,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-      - name: Validate Bash syntax
-        run: bash -n site/install.sh
+      - name: Validate POSIX shell syntax
+        run: sh -n site/install.sh
       - name: Check installer metadata handling
         run: |
           grep -Fq 'api.github.com/repos/kirtan-rasa/forgebox/releases' site/install.sh
