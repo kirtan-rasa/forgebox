@@ -1,5 +1,3 @@
-use crate::catalog::ToolId;
-
 mod common;
 mod data;
 mod images;
@@ -18,7 +16,7 @@ use self::common::{
     process_each, process_each_capture, process_each_convert, require_files,
     sort_numbered_paths, temp_dir, unique_path, unique_pattern, unique_prefix,
 };
-use self::data::{csv_to_json, encode_file_url_path, soffice_convert};
+use self::data::{csv_to_json, data_convert, encode_file_url_path, soffice_convert};
 use self::images::{images_to_pdf, long_png_to_pdf};
 use self::media::{convert_video, extract_audio};
 use self::pdf::{parse_pdf_page_order, parse_pdf_page_range, pdf_page_count};
