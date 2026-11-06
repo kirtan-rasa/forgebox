@@ -46,11 +46,17 @@ EOF
 
 PUBLIC_KEY="$DIST_DIR/forgebox-rpm-signing-key.asc"
 gpg --batch --armor --export "$FINGERPRINT" > "$PUBLIC_KEY"
-rpm --import "$PUBLIC_KEY"
+
+# Import the verification key into a temporary RPM database. Signing a
+# package should not permanently add a new trusted key to the host system.
+RPMDB="$GNUPGHOME/rpmdb"
+mkdir -p "$RPMDB"
+rpm --dbpath "$RPMDB" --initdb
+rpm --dbpath "$RPMDB" --import "$PUBLIC_KEY"
 
 rpmsign --addsign "${RPM_FILES[@]}"
 for package in "${RPM_FILES[@]}"; do
-  rpmkeys --checksig --verbose "$package"
+  rpmkeys --dbpath "$RPMDB" --checksig --verbose "$package"
 done
 
 printf '%s\n' "$FINGERPRINT" > "$DIST_DIR/forgebox-rpm-signing-key-id.txt"
