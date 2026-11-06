@@ -178,7 +178,10 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
                 .render::<image::Luma<u8>>()
                 .min_dimensions(320, 320)
                 .build();
-            qr_image.save(&out).map_err(|error| format!("Failed to save the QR code: {error}"))?;
+            if let Err(error) = qr_image.save(&out) {
+                let _ = fs::remove_file(&out);
+                return Err(format!("Failed to save the QR code: {error}"));
+            }
             Ok(vec![out])
         }
         (Tool::LongPngToPdf, Options::None) => long_png_to_pdf(&job),
