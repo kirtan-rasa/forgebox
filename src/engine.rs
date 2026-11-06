@@ -689,13 +689,13 @@ mod ghostscript_path_tests {
     #[test]
     fn ghostscript_output_argument_preserves_non_utf8_path_bytes() {
         let path = PathBuf::from(OsString::from_vec(
-            b"/tmp/forgebox-output-\\xff.pdf".to_vec(),
+            b"/tmp/forgebox-output-\xff.pdf".to_vec(),
         ));
         let mut argument = OsString::from("-sOutputFile=");
         argument.push(path.as_os_str());
 
         let expected = [
-            b"-sOutputFile=".as_slice(),
+            &b"-sOutputFile="[..],
             path.as_os_str().as_bytes(),
         ]
         .concat();
