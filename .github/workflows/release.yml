@@ -178,6 +178,11 @@ jobs:
           dpkg-deb --info "$DEB"
           dpkg-deb --contents "$DEB" | grep 'usr/bin/forgebox' >/dev/null
 
+          # Building a DEB does not prove that every declared runtime
+          # dependency exists in Ubuntu's enabled repositories. Resolve the
+          # local package in simulation mode without installing it.
+          sudo apt-get --simulate install "$DEB"
+
           bash packaging/linux/prepare-pacman-pkgbuild.sh dist/linux/PKGBUILD
           grep -Fq 'pdftk' dist/linux/PKGBUILD
           grep -Fq "optdepends=('ffmpeg: Enable audio, video, and GIF conversion')" dist/linux/PKGBUILD
