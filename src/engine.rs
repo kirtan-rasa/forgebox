@@ -662,12 +662,24 @@ fn command_candidates(program: &str) -> Vec<OsString> {
     }
 }
 
+/// Do not leak an AppImage's bundled Python paths into the optional
+/// rembg virtual environment. Python uses PYTHONHOME/PYTHONPATH before the
+/// venv's own stdlib and can fail before importing the CLI.
+fn configure_command_environment(program: &str, command: &mut Command) {
+    if program == "rembg" {
+        command.env_remove("PYTHONHOME");
+        command.env_remove("PYTHONPATH");
+    }
+}
+
 fn run_ok(program: &str, args: Vec<OsString>) -> Result<Output, String> {
     let candidates = command_candidates(program);
     let mut tried: Vec<String> = Vec::new();
     for candidate in candidates {
         let label = candidate.to_string_lossy().into_owned();
-        match Command::new(&candidate).args(args.iter()).output() {
+        let mut command = Command::new(&candidate);
+        configure_command_environment(program, &mut command);
+        match command.args(args.iter()).output() {
             Ok(output) if output.status.success() => return Ok(output),
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -1182,5 +1194,45 @@ mod command_detection_tests {
         assert!(!command_version_succeeds(OsStr::new(
             "/definitely/missing/forgebox-command"
         )));
+    }
+}
+
+
+#[cfg(test)]
+mod subprocess_environment_tests {
+    use super::configure_command_environment;
+    use std::ffi::OsStr;
+    use std::process::Command;
+
+    #[test]
+    fn rembg_does_not_inherit_appimage_python_paths() {
+        let mut command = Command::new("true");
+        configure_command_environment("rembg", &mut command);
+
+        for variable in ["PYTHONHOME", "PYTHONPATH"] {
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(key, value)| key == OsStr::new(variable) && value.is_none()),
+                "{variable} must be removed from the rembg subprocess"
+            );
+        }
+    }
+
+    #[test]
+    fn other_tools_keep_their_python_environment() {
+        let mut command = Command::new("true");
+        configure_command_environment("ffmpeg", &mut command);
+
+        assert!(
+            !command
+                .get_envs()
+                .any(|(key, _)| key == OsStr::new("PYTHONHOME"))
+        );
+        assert!(
+            !command
+                .get_envs()
+                .any(|(key, _)| key == OsStr::new("PYTHONPATH"))
+        );
     }
 }
