@@ -65,9 +65,38 @@ jobs:
       - name: Check Rust source
         run: cargo check --locked
 
+  integration:
+    name: Test conversion integrations
+    needs: [lockfile, test]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: internal-cargo-lock
+          path: .
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install conversion engines and fixture fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            imagemagick ghostscript qpdf poppler-utils pdftk-java \
+            libreoffice tesseract-ocr tesseract-ocr-eng \
+            libimage-exiftool-perl ffmpeg fonts-dejavu-core
+      - name: Verify required integration commands
+        shell: bash
+        run: |
+          set -euo pipefail
+          for command in convert gs qpdf pdfunite pdfseparate pdftoppm pdftk \
+            libreoffice tesseract exiftool ffmpeg; do
+            command -v "$command"
+          done
+      - name: Run real conversion integration tests
+        run: cargo test --locked integration_tests -- --test-threads=1
+
   build-fedora:
     name: Build Fedora RPM
-    needs: [lockfile, test]
+    needs: [lockfile, test, integration]
     runs-on: ubuntu-latest
     container: fedora:45
     steps:
@@ -166,7 +195,7 @@ jobs:
 
   build-deb-appimage-arch:
     name: Build DEB, AppImage and Arch package
-    needs: [lockfile, test]
+    needs: [lockfile, test, integration]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4

@@ -1,4 +1,6 @@
 mod common;
+#[cfg(test)]
+mod integration_tests;
 mod data;
 mod images;
 mod media;
