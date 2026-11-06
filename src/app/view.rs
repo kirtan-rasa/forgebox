@@ -75,6 +75,13 @@ mod tests {
         assert_eq!(values, vec!["D", "B", "C", "A"]);
     }
 
+    #[test]
+    fn reorder_item_to_index_moves_down_by_exactly_one_position() {
+        let mut values = vec!["A", "B", "C"];
+        super::files::reorder_item_to_index(&mut values, 0, 1);
+        assert_eq!(values, vec!["B", "A", "C"]);
+    }
+
 
     #[test]
     fn output_dir_prefers_downloads_when_it_exists() {

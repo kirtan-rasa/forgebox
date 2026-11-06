@@ -403,7 +403,7 @@ impl ForgeApp {
                                                                     }
                                                                     if ui.add_enabled(!self.running && self.dragging_file.is_none(), egui::Button::new("Remove").min_size(Vec2::new((inner_width - 104.0).max(64.0), 34.0))).clicked() { remove_index = Some(current); }
                                                                     if reorder_arrow_button(ui, current + 1 < self.files.len() && !self.running && self.dragging_file.is_none(), false, "Move page down") {
-                                                                        reorder_request = Some((current, current + 2));
+                                                                        reorder_request = Some((current, current + 1));
                                                                     }
                                                                 });
                                                                 controls_rect = Some(controls_row.response.rect);
