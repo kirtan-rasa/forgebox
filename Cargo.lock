@@ -1071,8 +1071,8 @@ dependencies = [
  "image",
  "qrcode",
  "rfd",
- "serde_json",
  "serde",
+ "serde_json",
 ]
 
 
