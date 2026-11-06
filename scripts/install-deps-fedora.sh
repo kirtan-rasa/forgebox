@@ -37,7 +37,7 @@ find_working_rembg() {
   if command -v rembg >/dev/null 2>&1; then
     candidate="$(command -v rembg)"
     if "$candidate" --help >/dev/null 2>&1; then
-      printf '%s\\n' "$candidate"
+      printf '%s\n' "$candidate"
       return 0
     fi
   fi
