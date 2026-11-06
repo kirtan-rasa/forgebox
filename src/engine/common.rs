@@ -30,6 +30,16 @@ fn output_details(job: &Job, input: &Path) -> (&'static str, String) {
     }
 }
 
+fn check_cancelled_or_remove_outputs(outputs: &[PathBuf]) -> Result<(), String> {
+    if let Err(error) = check_cancelled() {
+        for output in outputs {
+            let _ = fs::remove_file(output);
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
 pub(super) fn process_each<F>(job: &Job, mut operation: F) -> Result<Vec<PathBuf>, String>
 where
     F: FnMut(&Path, &Path) -> Result<(), String>,
@@ -37,7 +47,7 @@ where
     require_files(job, 1, "Add files to process first.")?;
     let mut outputs: Vec<PathBuf> = Vec::new();
     for (index, input) in job.files.iter().enumerate() {
-        check_cancelled()?;
+        check_cancelled_or_remove_outputs(&outputs)?;
         let name = input.file_name().and_then(|value| value.to_str()).unwrap_or("file");
         report_status(format!("Processing {name} ({}/{})", index + 1, job.files.len()));
         let (suffix, extension) = output_details(job, input);
@@ -60,7 +70,7 @@ where
     require_files(job, 1, "Add files to process first.")?;
     let mut outputs: Vec<PathBuf> = Vec::new();
     for (index, input) in job.files.iter().enumerate() {
-        check_cancelled()?;
+        check_cancelled_or_remove_outputs(&outputs)?;
         let name = input.file_name().and_then(|value| value.to_str()).unwrap_or("file");
         report_status(format!("Reading metadata from {name} ({}/{})", index + 1, job.files.len()));
         let out = output_for_input(job, input, "exif", "json");
@@ -79,7 +89,7 @@ pub(super) fn process_each_convert(job: &Job, target_ext: &str) -> Result<Vec<Pa
     require_files(job, 1, "Add documents first.")?;
     let mut outputs: Vec<PathBuf> = Vec::new();
     for (index, input) in job.files.iter().enumerate() {
-        check_cancelled()?;
+        check_cancelled_or_remove_outputs(&outputs)?;
         let name = input.file_name().and_then(|value| value.to_str()).unwrap_or("document");
         report_status(format!("Converting {name} ({}/{})", index + 1, job.files.len()));
         let out = output_for_input(job, input, "converted", target_ext);
@@ -216,3 +226,57 @@ pub(super) fn os<T: AsRef<std::ffi::OsStr>>(value: T) -> OsString {
 }
 
 pub(super) fn display_io(error: io::Error) -> String { error.to_string() }
+
+
+#[cfg(test)]
+mod cancellation_cleanup_tests {
+    use super::{process_each, temp_dir};
+    use crate::catalog::ToolId;
+    use crate::engine::{
+        with_execution_control, ExecutionControl, ImageFormat, Job, JobOptions,
+    };
+    use std::fs;
+    use std::sync::mpsc;
+
+    #[test]
+    fn cancelling_between_files_removes_outputs_from_the_current_batch() {
+        let directory = temp_dir("batch-cancel-cleanup-test").unwrap();
+        let first_input = directory.join("first.png");
+        let second_input = directory.join("second.png");
+        fs::write(&first_input, b"first").unwrap();
+        fs::write(&second_input, b"second").unwrap();
+
+        let output_dir = directory.join("output");
+        fs::create_dir_all(&output_dir).unwrap();
+        let job = Job::new(
+            ToolId::ImageConvert,
+            vec![first_input, second_input],
+            output_dir.clone(),
+            JobOptions::ImageConvert {
+                format: ImageFormat::Png,
+            },
+        )
+        .unwrap();
+
+        let (status_tx, _status_rx) = mpsc::channel();
+        let control = ExecutionControl::new(status_tx);
+        let cancel_handle = control.clone();
+        let result = with_execution_control(control, || {
+            process_each(&job, |_input, output| {
+                fs::write(output, b"completed output").map_err(|error| error.to_string())?;
+                cancel_handle.cancel();
+                Ok(())
+            })
+        });
+
+        assert!(result.unwrap_err().contains("cancelled"));
+        assert_eq!(
+            fs::read_dir(&output_dir).unwrap().count(),
+            0,
+            "a cancelled batch must not leave files from earlier inputs"
+        );
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+}
+
