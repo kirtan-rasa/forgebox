@@ -110,7 +110,7 @@ for release in releases:
         elif family == "debian":
             matches = name.endswith("_amd64.deb")
         elif family == "arch":
-            matches = name.endswith("_x86_64.pkg.tar.zst")
+            matches = name.endswith("-x86_64.pkg.tar.zst")
         else:
             matches = False
 
