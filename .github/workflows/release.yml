@@ -95,6 +95,33 @@ jobs:
           bash packaging/rpm/build-rpm.sh
           rpm -qp --requires dist/*.rpm
           rpm -qpl dist/*.rpm | grep -F '/install-rembg-fedora.sh'
+      - name: Test RPM signing in an isolated environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          TEST_ROOT="$(mktemp -d)"
+          trap 'rm -rf "$TEST_ROOT"' EXIT
+          install -d -m 0700 "$TEST_ROOT/gnupg"
+          mkdir -p "$TEST_ROOT/dist"
+
+          cat > "$TEST_ROOT/key.batch" <<'KEY'
+          %no-protection
+          Key-Type: RSA
+          Key-Length: 2048
+          Name-Real: ForgeBox CI Signing Test
+          Name-Email: forgebox-ci@example.invalid
+          Expire-Date: 0
+          %commit
+          KEY
+
+          gpg --batch --homedir "$TEST_ROOT/gnupg" --generate-key "$TEST_ROOT/key.batch"
+          gpg --batch --homedir "$TEST_ROOT/gnupg" --armor --export-secret-keys > "$TEST_ROOT/private.asc"
+          cp dist/*.rpm "$TEST_ROOT/dist/"
+
+          RPM_SIGNING_PRIVATE_KEY="$(cat "$TEST_ROOT/private.asc")" \
+            bash scripts/sign-rpm.sh "$TEST_ROOT/dist"
+          test -s "$TEST_ROOT/dist/forgebox-rpm-signing-key.asc"
+          test -s "$TEST_ROOT/dist/forgebox-rpm-signing-key-id.txt"
       - name: Sign RPM for tagged releases
         if: startsWith(github.ref, 'refs/tags/v')
         env:
