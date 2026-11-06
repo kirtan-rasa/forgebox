@@ -95,6 +95,29 @@ jobs:
           bash packaging/rpm/build-rpm.sh
           rpm -qp --requires dist/*.rpm
           rpm -qpl dist/*.rpm | grep -F '/install-rembg-fedora.sh'
+
+      - name: Resolve RPM runtime dependencies without installing
+        shell: bash
+        run: |
+          set -euo pipefail
+          DNF_LOG="$(mktemp)"
+          trap 'rm -f "$DNF_LOG"' EXIT
+
+          # --assumeno performs dependency resolution but refuses the
+          # transaction, so the Fedora runner remains unchanged.
+          set +e
+          dnf install --assumeno ./dist/*.rpm >"$DNF_LOG" 2>&1
+          dnf_status=$?
+          set -e
+
+          if ! grep -Eq 'Dependencies resolved|Nothing to do' "$DNF_LOG"; then
+            cat "$DNF_LOG"
+            echo "DNF could not resolve the RPM runtime dependencies." >&2
+            exit "${dnf_status:-1}"
+          fi
+
+          echo "DNF resolved all declared RPM dependencies without installing them."
+
       - name: Test RPM signing in an isolated environment
         shell: bash
         run: |
