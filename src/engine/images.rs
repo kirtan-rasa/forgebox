@@ -1,7 +1,8 @@
 use super::{
-    first_file, os, output_for_input, require_files, run_magick_owned,
+    display_io, first_file, os, output_for_input, positive, require_files, run_magick_owned,
     sort_numbered_paths, temp_dir, unique_path, Job,
 };
+use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
 
