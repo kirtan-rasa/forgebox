@@ -881,9 +881,9 @@ mod tests {
         let mut values = vec!["A", "B", "C", "D"];
         super::files::reorder_item_to_index(&mut values, 0, 2);
         assert_eq!(values, vec!["B", "C", "A", "D"]);
-        super::reorder_item_to_index(&mut values, 3, 0);
+        super::files::reorder_item_to_index(&mut values, 3, 0);
         assert_eq!(values, vec!["D", "B", "C", "A"]);
-        super::reorder_item_to_index(&mut values, 1, 1);
+        super::files::reorder_item_to_index(&mut values, 1, 1);
         assert_eq!(values, vec!["D", "B", "C", "A"]);
     }
 
@@ -902,7 +902,7 @@ mod tests {
         let home = std::env::temp_dir().join(format!("forgebox-output-home-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).unwrap();
-        assert_eq!(super::output_dir_for_home(&home), home);
+        assert_eq!(super::files::output_dir_for_home(&home), home);
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -911,22 +911,22 @@ mod tests {
         use crate::catalog::ToolId;
 
         assert!(super::files::is_supported_input_file(ToolId::PdfSplit, std::path::Path::new("input.PDF")));
-        assert!(!super::is_supported_input_file(ToolId::PdfSplit, std::path::Path::new("input.png")));
-        assert!(super::is_supported_input_file(ToolId::ImageConvert, std::path::Path::new("input.HEIC")));
-        assert!(!super::is_supported_input_file(ToolId::ImageConvert, std::path::Path::new("input.docx")));
-        assert!(super::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("track.FLAC")));
-        assert!(super::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("clip.mkv")));
-        assert!(!super::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("table.xlsx")));
-        assert!(super::is_supported_input_file(ToolId::DocToPdf, std::path::Path::new("report.docx")));
-        assert!(super::is_supported_input_file(ToolId::DataConvert, std::path::Path::new("data.csv")));
+        assert!(!super::files::is_supported_input_file(ToolId::PdfSplit, std::path::Path::new("input.png")));
+        assert!(super::files::is_supported_input_file(ToolId::ImageConvert, std::path::Path::new("input.HEIC")));
+        assert!(!super::files::is_supported_input_file(ToolId::ImageConvert, std::path::Path::new("input.docx")));
+        assert!(super::files::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("track.FLAC")));
+        assert!(super::files::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("clip.mkv")));
+        assert!(!super::files::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("table.xlsx")));
+        assert!(super::files::is_supported_input_file(ToolId::DocToPdf, std::path::Path::new("report.docx")));
+        assert!(super::files::is_supported_input_file(ToolId::DataConvert, std::path::Path::new("data.csv")));
     }
 
     #[test]
     fn video_extension_filter_recognizes_common_containers() {
         assert!(super::files::is_video_file(std::path::Path::new("holiday.MP4")));
-        assert!(super::is_video_file(std::path::Path::new("clip.webm")));
-        assert!(!super::is_video_file(std::path::Path::new("track.mp3")));
-        assert!(!super::is_video_file(std::path::Path::new("picture.png")));
+        assert!(super::files::is_video_file(std::path::Path::new("clip.webm")));
+        assert!(!super::files::is_video_file(std::path::Path::new("track.mp3")));
+        assert!(!super::files::is_video_file(std::path::Path::new("picture.png")));
     }
 
     #[test]
