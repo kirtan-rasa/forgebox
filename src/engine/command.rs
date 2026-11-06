@@ -1,6 +1,7 @@
 use super::record_execution_warning;
 use std::ffi::{OsStr, OsString};
-use std::path::{Path, PathBuf};
+use std::io;
+use std::path::PathBuf;
 use std::process::{Command, Output};
 
 fn os<T: AsRef<OsStr>>(value: T) -> OsString {

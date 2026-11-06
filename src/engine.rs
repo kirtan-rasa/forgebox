@@ -12,11 +12,10 @@ use serde_json::{Map, Value};
 use qrcode::QrCode;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 thread_local! {
