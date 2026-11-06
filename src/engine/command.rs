@@ -83,6 +83,15 @@ fn run_cancellable(command: &mut Command) -> io::Result<Output> {
     super::check_cancelled()
         .map_err(|message| io::Error::new(io::ErrorKind::Interrupted, message))?;
 
+    // Isolate each external utility in its own process group. Some tools
+    // launch helpers (LibreOffice, ImageMagick delegates); killing only the
+    // direct child can leave descendants holding our output pipes open.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn()?;
     let stdout = child.stdout.take().expect("stdout was configured as piped");
@@ -128,7 +137,19 @@ fn join_pipe(reader: JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Vec<u8>> {
 }
 
 fn stop_child(child: &mut Child) {
-    let _ = child.kill();
+    #[cfg(unix)]
+    {
+        // process_group(0) above makes the child PID its process-group ID.
+        // Signal the entire group so delegated helpers cannot outlive a cancel.
+        let process_group = -(child.id() as libc::pid_t);
+        let _ = unsafe { libc::kill(process_group, libc::SIGKILL) };
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+
     let _ = child.wait();
 }
 
@@ -225,6 +246,30 @@ mod cancellation_tests {
     use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn cancellation_kills_descendants_that_inherit_process_pipes() {
+        let (status_tx, _status_rx) = mpsc::channel();
+        let control = ExecutionControl::new(status_tx);
+        let cancel_handle = control.clone();
+
+        let worker = thread::spawn(move || {
+            with_execution_control(control, || {
+                run_ok("sh", vec![os("-c"), os("sleep 2 & wait")])
+            })
+        });
+
+        thread::sleep(Duration::from_millis(150));
+        let started = Instant::now();
+        cancel_handle.cancel();
+        let result = worker.join().expect("command worker should not panic");
+
+        assert!(result.unwrap_err().contains("cancelled"));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "cancellation should also close pipes held by child processes"
+        );
+    }
 
     #[test]
     fn cancellation_stops_a_running_external_command() {
