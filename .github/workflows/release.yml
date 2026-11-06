@@ -106,14 +106,19 @@ jobs:
           # --assumeno performs dependency resolution but refuses the
           # transaction, so the Fedora runner remains unchanged.
           set +e
-          dnf install --assumeno ./dist/*.rpm >"$DNF_LOG" 2>&1
+          dnf install --assumeno --nogpgcheck ./dist/*.rpm >"$DNF_LOG" 2>&1
           dnf_status=$?
           set -e
 
           if ! grep -Eq 'Dependencies resolved|Nothing to do' "$DNF_LOG"; then
             cat "$DNF_LOG"
             echo "DNF could not resolve the RPM runtime dependencies." >&2
-            exit "${dnf_status:-1}"
+            exit 1
+          fi
+
+          if (( dnf_status > 1 )); then
+            cat "$DNF_LOG"
+            exit "$dnf_status"
           fi
 
           echo "DNF resolved all declared RPM dependencies without installing them."
