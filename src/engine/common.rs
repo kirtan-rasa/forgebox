@@ -154,6 +154,10 @@ fn timestamp() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
 }
 
+pub(super) fn positive(value: &str, fallback: i32) -> i32 {
+    value.trim().parse::<i32>().ok().filter(|number| *number > 0).unwrap_or(fallback)
+}
+
 pub(super) fn normalized_ext(value: &str) -> String {
     value.trim().trim_start_matches('.').to_lowercase()
 }
