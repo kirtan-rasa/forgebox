@@ -272,7 +272,7 @@ jobs:
           # skips dependency resolution. Ask pacman to resolve every mandatory
           # runtime dependency against the official sync databases without
           # downloading or installing the application dependencies.
-          mapfile -t RUNTIME_DEPENDS < <(sed -n 's/^depends = //p' dist/linux/.SRCINFO)
+          mapfile -t RUNTIME_DEPENDS < <(sed -n 's/^[[:space:]]*depends = //p' dist/linux/.SRCINFO)
           test "${#RUNTIME_DEPENDS[@]}" -gt 0
 
           # Query each package directly from the official sync databases.
