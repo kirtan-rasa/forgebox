@@ -1,5 +1,6 @@
 use super::super::{ForgeApp, QueueStatus};
 use crate::catalog::ToolId;
+use super::widgets::reorder_arrow_button;
 use eframe::egui::{self, Color32, RichText, Stroke};
 
 impl ForgeApp {
@@ -52,10 +53,10 @@ impl ForgeApp {
                                 if ui.small_button("×").on_hover_text("Remove task").clicked() {
                                     remove_index = Some(index);
                                 }
-                                if ui.small_button("↓").on_hover_text("Move down").clicked() && index + 1 < self.queue.len() {
+                                if reorder_arrow_button(ui, index + 1 < self.queue.len(), false, "Move down") {
                                     move_request = Some((index, index + 1));
                                 }
-                                if ui.small_button("↑").on_hover_text("Move up").clicked() && index > 0 {
+                                if reorder_arrow_button(ui, index > 0, true, "Move up") {
                                     move_request = Some((index, index - 1));
                                 }
                             }
