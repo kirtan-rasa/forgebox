@@ -1,8 +1,7 @@
 use super::{
-    display_io, first_file, os, output_for_input, require_files, run_magick_owned,
+    display_io, first_file, os, output_for_input, require_files, run_magick_owned, run_ok,
     sort_numbered_paths, temp_dir, unique_path, Job,
 };
-use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
 
@@ -37,12 +36,25 @@ pub(super) fn images_to_pdf(job: &Job, compress: bool, quality: u8) -> Result<Ve
             normalized.push(page);
         }
 
-        let mut args: Vec<OsString> = normalized.iter().map(|p| os(p)).collect();
+        // ImageMagick's PDF coder is disabled by default on several Linux
+        // distributions. Use img2pdf for PDF assembly instead of weakening the
+        // host security policy.
+        let mut pdf_pages = Vec::with_capacity(normalized.len());
         if compress {
-            args.extend([os("-background"), os("white"), os("-alpha"), os("remove"), os("-alpha"), os("off"), os("-compress"), os("JPEG"), os("-quality"), os(&quality.to_string())]);
+            for (index, page) in normalized.iter().enumerate() {
+                let jpeg = temp.join(format!("page-{:05}.jpg", index + 1));
+                run_magick_owned(vec![
+                    os(page), os("-background"), os("white"), os("-alpha"), os("remove"),
+                    os("-alpha"), os("off"), os("-quality"), os(&quality.to_string()), os(&jpeg),
+                ])?;
+                pdf_pages.push(jpeg);
+            }
+        } else {
+            pdf_pages = normalized;
         }
-        args.push(os(&out));
-        run_magick_owned(args)?;
+        let mut args = vec![os("--output"), os(&out)];
+        args.extend(pdf_pages.iter().map(|page| os(page)));
+        run_ok("img2pdf", args)?;
         Ok(vec![out.clone()])
     })();
     let _ = fs::remove_dir_all(&temp);
@@ -60,9 +72,12 @@ pub(super) fn long_png_to_pdf(job: &Job) -> Result<Vec<PathBuf>, String> {
         sort_numbered_paths(&mut pages);
         if pages.is_empty() { return Err("Could not create pages from the image.".into()); }
         let out = output_for_input(job, input, "paginated", "pdf");
-        let mut args: Vec<OsString> = pages.iter().map(|p| os(p)).collect();
-        args.push(os(&out));
-        if let Err(error) = run_magick_owned(args) { let _ = fs::remove_file(&out); return Err(error); }
+        let mut args = vec![os("--output"), os(&out)];
+        args.extend(pages.iter().map(|page| os(page)));
+        if let Err(error) = run_ok("img2pdf", args) {
+            let _ = fs::remove_file(&out);
+            return Err(error);
+        }
         Ok(vec![out])
     })();
     let _ = fs::remove_dir_all(&temp);

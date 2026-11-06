@@ -186,6 +186,9 @@ pub(super) fn run_ok(program: &str, args: Vec<OsString>) -> Result<Output, Strin
         ("tesseract", "linux") => {
             " Install Tesseract and the matching language data with your distribution's package manager. On Fedora: sudo dnf install tesseract tesseract-langpack-eng."
         }
+        ("img2pdf", "linux") => {
+            " Install img2pdf with your distribution's package manager. Fedora: sudo dnf install python3-img2pdf; Debian/Ubuntu: sudo apt install img2pdf; Arch: sudo pacman -S img2pdf."
+        }
         ("tesseract", "macos") => {
             " Install Tesseract and make sure its executable is available on PATH."
         }

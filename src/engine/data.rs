@@ -273,6 +273,31 @@ pub(super) fn path_to_file_url(path: &Path) -> Result<String, String> {
     Ok(format!("file://{encoded}"))
 }
 
+pub(super) fn pdf_to_docx(input: &Path, output: &Path) -> Result<(), String> {
+    let temp = temp_dir("pdf-to-docx")?;
+    let result = (|| -> Result<(), String> {
+        let extracted_text = temp.join("extracted.txt");
+        run_ok("pdftotext", vec![
+            os("-layout"), os("-enc"), os("UTF-8"), os(input), os(&extracted_text),
+        ])?;
+        let text = fs::read_to_string(&extracted_text)
+            .map_err(|error| format!("Could not read extracted PDF text: {error}"))?;
+        if text.trim().is_empty() {
+            return Err(
+                "No selectable text was found in this PDF. It may contain scanned pages; run OCR first, then convert the resulting text.".into()
+            );
+        }
+        // LibreOffice reliably creates DOCX from text. This is intentionally a
+        // text-first conversion: it does not preserve the source page layout.
+        soffice_convert(&extracted_text, "docx", output)
+    })();
+    let _ = fs::remove_dir_all(&temp);
+    if result.is_err() {
+        let _ = fs::remove_file(output);
+    }
+    result
+}
+
 pub(super) fn soffice_convert(input: &Path, extension: &str, output: &Path) -> Result<(), String> {
     let temp = temp_dir("office-convert")?;
     let result = (|| -> Result<(), String> {

@@ -22,6 +22,7 @@ fn output_details(job: &Job, input: &Path) -> (&'static str, String) {
         (Tool::ImageGrayscale, Options::None) => ("grayscale", source_extension()),
         (Tool::RemoveBackground, Options::None) => ("no-background", "png".into()),
         (Tool::ExtractExif, Options::None) => ("exif", "json".into()),
+        (Tool::PdfToDoc, Options::None) => ("converted", "docx".into()),
         (Tool::ImageOcr, Options::ImageOcr { .. }) => ("ocr", "txt".into()),
         (Tool::ExtractAudio, Options::ExtractAudio { format }) => ("audio", format.as_str().to_owned()),
         (Tool::VideoConvert, Options::VideoConvert { format, .. }) => ("converted", format.as_str().to_owned()),

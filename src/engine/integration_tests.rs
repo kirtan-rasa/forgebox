@@ -123,7 +123,7 @@ fn fixture_command(program: &str, args: Vec<OsString>) {
 
 #[test]
 fn image_tool_paths_work_with_real_imagemagick_exiftool_and_tesseract() {
-    if !require(&[image_magick_program(), "exiftool", "tesseract", "qpdf"], "images") {
+    if !require(&[image_magick_program(), "img2pdf", "exiftool", "tesseract", "qpdf"], "images") {
         return;
     }
     let ws = Workspace::new("images");
@@ -211,6 +211,15 @@ fn image_tool_paths_work_with_real_imagemagick_exiftool_and_tesseract() {
     )).expect("images to PDF");
     outputs(&pdf, 1);
     assert_eq!(pdf_page_count(&pdf[0]).unwrap(), 2);
+
+    let compressed_pdf = execute(job(
+        ToolId::ImagesToPdf,
+        vec![input.clone()],
+        ws.path("images-pdf-compressed"),
+        JobOptions::ImagesToPdf { compress: true, quality: 65 },
+    )).expect("compressed images to PDF");
+    outputs(&compressed_pdf, 1);
+    assert_eq!(pdf_page_count(&compressed_pdf[0]).unwrap(), 1);
 
     let tall = ws.path("tall.png");
     image_fixture(&tall, 64, 4_000);
@@ -319,6 +328,16 @@ fn document_and_spreadsheet_tools_convert_all_supported_pairs() {
         .expect("PDF to DOCX");
     outputs(&docx, 1);
     assert_eq!(docx[0].extension().and_then(|e| e.to_str()), Some("docx"));
+
+    let scanned_pdf = ws.path("scanned.pdf");
+    write_pdf(&scanned_pdf, 1);
+    let no_text_error = execute(job(
+        ToolId::PdfToDoc,
+        vec![scanned_pdf],
+        ws.path("scanned-docx"),
+        JobOptions::None,
+    )).expect_err("blank/scanned PDFs must not produce an empty DOCX");
+    assert!(no_text_error.contains("No selectable text"));
 
     let csv = ws.path("table.csv");
     let json = ws.path("table.json");
