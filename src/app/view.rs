@@ -4,6 +4,7 @@ use eframe::egui;
 mod files;
 mod icons;
 mod parameters;
+mod queue;
 mod sidebar;
 mod thumbnails;
 mod widgets;
@@ -16,7 +17,7 @@ pub(super) use self::thumbnails::load_thumbnail;
 impl eframe::App for ForgeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_execution_status();
-        self.poll_results();
+        self.poll_queue_events();
         self.poll_dialogs();
         self.poll_thumbnails(ctx);
         self.queue_thumbnails();

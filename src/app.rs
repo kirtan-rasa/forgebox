@@ -13,10 +13,35 @@ use std::thread;
 mod theme;
 mod view;
 
-struct JobResult {
-    result: Result<Vec<PathBuf>, String>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueueStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+struct QueuedJob {
+    job: Job,
+    tool_name: String,
+    file_count: usize,
+    status: QueueStatus,
+    output_count: usize,
+    summary: Option<String>,
     warnings: Vec<String>,
-    cancelled: bool,
+}
+
+enum QueueEvent {
+    Started { index: usize, total: usize, tool_name: String },
+    Finished {
+        index: usize,
+        result: Result<Vec<PathBuf>, String>,
+        warnings: Vec<String>,
+        cancelled: bool,
+    },
+    Skipped { index: usize },
+    QueueFinished { cancelled: bool },
 }
 
 enum DialogResult {
@@ -54,6 +79,11 @@ struct ForgeApp {
     status_rx: Receiver<String>,
     cancel_requested: bool,
     completed_cancelled: bool,
+    active_task_name: String,
+    active_queue_index: usize,
+    queue_total: usize,
+    queue_finished: usize,
+    queue: Vec<QueuedJob>,
     wizard_step: usize,
     dragging_file: Option<PathBuf>,
     drag_insert_index: Option<usize>,
@@ -63,8 +93,8 @@ struct ForgeApp {
     thumbnail_errors: HashSet<PathBuf>,
     thumbnail_pending: HashSet<PathBuf>,
     logs: Vec<(bool, String)>,
-    tx: Sender<JobResult>,
-    rx: Receiver<JobResult>,
+    queue_tx: Sender<QueueEvent>,
+    queue_rx: Receiver<QueueEvent>,
     dialog_tx: Sender<DialogResult>,
     dialog_rx: Receiver<DialogResult>,
     thumbnail_tx: Sender<(PathBuf, Result<egui::ColorImage, String>)>,
@@ -75,7 +105,7 @@ impl ForgeApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
         let icons_loaded = view::load_nerd_font(&cc.egui_ctx);
-        let (tx, rx) = mpsc::channel();
+        let (queue_tx, queue_rx) = mpsc::channel();
         let (dialog_tx, dialog_rx) = mpsc::channel();
         let (thumbnail_tx, thumbnail_rx) = mpsc::channel();
         let (status_tx, status_rx) = mpsc::channel();
@@ -108,6 +138,11 @@ impl ForgeApp {
             status_rx,
             cancel_requested: false,
             completed_cancelled: false,
+            active_task_name: String::new(),
+            active_queue_index: 0,
+            queue_total: 0,
+            queue_finished: 0,
+            queue: Vec::new(),
             wizard_step: 0,
             dragging_file: None,
             drag_insert_index: None,
@@ -117,8 +152,8 @@ impl ForgeApp {
             thumbnail_errors: HashSet::new(),
             thumbnail_pending: HashSet::new(),
             logs: Vec::new(),
-            tx,
-            rx,
+            queue_tx,
+            queue_rx,
             dialog_tx,
             dialog_rx,
             thumbnail_tx,
@@ -421,7 +456,9 @@ impl ForgeApp {
     }
 
     fn start_job(&mut self) {
-        if self.running { return; }
+        if self.running {
+            return;
+        }
         if !matches!(self.selected_tool, ToolId::GenerateQr) && self.files.is_empty() {
             self.logs.push((false, "Add an input file first.".into()));
             return;
@@ -440,6 +477,7 @@ impl ForgeApp {
             self.wizard_step = 1;
             return;
         }
+
         let job = match self.build_job() {
             Ok(job) => job,
             Err(error) => {
@@ -447,23 +485,101 @@ impl ForgeApp {
                 return;
             }
         };
+
+        let file_count = job.files.len();
+        let tool_name = info(self.selected_tool).name.to_string();
+        self.queue.push(QueuedJob {
+            job,
+            tool_name: tool_name.clone(),
+            file_count,
+            status: QueueStatus::Pending,
+            output_count: 0,
+            summary: None,
+            warnings: Vec::new(),
+        });
+
+        // The job owns snapshots of all its inputs and options. Clear the editor
+        // so another tool or file set can be prepared without altering queued work.
+        self.files.clear();
+        self.secondary_file = None;
+        self.selection_notice = None;
+        self.dragging_file = None;
+        self.drag_insert_index = None;
+        self.drag_card_size = None;
+        self.wizard_step = 0;
+        self.logs.clear();
+        self.logs.push((true, format!("Added to queue: {tool_name}")));
+    }
+
+    fn start_queue(&mut self) {
+        if self.running || self.queue.is_empty() {
+            return;
+        }
+
         while self.status_rx.try_recv().is_ok() {}
-        let tx = self.tx.clone();
-        let name = info(self.selected_tool).name.to_string();
+        let jobs: Vec<(usize, Job, String)> = self.queue
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.status == QueueStatus::Pending)
+            .map(|(index, entry)| (index, entry.job.clone(), entry.tool_name.clone()))
+            .collect();
+        if jobs.is_empty() {
+            return;
+        }
+
+        let total = jobs.len();
+        let queue_tx = self.queue_tx.clone();
         let control = ExecutionControl::new(self.status_tx.clone());
         self.execution_control = Some(control.clone());
-        self.execution_status = "Preparing task…".into();
+        self.execution_status = "Preparing queue…".into();
+        self.active_task_name.clear();
+        self.active_queue_index = 0;
+        self.queue_total = total;
+        self.queue_finished = 0;
         self.cancel_requested = false;
         self.completed_cancelled = false;
         self.logs.clear();
-        self.logs.push((true, format!("Processing: {name}")));
         self.running = true;
+
+        // A single worker processes queued tasks in order. A failure is recorded
+        // but does not prevent later independent tasks from running.
         thread::spawn(move || {
-            let result = execute_with_control(job, control.clone());
-            let cancelled = control.is_cancelled()
-                && result.as_ref().err().map(|error| error.contains("Operation cancelled by user.")).unwrap_or(false);
-            let warnings = take_execution_warnings();
-            let _ = tx.send(JobResult { result, warnings, cancelled });
+            for (position, (index, job, tool_name)) in jobs.iter().cloned().enumerate() {
+                if control.is_cancelled() {
+                    let _ = queue_tx.send(QueueEvent::Skipped { index });
+                    continue;
+                }
+
+                let _ = queue_tx.send(QueueEvent::Started {
+                    index,
+                    total,
+                    tool_name,
+                });
+
+                let result = execute_with_control(job, control.clone());
+                let cancelled = control.is_cancelled()
+                    && result.as_ref().err()
+                        .map(|error| error.contains("Operation cancelled by user."))
+                        .unwrap_or(false);
+                let warnings = take_execution_warnings();
+                let _ = queue_tx.send(QueueEvent::Finished {
+                    index,
+                    result,
+                    warnings,
+                    cancelled,
+                });
+
+                if cancelled {
+                    for (pending_index, _, _) in jobs.iter().skip(position + 1) {
+                        let _ = queue_tx.send(QueueEvent::Skipped { index: *pending_index });
+                    }
+                    break;
+                }
+            }
+
+            let _ = queue_tx.send(QueueEvent::QueueFinished {
+                cancelled: control.is_cancelled(),
+            });
         });
     }
 
@@ -472,8 +588,16 @@ impl ForgeApp {
             if !self.cancel_requested {
                 control.cancel();
                 self.cancel_requested = true;
-                self.execution_status = "Stopping current process…".into();
+                self.execution_status = "Stopping queue…".into();
             }
+        }
+    }
+
+    fn clear_queue(&mut self) {
+        if !self.running {
+            self.queue.clear();
+            self.logs.clear();
+            self.completed_cancelled = false;
         }
     }
 
@@ -483,34 +607,88 @@ impl ForgeApp {
         }
     }
 
-    fn poll_results(&mut self) {
-        while let Ok(message) = self.rx.try_recv() {
-            self.running = false;
-            self.execution_control = None;
-            self.execution_status.clear();
-            self.cancel_requested = false;
-            self.completed_cancelled = message.cancelled;
-            self.logs.clear();
-            if message.cancelled {
-                self.logs.push((true, "Task cancelled. Incomplete outputs are cleaned up where supported.".into()));
-            } else {
-                match message.result {
-                Ok(paths) => {
-                    if paths.is_empty() {
-                        self.logs.push((true, "Done. The command completed successfully.".into()));
-                    } else {
-                        for path in paths {
-                            self.logs.push((true, format!("Done: {}", path.display())));
+    fn poll_queue_events(&mut self) {
+        while let Ok(event) = self.queue_rx.try_recv() {
+            match event {
+                QueueEvent::Started { index, total, tool_name } => {
+                    if let Some(entry) = self.queue.get_mut(index) {
+                        entry.status = QueueStatus::Running;
+                    }
+                    self.active_queue_index = self.queue_finished;
+                    self.queue_total = total;
+                    self.active_task_name = tool_name;
+                    self.execution_status = format!("Task {} of {total}", self.active_queue_index + 1);
+                }
+                QueueEvent::Finished { index, result, warnings, cancelled } => {
+                    if let Some(entry) = self.queue.get_mut(index) {
+                        entry.warnings = warnings;
+                        if cancelled {
+                            entry.status = QueueStatus::Cancelled;
+                            entry.summary = Some("Cancelled by user".into());
+                        } else {
+                            match result {
+                                Ok(paths) => {
+                                    entry.status = QueueStatus::Completed;
+                                    entry.output_count = paths.len();
+                                    entry.summary = Some(if paths.is_empty() {
+                                        "Completed".into()
+                                    } else {
+                                        format!("{} output file(s)", paths.len())
+                                    });
+                                }
+                                Err(error) => {
+                                    entry.status = QueueStatus::Failed;
+                                    entry.summary = Some(error);
+                                }
+                            }
                         }
                     }
-                    for warning in message.warnings {
-                        self.logs.push((true, format!("Warning: {warning}")));
+                    self.queue_finished += 1;
+                }
+                QueueEvent::Skipped { index } => {
+                    if let Some(entry) = self.queue.get_mut(index) {
+                        entry.status = QueueStatus::Cancelled;
+                        entry.summary = Some("Not started because the queue was stopped".into());
+                    }
+                    self.queue_finished += 1;
+                }
+                QueueEvent::QueueFinished { cancelled } => {
+                    self.running = false;
+                    self.execution_control = None;
+                    self.execution_status.clear();
+                    self.active_task_name.clear();
+                    self.cancel_requested = false;
+                    self.completed_cancelled = cancelled;
+                    self.logs.clear();
+
+                    let completed = self.queue.iter().filter(|entry| entry.status == QueueStatus::Completed).count();
+                    let failed = self.queue.iter().filter(|entry| entry.status == QueueStatus::Failed).count();
+                    let cancelled_count = self.queue.iter().filter(|entry| entry.status == QueueStatus::Cancelled).count();
+                    self.logs.push((true, format!(
+                        "Queue finished · {completed} completed · {failed} failed · {cancelled_count} cancelled"
+                    )));
+                    for entry in &self.queue {
+                        match entry.status {
+                            QueueStatus::Completed => {
+                                self.logs.push((true, format!("Done: {} · {} output(s)", entry.tool_name, entry.output_count)));
+                            }
+                            QueueStatus::Failed => {
+                                self.logs.push((false, format!("{}: {}", entry.tool_name, entry.summary.as_deref().unwrap_or("Task failed"))));
+                            }
+                            QueueStatus::Cancelled => {
+                                self.logs.push((true, format!("Cancelled: {}", entry.tool_name)));
+                            }
+                            _ => {}
+                        }
+                        for warning in &entry.warnings {
+                            self.logs.push((true, format!("Warning: {warning}")));
+                        }
+                    }
+                    if self.logs.len() > 200 {
+                        self.logs.drain(0..self.logs.len() - 200);
                     }
                 }
-                Err(error) => self.logs.push((false, error)),
-                }
             }
-            if self.logs.len() > 200 { self.logs.drain(0..self.logs.len() - 200); }
         }
     }
 

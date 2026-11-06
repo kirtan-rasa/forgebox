@@ -639,8 +639,14 @@ impl ForgeApp {
                         }
                         ui.add_space(10.0);
                         let can_run = self.can_run();
-                        if !self.running && ui.add_enabled(can_run, egui::Button::new(RichText::new("▶  Start conversion").size(15.0).strong()).fill(if can_run { ACCENT } else { Color32::from_rgb(15, 35, 52) }).min_size(Vec2::new(ui.available_width(), 46.0))).clicked() {
+                        if !self.running && ui.add_enabled(can_run, egui::Button::new(RichText::new("＋  Add to queue").size(15.0).strong()).fill(if can_run { ACCENT } else { Color32::from_rgb(15, 35, 52) }).min_size(Vec2::new(ui.available_width(), 44.0))).clicked() {
                             self.start_job();
+                        }
+                        if !self.running && !self.queue.is_empty() {
+                            ui.add_space(6.0);
+                            if ui.add(egui::Button::new(RichText::new(format!("▶  Run queue ({})", self.queue.iter().filter(|entry| entry.status == super::super::QueueStatus::Pending).count())).strong()).fill(Color32::from_rgb(15, 73, 85)).min_size(Vec2::new(ui.available_width(), 40.0))).clicked() {
+                                self.start_queue();
+                            }
                         }
                         if !self.running && !can_run {
                             let reason = match self.selected_tool {
@@ -652,6 +658,8 @@ impl ForgeApp {
                             ui.add_space(4.0);
                             ui.label(RichText::new(reason).size(11.5).color(MUTED));
                         }
+
+                        self.render_queue(ui);
 
                         // One live status area for running, success or error; never duplicate status below the card.
                         if self.running || !self.logs.is_empty() {
@@ -681,19 +689,22 @@ impl ForgeApp {
                                         if self.running {
                                             ui.spinner();
                                             ui.vertical(|ui| {
-                                                ui.label(RichText::new(format!("Processing: {}", info(self.selected_tool).name)).strong().color(CYAN));
+                                                ui.label(RichText::new(format!("Processing: {}", self.active_task_name)).strong().color(CYAN));
                                                 let detail = if self.cancel_requested {
-                                                    "Waiting for the active process to stop…"
+                                                    "Waiting for the active process to stop…".to_owned().to_owned()
                                                 } else if self.execution_status.is_empty() {
-                                                    "ForgeBox will show the result here when the task finishes."
+                                                    "ForgeBox will show the result here when the task finishes.".to_owned()
                                                 } else {
-                                                    self.execution_status.as_str()
+                                                    self.execution_status.clone()
                                                 };
+                                                ui.label(RichText::new(format!("Task {} of {} · {} finished", self.active_queue_index + 1, self.queue_total, self.queue_finished)).size(11.0).color(MUTED));
+                                                let progress = if self.queue_total == 0 { 0.0 } else { self.queue_finished as f32 / self.queue_total as f32 };
+                                                ui.add(egui::ProgressBar::new(progress.clamp(0.0, 1.0)).desired_width(210.0).desired_height(6.0));
                                                 ui.label(RichText::new(detail).size(11.5).color(MUTED));
                                             });
                                             ui.add_space(8.0);
                                             ui.add_enabled_ui(!self.cancel_requested, |ui| {
-                                                if ui.button(if self.cancel_requested { "Stopping…" } else { "Cancel" }).clicked() {
+                                                if ui.button(if self.cancel_requested { "Stopping…" } else { "Stop queue" }).clicked() {
                                                     self.cancel_job();
                                                 }
                                             });
