@@ -416,9 +416,12 @@ impl ForgeApp {
             ToolId::ImageConvert => JobOptions::ImageConvert {
                 format: ImageFormat::parse(&self.target_format)?,
             },
-            ToolId::ImageResize => JobOptions::ImageResize {
-                width: positive_u32(&self.width, 1600),
-                height: positive_u32(&self.height, 1200),
+            ToolId::ImageResize => {
+                let width = self.width.trim().parse::<u32>()
+                    .map_err(|_| "Enter a valid whole-number image width.".to_string())?;
+                let height = self.height.trim().parse::<u32>()
+                    .map_err(|_| "Enter a valid whole-number image height.".to_string())?;
+                JobOptions::ImageResize { width, height }
             },
             ToolId::ImageCompress => JobOptions::ImageCompress {
                 quality: positive_u8(&self.quality, 82, 1, 100),
