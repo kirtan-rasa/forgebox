@@ -1,4 +1,5 @@
 use super::super::{ForgeApp, QueueStatus};
+use crate::catalog::ToolId;
 use eframe::egui::{self, Color32, RichText, Stroke};
 
 impl ForgeApp {
@@ -34,7 +35,9 @@ impl ForgeApp {
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
                             ui.label(RichText::new(format!("{:02}. {}", index + 1, entry.tool_name)).strong().size(12.0));
-                            let input_label = if entry.file_count == 0 {
+                            let input_label = if entry.job.tool == ToolId::GenerateQr {
+                                "Generated from text".to_owned()
+                            } else if entry.file_count == 0 {
                                 "No input files".to_owned()
                             } else if entry.file_count == 1 {
                                 "1 input file".to_owned()

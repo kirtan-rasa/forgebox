@@ -84,6 +84,7 @@ struct ForgeApp {
     queue_total: usize,
     queue_finished: usize,
     queue: Vec<QueuedJob>,
+    queue_run_indices: Vec<usize>,
     wizard_step: usize,
     dragging_file: Option<PathBuf>,
     drag_insert_index: Option<usize>,
@@ -143,6 +144,7 @@ impl ForgeApp {
             queue_total: 0,
             queue_finished: 0,
             queue: Vec::new(),
+            queue_run_indices: Vec::new(),
             wizard_step: 0,
             dragging_file: None,
             drag_insert_index: None,
@@ -536,6 +538,7 @@ impl ForgeApp {
         self.active_queue_index = 0;
         self.queue_total = total;
         self.queue_finished = 0;
+        self.queue_run_indices = jobs.iter().map(|(index, _, _)| *index).collect();
         self.cancel_requested = false;
         self.completed_cancelled = false;
         self.logs.clear();
@@ -596,6 +599,7 @@ impl ForgeApp {
     fn clear_queue(&mut self) {
         if !self.running {
             self.queue.clear();
+            self.queue_run_indices.clear();
             self.logs.clear();
             self.completed_cancelled = false;
         }
@@ -658,17 +662,21 @@ impl ForgeApp {
                     self.execution_status.clear();
                     self.active_task_name.clear();
                     self.cancel_requested = false;
-                    self.completed_cancelled = cancelled;
                     self.logs.clear();
 
-                    let completed = self.queue.iter().filter(|entry| entry.status == QueueStatus::Completed).count();
-                    let failed = self.queue.iter().filter(|entry| entry.status == QueueStatus::Failed).count();
-                    let cancelled_count = self.queue.iter().filter(|entry| entry.status == QueueStatus::Cancelled).count();
-                    let output_count: usize = self.queue.iter().map(|entry| entry.output_count).sum();
+                    let run_entries: Vec<&QueuedJob> = self.queue_run_indices
+                        .iter()
+                        .filter_map(|index| self.queue.get(*index))
+                        .collect();
+                    let completed = run_entries.iter().filter(|entry| entry.status == QueueStatus::Completed).count();
+                    let failed = run_entries.iter().filter(|entry| entry.status == QueueStatus::Failed).count();
+                    let cancelled_count = run_entries.iter().filter(|entry| entry.status == QueueStatus::Cancelled).count();
+                    let output_count: usize = run_entries.iter().map(|entry| entry.output_count).sum();
+                    self.completed_cancelled = cancelled && cancelled_count > 0;
                     self.logs.push((true, format!(
                         "Queue finished · {completed} completed · {output_count} output(s) · {failed} failed · {cancelled_count} cancelled"
                     )));
-                    for entry in &self.queue {
+                    for entry in &run_entries {
                         match entry.status {
                             QueueStatus::Completed => {
                                 self.logs.push((true, format!("Done: {} · {} output(s)", entry.tool_name, entry.output_count)));
@@ -688,6 +696,7 @@ impl ForgeApp {
                     if self.logs.len() > 200 {
                         self.logs.drain(0..self.logs.len() - 200);
                     }
+                    self.queue_run_indices.clear();
                 }
             }
         }
