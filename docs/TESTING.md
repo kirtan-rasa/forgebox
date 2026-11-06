@@ -12,7 +12,7 @@ The integration suite covers:
 | Tool | Integration check |
 |---|---|
 | Image Converter | PNG to JPEG and decode the result |
-| Images to PDF | Two images to a two-page PDF |
+| Images to PDF | Two images to a two-page PDF, including the compressed-JPEG path |
 | Resize Image | Output dimensions and aspect ratio |
 | Compress Image | Output exists and decodes |
 | Grayscale | RGB channels are equal |
@@ -29,7 +29,7 @@ The integration suite covers:
 | PDF to Images | Every page becomes a readable PNG |
 | PDF Watermark | pdftk produces a valid stamped PDF |
 | DOCX to PDF | LibreOffice converts a source document to PDF |
-| PDF to DOCX | LibreOffice creates an editable DOCX |
+| PDF to DOCX | Poppler extracts selectable text and LibreOffice creates an editable DOCX; scanned PDFs produce a clear OCR hint |
 | CSV / JSON / Excel | CSV ↔ JSON, CSV ↔ XLSX and JSON ↔ XLSX |
 | Extract Audio | MP4 audio stream to MP3 |
 | Video Converter | MP4 to WebM |
@@ -49,7 +49,7 @@ cargo check --locked
 Install the external tools used by the integration suite on Fedora:
 
 ~~~bash
-sudo dnf install ImageMagick ghostscript qpdf poppler-utils pdftk-java \
+sudo dnf install ImageMagick python3-img2pdf ghostscript qpdf poppler-utils pdftk-java \
   libreoffice tesseract tesseract-langpack-eng perl-Image-ExifTool ffmpeg
 ~~~
 

@@ -28,7 +28,7 @@ ForgeBox brings common image, PDF, document, spreadsheet, and media tools into o
 |---|---|
 | **Images** | Convert, resize, compress, grayscale, remove backgrounds, extract EXIF, OCR, generate QR codes, create PDFs from images |
 | **PDF** | Merge, split, compress, rotate, reorder pages, render pages to images, add watermarks |
-| **Documents** | DOC/DOCX → PDF and experimental PDF → DOCX conversion |
+| **Documents** | DOC/DOCX → PDF and text-first PDF → DOCX conversion |
 | **Data** | CSV ↔ JSON, CSV ↔ XLSX, JSON ↔ XLSX |
 | **Audio & video** | Convert video, extract audio, and create GIFs with frame-rate and size controls |
 
@@ -63,7 +63,8 @@ ForgeBox uses external tools only for the features that need them.
 
 | Utility | Used for |
 |---|---|
-| ImageMagick | Image conversion, resizing, compression, grayscale, image-to-PDF |
+| ImageMagick | Image conversion, resizing, compression, and grayscale |
+| img2pdf | Assemble image pages into PDFs without relying on ImageMagick's PDF coder |
 | Poppler | PDF merge, split, and page rendering |
 | Ghostscript, qpdf, pdftk | PDF compression, page operations, and watermarking |
 | LibreOffice | Office document and spreadsheet conversion |
@@ -117,7 +118,7 @@ The automated release workflow builds and publishes Linux packages.
 
 ## Known limitations
 
-- PDF → DOCX conversion depends on LibreOffice's PDF import and may alter complex layouts.
+- PDF → DOCX extracts selectable text with Poppler and creates an editable DOCX with LibreOffice. It does not preserve page layout or embedded images; scanned PDFs need OCR first.
 - Tall-image PDF export currently uses a fixed page-fragment height; paper size and page overlap are not configurable.
 - OCR quality depends on the installed Tesseract language data.
 - Background removal requires a separately configured `rembg` environment and model.

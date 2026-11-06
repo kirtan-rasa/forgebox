@@ -21,7 +21,7 @@ The AppImage is different: it does not install host conversion engines or langua
 
 AppImage bundles ForgeBox, its icon and desktop entry, and the shared libraries detected by the packager. It does **not** bundle every command-line conversion engine. Install the engines required by the features you use:
 
-- ImageMagick for image conversion and image-to-PDF.
+- ImageMagick for image conversion and image normalization; img2pdf for assembling image pages into PDFs.
 - Poppler utilities for PDF merge, split and rendering.
 - Ghostscript and qpdf for PDF compression and page operations.
 - LibreOffice for document and spreadsheet conversion.
