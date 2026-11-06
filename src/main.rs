@@ -1307,7 +1307,9 @@ fn load_thumbnail(path: &Path) -> Result<egui::ColorImage, String> {
         // Share the engine's cached ImageMagick probe instead of spawning a
         // separate --version process for every unsupported preview.
         let program = crate::engine::image_magick_program();
+        let thread_limit = crate::engine::image_magick_thread_limit().to_string();
         let output = std::process::Command::new(program)
+            .args(["-limit", "thread", thread_limit.as_str()])
             .arg(path).args(["-auto-orient", "-thumbnail", "600x420"])
             .arg(&temp).output();
         match output {
