@@ -6,6 +6,7 @@ use super::parameters::parameter_ui;
 use super::widgets::{paint_check_mark, reorder_arrow_button, section_header};
 use crate::catalog::{info, ToolId};
 use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Stroke, Vec2};
+use std::path::PathBuf;
 
 impl ForgeApp {
     pub(super) fn render_workspace(
