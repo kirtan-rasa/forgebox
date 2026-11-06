@@ -556,22 +556,6 @@ impl eframe::App for ForgeApp {
 
         let page_margin = if content_width < 620.0 { 18.0 } else if content_width < 920.0 { 22.0 } else { 28.0 };
         egui::CentralPanel::default().frame(egui::Frame::none().fill(BG).inner_margin(egui::Margin::symmetric(page_margin, if compact_ui { 10.0 } else { 14.0 }))).show(ctx, |ui| {
-            // Subtle Odysseus-inspired snowfall in the open canvas; widgets paint over it.
-            let snow_rect = ui.available_rect_before_wrap();
-            let (snow_time, window_focused) = ctx.input(|input| {
-                (input.time, input.viewport().focused.unwrap_or(true))
-            });
-            // Decorative animation is disabled while a conversion is running.
-            // This keeps the UI thread focused on input, status updates, and
-            // rendering the task monitor while external engines use the CPU.
-            if !self.running {
-                paint_snowfall(ui.painter(), snow_rect, snow_time);
-                // Cap idle animation at ~15 FPS and pause it in the background.
-                if window_focused {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(67));
-                }
-            }
-
             // Keep title, stepper and navigation outside the scroll area. Only the active step content scrolls.
             // This prevents egui from restoring a stale scroll offset above the upload panel.
             ui.set_width(ui.available_width());
@@ -1626,73 +1610,6 @@ fn labeled_text(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str) 
         ui.label(RichText::new(label).size(11.5).color(MUTED));
         ui.add(egui::TextEdit::singleline(value).hint_text(hint).desired_width(95.0));
     });
-}
-
-fn comet_random(seed: u32) -> f32 {
-    // Integer hash: stable pseudo-random values without a dependency or per-frame RNG.
-    // Separate input seeds decorrelate x, y, speed, tail length and head size.
-    let mut value = seed.wrapping_add(0x9E37_79B9);
-    value = (value ^ (value >> 16)).wrapping_mul(0x85EB_CA6B);
-    value = (value ^ (value >> 13)).wrapping_mul(0xC2B2_AE35);
-    value ^= value >> 16;
-    (value >> 8) as f32 / 16_777_215.0
-}
-
-fn paint_snowfall(painter: &egui::Painter, rect: egui::Rect, time: f64) {
-    let width = rect.width().max(1.0);
-    let height = rect.height().max(1.0);
-    let t = time as f32;
-
-    // A lightweight comet field with independently hash-distributed attributes.
-    // The count and tail detail are deliberately capped to keep UI frame work low.
-    // Positions stay stable between frames, so comets drift naturally instead of
-    // jittering; each one moves vertically and recycles only after its full tail exits.
-    for i in 0..80_u32 {
-        let seed_x = comet_random(i.wrapping_mul(4).wrapping_add(1));
-        let seed_y = comet_random(i.wrapping_mul(4).wrapping_add(2));
-        let speed_seed = comet_random(i.wrapping_mul(4).wrapping_add(3));
-        let tail_seed = comet_random(i.wrapping_mul(4).wrapping_add(4));
-        let size_seed = comet_random(i.wrapping_add(0xA511_E9B3));
-        let speed_y = (15.0 + speed_seed * 14.4) * 2.0;
-        let tail_len = 360.0 + tail_seed * 360.0;
-
-        // Start above the canvas and allow the head and tail to leave below it
-        // before the next cycle begins. The window clips anything outside its area.
-        let travel_span = height + tail_len * 2.0;
-        let phase = (seed_y * travel_span + t * speed_y).rem_euclid(travel_span);
-        let x = rect.left() + seed_x * width;
-        let y = rect.top() - tail_len + phase;
-        let head = egui::pos2(x, y);
-        let tail_top = y - tail_len;
-
-        // Fade the tail from fully transparent at its far end to at most 3%
-        // opacity near the head. Keep segment count modest for low-end hardware.
-        const TAIL_SEGMENTS: u32 = 12;
-        const MAX_TAIL_ALPHA: f32 = 7.65; // 3% of 255
-        for segment in 0..TAIL_SEGMENTS {
-            let start_t = segment as f32 / TAIL_SEGMENTS as f32;
-            let end_t = (segment + 1) as f32 / TAIL_SEGMENTS as f32;
-            let mid_t = (start_t + end_t) * 0.5;
-            let segment_start = egui::pos2(x, tail_top + tail_len * start_t);
-            let segment_end = egui::pos2(x, tail_top + tail_len * end_t);
-            let alpha = (MAX_TAIL_ALPHA * mid_t).round() as u8;
-
-            painter.line_segment(
-                [segment_start, segment_end],
-                Stroke::new(
-                    0.8_f32,
-                    Color32::from_rgba_unmultiplied(65, 176, 232, alpha),
-                ),
-            );
-        }
-
-        let head_alpha = (72.0 + size_seed * 34.0).round() as u8;
-        painter.circle_filled(
-            head,
-            if size_seed > 0.84 { 1.65 } else { 1.125 },
-            Color32::from_rgba_unmultiplied(105, 207, 250, head_alpha),
-        );
-    }
 }
 
 fn section_header(ui: &mut egui::Ui, number: &str, title: &str, subtitle: &str) {
