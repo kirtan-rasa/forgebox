@@ -15,7 +15,7 @@ impl ForgeApp {
         compact_ui: bool,
         dragging_external_files: bool,
     ) {
-let page_margin = if content_width < 620.0 { 18.0 } else if content_width < 920.0 { 22.0 } else { 28.0 };
+        let page_margin = if content_width < 620.0 { 18.0 } else if content_width < 920.0 { 22.0 } else { 28.0 };
         egui::CentralPanel::default().frame(egui::Frame::none().fill(BG).inner_margin(egui::Margin::symmetric(page_margin, if compact_ui { 10.0 } else { 14.0 }))).show(ctx, |ui| {
             // Keep title, stepper and navigation outside the scroll area. Only the active step content scrolls.
             // This prevents egui from restoring a stale scroll offset above the upload panel.

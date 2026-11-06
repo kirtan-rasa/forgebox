@@ -33,9 +33,9 @@ impl eframe::App for ForgeApp {
         // central panel, which can force the wizard controls beyond the right edge.
         let content_width = (screen_width - sidebar_width).max(0.0);
         let compact_ui = content_width < 760.0;
-                self.render_sidebar(ctx, sidebar_width, compact_ui);
+        self.render_sidebar(ctx, sidebar_width, compact_ui);
 
-                self.render_workspace(ctx, content_width, compact_ui, dragging_external_files);
+        self.render_workspace(ctx, content_width, compact_ui, dragging_external_files);
         if self.running || self.dialog_open || !self.thumbnail_pending.is_empty() { ctx.request_repaint_after(std::time::Duration::from_millis(100)); }
     }
 }

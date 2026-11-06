@@ -12,7 +12,7 @@ impl ForgeApp {
         sidebar_width: f32,
         compact_ui: bool,
     ) {
-egui::SidePanel::left("forge-sidebar")
+        egui::SidePanel::left("forge-sidebar")
             .exact_width(sidebar_width)
             .resizable(false)
             .frame(egui::Frame::none().fill(PANEL).inner_margin(egui::Margin::same(12.0)))
