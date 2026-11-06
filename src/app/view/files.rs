@@ -14,7 +14,6 @@ pub(super) fn reorder_item_to_index<T>(items: &mut Vec<T>, from: usize, target_i
     items.insert(target_index.min(items.len()), item);
 }
 
-pub(super)
 pub(super) fn file_extension(path: &Path) -> String {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -37,7 +36,7 @@ pub(super) fn is_audio_file(path: &Path) -> bool {
         "mp3" | "wav" | "flac" | "m4a" | "ogg" | "aac")
 }
 
-pub(super) fn is_supported_input_file(tool: ToolId, path: &Path) -> bool {
+pub(in crate::app) fn is_supported_input_file(tool: ToolId, path: &Path) -> bool {
     match tool {
         ToolId::GenerateQr => false,
         ToolId::PdfMerge | ToolId::PdfSplit | ToolId::PdfCompress | ToolId::PdfRotate
@@ -58,7 +57,7 @@ pub(super) fn is_supported_input_file(tool: ToolId, path: &Path) -> bool {
     }
 }
 
-pub(super) fn accepted_input_description(tool: ToolId) -> &'static str {
+pub(in crate::app) fn accepted_input_description(tool: ToolId) -> &'static str {
     match tool {
         ToolId::GenerateQr => "text",
         ToolId::PdfMerge | ToolId::PdfSplit | ToolId::PdfCompress | ToolId::PdfRotate
@@ -90,7 +89,7 @@ pub(super) fn output_dir_for_home(home: &Path) -> PathBuf {
     }
 }
 
-pub(super) fn default_output_dir() -> PathBuf {
+pub(in crate::app) fn default_output_dir() -> PathBuf {
     let home = std::env::var_os("HOME");
 
     if let Some(home) = home.map(PathBuf::from).filter(|path| path.is_dir()) {

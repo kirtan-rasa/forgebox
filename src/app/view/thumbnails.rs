@@ -1,9 +1,8 @@
-use super::theme::*;
 use eframe::egui;
 use image::ImageDecoder;
 use std::path::Path;
 
-pub(super) fn load_thumbnail(path: &Path) -> Result<egui::ColorImage, String> {
+pub(in crate::app) fn load_thumbnail(path: &Path) -> Result<egui::ColorImage, String> {
     let mut decoded = (|| -> Result<image::DynamicImage, String> {
         let reader = image::ImageReader::open(path).map_err(|e| e.to_string())?;
         let mut decoder = reader.into_decoder().map_err(|e| e.to_string())?;
@@ -43,6 +42,3 @@ pub(super) fn load_thumbnail(path: &Path) -> Result<egui::ColorImage, String> {
     let size = [thumb.width() as usize, thumb.height() as usize];
     Ok(egui::ColorImage::from_rgba_unmultiplied(size, thumb.as_raw()))
 }
-
-// Draw reorder arrows into an explicitly allocated hit rectangle. This avoids tiny or
-// ambiguous hit zones and leaves the controls independent from the drag handle.

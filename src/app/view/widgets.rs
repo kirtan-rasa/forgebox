@@ -1,5 +1,5 @@
-use super::theme::*;
-use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Stroke, Vec2};
+use super::super::theme::*;
+use eframe::egui::{self, Color32, FontId, RichText, Stroke, Vec2};
 
 pub(super) fn reorder_arrow_button(ui: &mut egui::Ui, enabled: bool, up: bool, tooltip: &str) -> bool {
     let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };

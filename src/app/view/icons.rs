@@ -1,5 +1,4 @@
-use super::theme::*;
-use eframe::egui::{self, Color32, FontId};
+use eframe::egui::{self, FontId};
 use std::path::PathBuf;
 
 pub(super) fn icon_font(size: f32) -> FontId {
@@ -44,7 +43,7 @@ pub(super) fn install_nerd_font(ctx: &egui::Context, bytes: Option<Vec<u8>>) -> 
     loaded
 }
 
-pub(super) fn load_nerd_font(ctx: &egui::Context) -> bool {
+pub(in crate::app) fn load_nerd_font(ctx: &egui::Context) -> bool {
     // Fontconfig knows the active font directories. Prefer its direct answer and
     // avoid recursively scanning every system/user font folder on normal startup.
     if let Ok(output) = std::process::Command::new("fc-match")

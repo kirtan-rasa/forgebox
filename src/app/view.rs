@@ -2,7 +2,7 @@ use super::ForgeApp;
 use super::theme::*;
 use crate::catalog::{info, Category, ToolId, TOOLS};
 use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Stroke, Vec2};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 mod files;
 mod icons;
@@ -10,10 +10,9 @@ mod parameters;
 mod thumbnails;
 mod widgets;
 
-use self::files::*;
+use self::files::{file_glyph, reorder_item, reorder_item_to_index};
 use self::icons::*;
 use self::parameters::*;
-use self::thumbnails::*;
 use self::widgets::*;
 
 pub(super) use self::files::{accepted_input_description, default_output_dir, is_supported_input_file};
@@ -857,7 +856,7 @@ impl eframe::App for ForgeApp {
 
 #[cfg(test)]
 mod tests {
-    use super::reorder_item;
+    use super::files::reorder_item;
 
     #[test]
     fn reorder_item_moves_up_and_down_without_off_by_one() {
@@ -880,7 +879,7 @@ mod tests {
     #[test]
     fn reorder_item_to_index_moves_item_and_keeps_stable_order() {
         let mut values = vec!["A", "B", "C", "D"];
-        super::reorder_item_to_index(&mut values, 0, 2);
+        super::files::reorder_item_to_index(&mut values, 0, 2);
         assert_eq!(values, vec!["B", "C", "A", "D"]);
         super::reorder_item_to_index(&mut values, 3, 0);
         assert_eq!(values, vec!["D", "B", "C", "A"]);
@@ -894,7 +893,7 @@ mod tests {
         let home = std::env::temp_dir().join(format!("forgebox-output-downloads-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join("Downloads")).unwrap();
-        assert_eq!(super::output_dir_for_home(&home), home.join("Downloads"));
+        assert_eq!(super::files::output_dir_for_home(&home), home.join("Downloads"));
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -911,7 +910,7 @@ mod tests {
     fn input_file_filters_match_each_tool_category() {
         use crate::catalog::ToolId;
 
-        assert!(super::is_supported_input_file(ToolId::PdfSplit, std::path::Path::new("input.PDF")));
+        assert!(super::files::is_supported_input_file(ToolId::PdfSplit, std::path::Path::new("input.PDF")));
         assert!(!super::is_supported_input_file(ToolId::PdfSplit, std::path::Path::new("input.png")));
         assert!(super::is_supported_input_file(ToolId::ImageConvert, std::path::Path::new("input.HEIC")));
         assert!(!super::is_supported_input_file(ToolId::ImageConvert, std::path::Path::new("input.docx")));
@@ -924,7 +923,7 @@ mod tests {
 
     #[test]
     fn video_extension_filter_recognizes_common_containers() {
-        assert!(super::is_video_file(std::path::Path::new("holiday.MP4")));
+        assert!(super::files::is_video_file(std::path::Path::new("holiday.MP4")));
         assert!(super::is_video_file(std::path::Path::new("clip.webm")));
         assert!(!super::is_video_file(std::path::Path::new("track.mp3")));
         assert!(!super::is_video_file(std::path::Path::new("picture.png")));
@@ -934,7 +933,7 @@ mod tests {
     fn thumbnail_respects_exif_orientation() {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/exif-orientation-6.jpg");
-        let image = super::load_thumbnail(&fixture).expect("EXIF fixture should load");
+        let image = super::thumbnails::load_thumbnail(&fixture).expect("EXIF fixture should load");
         assert!(image.size[1] > image.size[0], "EXIF orientation should display this image in portrait orientation");
     }
 }

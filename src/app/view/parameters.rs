@@ -1,4 +1,4 @@
-use super::theme::MUTED;
+use super::super::theme::MUTED;
 use super::ForgeApp;
 use crate::catalog::ToolId;
 use eframe::egui::{self, RichText};
