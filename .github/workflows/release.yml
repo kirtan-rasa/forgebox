@@ -267,14 +267,16 @@ jobs:
           mapfile -t RUNTIME_DEPENDS < <(sed -n 's/^depends = //p' dist/linux/.SRCINFO)
           test "${#RUNTIME_DEPENDS[@]}" -gt 0
 
-          PACMAN_LOG="$(mktemp)"
-          trap 'rm -f "$PACMAN_LOG"' EXIT
-          if ! pacman -Sp --print-format '%n' "${RUNTIME_DEPENDS[@]}" >"$PACMAN_LOG" 2>&1; then
-            cat "$PACMAN_LOG"
-            echo "Pacman could not resolve one or more mandatory runtime dependencies." >&2
-            exit 1
-          fi
-          cat "$PACMAN_LOG"
+          # Query each package directly from the official sync databases.
+          # This is read-only and reports the exact missing target, unlike
+          # makepkg --nodeps which deliberately skips runtime dependency checks.
+          for dependency in "${RUNTIME_DEPENDS[@]}"; do
+            if ! pacman -Si "$dependency" >/dev/null 2>&1; then
+              echo "Required Arch package is missing from the sync databases: $dependency" >&2
+              exit 1
+            fi
+            echo "Resolved Arch dependency: $dependency"
+          done
 
           test -n "$(find dist/linux -maxdepth 1 -type f -name '*.pkg.tar.*' -print -quit)"
           test -s dist/linux/.SRCINFO
