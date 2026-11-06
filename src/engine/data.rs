@@ -1,9 +1,9 @@
-use super::{display_io, first_file, normalized_ext, os, output_for_input, run_ok, temp_dir};
+use super::{display_io, first_file, normalized_ext, os, output_for_input, run_ok, temp_dir, Job};
 use csv::{ReaderBuilder, WriterBuilder};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(super) fn data_convert(job: &Job) -> Result<Vec<PathBuf>, String> {
     let input = first_file(job)?;
