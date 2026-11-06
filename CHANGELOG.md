@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+### Added
+- Add a one-command POSIX shell installer for Linux, deployed through GitHub Pages.
+
+### Improved
+- Refactor the application UI and conversion engine into focused modules.
+- Strengthen conversion integration tests and improve Linux packaging.
+- Improve Fedora dependency setup and release build infrastructure.
+
+
 ## 0.3.0-beta.1
 
 ### Fixed
