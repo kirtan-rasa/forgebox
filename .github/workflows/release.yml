@@ -181,7 +181,7 @@ jobs:
           # Building a DEB does not prove that every declared runtime
           # dependency exists in Ubuntu's enabled repositories. Resolve the
           # local package in simulation mode without installing it.
-          sudo apt-get --simulate install "$DEB"
+          sudo apt-get --simulate install "./$DEB"
 
           bash packaging/linux/prepare-pacman-pkgbuild.sh dist/linux/PKGBUILD
           grep -Fq 'pdftk' dist/linux/PKGBUILD
