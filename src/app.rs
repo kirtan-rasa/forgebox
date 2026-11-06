@@ -95,6 +95,8 @@ struct ForgeApp {
     thumbnails: HashMap<PathBuf, egui::TextureHandle>,
     thumbnail_errors: HashSet<PathBuf>,
     thumbnail_pending: HashSet<PathBuf>,
+    thumbnail_control: ExecutionControl,
+    thumbnail_workers: Vec<thread::JoinHandle<()>>,
     logs: Vec<(bool, String)>,
     queue_tx: Sender<QueueEvent>,
     queue_rx: Receiver<QueueEvent>,
@@ -157,6 +159,8 @@ impl ForgeApp {
             thumbnails: HashMap::new(),
             thumbnail_errors: HashSet::new(),
             thumbnail_pending: HashSet::new(),
+            thumbnail_control: ExecutionControl::silent(),
+            thumbnail_workers: Vec::new(),
             logs: Vec::new(),
             queue_tx,
             queue_rx,
@@ -358,14 +362,27 @@ impl ForgeApp {
         for path in candidates {
             self.thumbnail_pending.insert(path.clone());
             let tx = self.thumbnail_tx.clone();
-            thread::spawn(move || {
-                let result = view::load_thumbnail(&path);
+            let control = self.thumbnail_control.clone();
+            self.thumbnail_workers.push(thread::spawn(move || {
+                let result = view::load_thumbnail(&path, control);
                 let _ = tx.send((path, result));
-            });
+            }));
         }
     }
 
     fn poll_thumbnails(&mut self, ctx: &egui::Context) {
+        // Reap workers after their result has been delivered. The worker list
+        // stays bounded by the small thumbnail concurrency limit.
+        let mut index = 0;
+        while index < self.thumbnail_workers.len() {
+            if self.thumbnail_workers[index].is_finished() {
+                let worker = self.thumbnail_workers.swap_remove(index);
+                let _ = worker.join();
+            } else {
+                index += 1;
+            }
+        }
+
         while let Ok((path, result)) = self.thumbnail_rx.try_recv() {
             self.thumbnail_pending.remove(&path);
             if !self.files.contains(&path) { continue; }
@@ -745,6 +762,11 @@ impl Drop for ForgeApp {
             control.cancel();
         }
         if let Some(worker) = self.queue_worker.take() {
+            let _ = worker.join();
+        }
+
+        self.thumbnail_control.cancel();
+        for worker in self.thumbnail_workers.drain(..) {
             let _ = worker.join();
         }
     }

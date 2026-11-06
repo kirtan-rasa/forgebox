@@ -31,7 +31,7 @@ use qrcode::QrCode;
 use std::cell::RefCell;
 use std::ffi::OsString;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 thread_local! {
     static EXECUTION_WARNINGS: RefCell<Vec<String>> = RefCell::new(Vec::new());
@@ -94,6 +94,26 @@ fn record_execution_warning(message: String) {
             warnings.push(message);
         }
     });
+}
+
+pub(crate) fn image_thumbnail_png(
+    path: &Path,
+    control: ExecutionControl,
+) -> Result<Vec<u8>, String> {
+    let args = vec![
+        os("-limit"),
+        os("thread"),
+        os(image_magick_thread_limit().to_string()),
+        os("-define"),
+        os("jpeg:size=1200x840"),
+        os(path),
+        os("-auto-orient"),
+        os("-thumbnail"),
+        os("600x420"),
+        os("png:-"),
+    ];
+
+    with_execution_control(control, || run_capture(image_magick_program(), args))
 }
 
 pub fn execute(job: Job) -> Result<Vec<PathBuf>, String> {
