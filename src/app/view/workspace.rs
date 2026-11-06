@@ -740,14 +740,19 @@ impl ForgeApp {
                                                     ui.add(egui::Label::new(RichText::new(warning).size(11.5).color(WARNING)).wrap());
                                                 }
                                             });
-                                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                                if ui.button("Open folder").clicked() {
-                                                    #[cfg(target_os = "linux")]
-                                                    { let _ = std::process::Command::new("xdg-open").arg(&self.output_dir).spawn(); }
-                                                    #[cfg(target_os = "macos")]
-                                                    { let _ = std::process::Command::new("open").arg(&self.output_dir).spawn(); }
-                                                }
-                                            });
+
+                                        }
+                                        if !self.running {
+                                            if let Some(output_dir) = self.last_output_dir.clone() {
+                                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                                    if ui.button("Open folder").clicked() {
+                                                        #[cfg(target_os = "linux")]
+                                                        { let _ = std::process::Command::new("xdg-open").arg(&output_dir).spawn(); }
+                                                        #[cfg(target_os = "macos")]
+                                                        { let _ = std::process::Command::new("open").arg(&output_dir).spawn(); }
+                                                    }
+                                                });
+                                            }
                                         }
                                     });
                                 });

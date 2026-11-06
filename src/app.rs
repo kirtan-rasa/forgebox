@@ -85,6 +85,7 @@ struct ForgeApp {
     queue_finished: usize,
     queue: Vec<QueuedJob>,
     queue_run_indices: Vec<usize>,
+    last_output_dir: Option<PathBuf>,
     wizard_step: usize,
     dragging_file: Option<PathBuf>,
     drag_insert_index: Option<usize>,
@@ -145,6 +146,7 @@ impl ForgeApp {
             queue_finished: 0,
             queue: Vec::new(),
             queue_run_indices: Vec::new(),
+            last_output_dir: None,
             wizard_step: 0,
             dragging_file: None,
             drag_insert_index: None,
@@ -509,6 +511,7 @@ impl ForgeApp {
         self.drag_insert_index = None;
         self.drag_card_size = None;
         self.wizard_step = 0;
+        self.last_output_dir = None;
         self.logs.clear();
         self.logs.push((true, format!("Added to queue: {tool_name}")));
     }
@@ -532,6 +535,7 @@ impl ForgeApp {
         // Queue execution is independent of the editor's current step.
         // Always show the live queue monitor while tasks are running.
         self.wizard_step = 2;
+        self.last_output_dir = None;
 
         let total = jobs.len();
         let queue_tx = self.queue_tx.clone();
@@ -604,6 +608,7 @@ impl ForgeApp {
         if !self.running {
             self.queue.clear();
             self.queue_run_indices.clear();
+            self.last_output_dir = None;
             self.logs.clear();
             self.completed_cancelled = false;
         }
@@ -638,6 +643,9 @@ impl ForgeApp {
                                 Ok(paths) => {
                                     entry.status = QueueStatus::Completed;
                                     entry.output_count = paths.len();
+                                    if !paths.is_empty() {
+                                        self.last_output_dir = Some(entry.job.output_dir.clone());
+                                    }
                                     entry.summary = Some(if paths.is_empty() {
                                         "Completed".into()
                                     } else {

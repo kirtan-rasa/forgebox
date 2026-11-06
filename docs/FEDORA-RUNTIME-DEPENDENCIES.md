@@ -14,6 +14,8 @@ Do not use `rpm -i` when you expect dependencies to be installed automatically: 
 
 Background removal is optional because `rembg` is a Python application with its own runtime and model. The current upstream release requires Python 3.11 or newer, but does not support Python 3.14 and later. Fedora 45 provides Python 3.13 alongside its newer system interpreter, so ForgeBox uses that version in a dedicated environment instead of changing the system Python or declaring `rembg` as a normal RPM requirement.
 
+The source setup script installs required tools, including Tesseract and its English/Russian language data. In an interactive terminal, DNF asks you to confirm the package transaction; afterward, the script separately asks whether to install optional `rembg`. Declining it does not affect the other conversion tools.
+
 The RPM includes a helper that creates a dedicated CPU environment using Python 3.13:
 
 ```bash

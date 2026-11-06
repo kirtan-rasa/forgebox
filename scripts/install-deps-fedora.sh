@@ -6,12 +6,34 @@ if ! command -v dnf >/dev/null 2>&1; then
   exit 1
 fi
 
-sudo dnf install -y \
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+DNF_FLAGS=()
+if [[ ! -t 0 ]]; then
+  DNF_FLAGS+=(--assumeyes)
+fi
+
+sudo dnf install "${DNF_FLAGS[@]}" \
   gcc gcc-c++ make pkgconf-pkg-config git rust cargo rustfmt \
   libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel \
   libXi-devel libXcursor-devel libXinerama-devel mesa-libGL-devel \
   ImageMagick poppler-utils ghostscript qpdf pdftk-java libreoffice \
   tesseract tesseract-langpack-eng tesseract-langpack-rus perl-Image-ExifTool
+
+if [[ -t 0 ]]; then
+  echo
+  read -r -p "Set up the optional rembg CPU backend now? [y/N] " install_rembg
+  case "$install_rembg" in
+    y|Y|yes|YES|Yes)
+      bash "$SCRIPT_DIR/install-rembg-fedora.sh"
+      ;;
+    *)
+      echo "Skipping rembg. You can install it later with: bash \"$SCRIPT_DIR/install-rembg-fedora.sh\""
+      ;;
+  esac
+else
+  echo "Skipping the optional rembg prompt in non-interactive mode."
+  echo "To install it later, run: bash \"$SCRIPT_DIR/install-rembg-fedora.sh\""
+fi
 
 cat <<'MSG'
 ForgeBox build dependencies and common file utilities installed.
