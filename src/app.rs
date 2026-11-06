@@ -532,7 +532,7 @@ impl ForgeApp {
         let control = ExecutionControl::new(self.status_tx.clone());
         self.execution_control = Some(control.clone());
         self.execution_status = "Preparing queue…".into();
-        self.active_task_name.clear();
+        self.active_task_name = "Queued tasks".into();
         self.active_queue_index = 0;
         self.queue_total = total;
         self.queue_finished = 0;
@@ -664,8 +664,9 @@ impl ForgeApp {
                     let completed = self.queue.iter().filter(|entry| entry.status == QueueStatus::Completed).count();
                     let failed = self.queue.iter().filter(|entry| entry.status == QueueStatus::Failed).count();
                     let cancelled_count = self.queue.iter().filter(|entry| entry.status == QueueStatus::Cancelled).count();
+                    let output_count: usize = self.queue.iter().map(|entry| entry.output_count).sum();
                     self.logs.push((true, format!(
-                        "Queue finished · {completed} completed · {failed} failed · {cancelled_count} cancelled"
+                        "Queue finished · {completed} completed · {output_count} output(s) · {failed} failed · {cancelled_count} cancelled"
                     )));
                     for entry in &self.queue {
                         match entry.status {

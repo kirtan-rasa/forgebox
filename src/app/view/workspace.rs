@@ -642,9 +642,10 @@ impl ForgeApp {
                         if !self.running && ui.add_enabled(can_run, egui::Button::new(RichText::new("＋  Add to queue").size(15.0).strong()).fill(if can_run { ACCENT } else { Color32::from_rgb(15, 35, 52) }).min_size(Vec2::new(ui.available_width(), 44.0))).clicked() {
                             self.start_job();
                         }
-                        if !self.running && !self.queue.is_empty() {
+                        let pending_count = self.queue.iter().filter(|entry| entry.status == super::super::QueueStatus::Pending).count();
+                        if !self.running && pending_count > 0 {
                             ui.add_space(6.0);
-                            if ui.add(egui::Button::new(RichText::new(format!("▶  Run queue ({})", self.queue.iter().filter(|entry| entry.status == super::super::QueueStatus::Pending).count())).strong()).fill(Color32::from_rgb(15, 73, 85)).min_size(Vec2::new(ui.available_width(), 40.0))).clicked() {
+                            if ui.add(egui::Button::new(RichText::new(format!("▶  Run queue ({pending_count})")).strong()).fill(Color32::from_rgb(15, 73, 85)).min_size(Vec2::new(ui.available_width(), 40.0))).clicked() {
                                 self.start_queue();
                             }
                         }
@@ -691,7 +692,7 @@ impl ForgeApp {
                                             ui.vertical(|ui| {
                                                 ui.label(RichText::new(format!("Processing: {}", self.active_task_name)).strong().color(CYAN));
                                                 let detail = if self.cancel_requested {
-                                                    "Waiting for the active process to stop…".to_owned().to_owned()
+                                                    "Waiting for the active process to stop…".to_owned()
                                                 } else if self.execution_status.is_empty() {
                                                     "ForgeBox will show the result here when the task finishes.".to_owned()
                                                 } else {
@@ -712,13 +713,13 @@ impl ForgeApp {
                                             let (icon_rect, _) = ui.allocate_exact_size(Vec2::new(18.0, 22.0), egui::Sense::hover());
                                             ui.painter().text(icon_rect.center(), egui::Align2::CENTER_CENTER, "!", FontId::proportional(18.0), WARNING);
                                             ui.vertical(|ui| {
-                                                ui.label(RichText::new("Task cancelled").strong().color(WARNING));
-                                                ui.label(RichText::new("The active process was stopped. Completed files may remain.").size(11.5).color(MUTED));
+                                                ui.label(RichText::new("Queue stopped").strong().color(WARNING));
+                                                ui.label(RichText::new("The active process was stopped and remaining tasks were cancelled. Completed files remain available.").size(11.5).color(MUTED));
                                             });
                                         } else if has_error {
                                             ui.label(RichText::new("✕").size(18.0).strong().color(RED));
                                             ui.vertical(|ui| {
-                                                ui.label(RichText::new("Conversion failed").strong().color(RED));
+                                                ui.label(RichText::new("Queue finished with errors").strong().color(RED));
                                                 for (_, message) in self.logs.iter().filter(|(ok, _)| !*ok) {
                                                     ui.add(egui::Label::new(RichText::new(message).size(12.0).color(TEXT).strong()).wrap());
                                                 }
@@ -733,9 +734,9 @@ impl ForgeApp {
                                             }
                                             ui.vertical(|ui| {
                                                 let summary = if has_warning {
-                                                    format!("Done with warnings · outputs saved: {success_count}")
+                                                    format!("Queue completed with warnings · {success_count} task(s)")
                                                 } else if success_count > 0 {
-                                                    format!("Done · outputs saved: {success_count}")
+                                                    format!("Queue completed · {success_count} task(s)")
                                                 } else {
                                                     self.logs.first().map(|(_, message)| message.clone()).unwrap_or_else(|| "Task completed".into())
                                                 };

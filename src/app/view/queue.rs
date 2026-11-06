@@ -1,5 +1,5 @@
 use super::super::{ForgeApp, QueueStatus};
-use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
+use eframe::egui::{self, Color32, RichText, Stroke};
 
 impl ForgeApp {
     pub(super) fn render_queue(&mut self, ui: &mut egui::Ui) {
