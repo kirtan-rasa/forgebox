@@ -1,5 +1,4 @@
 use super::{soffice_convert, Job};
-use crate::catalog::ToolId;
 use std::ffi::OsString;
 use std::fs;
 use std::io;

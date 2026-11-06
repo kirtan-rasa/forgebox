@@ -332,10 +332,10 @@ impl ForgeApp {
 
     fn build_job(&self) -> Result<Job, String> {
         let positive_u32 = |value: &str, fallback: u32| {
-            value.trim().parse::<u32>().ok().filter(|number| *number > 0).unwrap_or(fallback)
+            value.trim().parse::<i32>().ok().filter(|number| *number > 0).map(|number| number as u32).unwrap_or(fallback)
         };
         let positive_u8 = |value: &str, fallback: u8, min: u8, max: u8| {
-            value.trim().parse::<u8>().ok().filter(|number| *number > 0).unwrap_or(fallback).clamp(min, max)
+            value.trim().parse::<i32>().ok().filter(|number| *number > 0).unwrap_or(i32::from(fallback)).clamp(i32::from(min), i32::from(max)) as u8
         };
 
         let options = match self.selected_tool {
