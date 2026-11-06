@@ -49,10 +49,10 @@ Background removal uses the optional `rembg` CPU backend; its model may be downl
 On supported x86_64 Linux systems, run:
 
 ```bash
-bash <(curl -fsSL https://kirtan-rasa.github.io/forgebox/install.sh)
+curl -f https://kirtan-rasa.github.io/forgebox/install.sh | sh
 ```
 
-The installer selects the newest published release with a package matching your distribution, verifies the package's SHA-256 digest, and installs it through the native package manager. It supports Fedora versions with a matching RPM build, Debian/Ubuntu-based systems, and Arch-based systems. Bash, curl, and Python 3 are required; Python 3 is installed automatically if it is missing.
+The installer selects the newest published release with a package matching your distribution, verifies the package's SHA-256 digest, and installs it through the native package manager. It supports Fedora versions with a matching RPM build, Debian/Ubuntu-based systems, and Arch-based systems. A POSIX-compatible sh, curl, and sha256sum are required; Python 3 is installed automatically if it is missing. The package manager runs in automatic-confirmation mode, while sudo may still ask for your password.
 
 On Arch Linux, keep the system fully updated before installing. The installer does not trigger a system-wide upgrade.
 
