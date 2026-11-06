@@ -14,7 +14,7 @@ use self::command::{
     run_capture, run_magick_owned, run_ok, run_qpdf,
 };
 use self::common::{
-    files_with_prefix, first_file, os, output_for_input, process_each,
+    display_io, files_with_prefix, first_file, os, output_for_input, process_each,
     process_each_capture, process_each_convert, require_files, sort_numbered_paths,
     temp_dir, unique_path, unique_pattern, unique_prefix,
 };

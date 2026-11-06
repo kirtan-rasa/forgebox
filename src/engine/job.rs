@@ -206,28 +206,34 @@ pub enum JobOptions {
 
 impl JobOptions {
     pub fn matches_tool(&self, tool: ToolId) -> bool {
-        use JobOptions::*;
-        use ToolId::*;
+        use JobOptions as Options;
+        use ToolId as Tool;
 
         matches!(
             (tool, self),
-            (ImageConvert, ImageConvert { .. })
-                | (ImageResize, ImageResize { .. })
-                | (ImageCompress, ImageCompress { .. })
-                | (ImagesToPdf, ImagesToPdf { .. })
-                | (ImageOcr, ImageOcr { .. })
-                | (GenerateQr, GenerateQr { .. })
-                | (PdfSplit, PdfSplit { .. })
-                | (PdfCompress, PdfCompress { .. })
-                | (PdfRotate, PdfRotate { .. })
-                | (PdfReorder, PdfReorder { .. })
-                | (PdfToImages, PdfToImages { .. })
-                | (PdfWatermark, PdfWatermark { .. })
-                | (DataConvert, DataConvert { .. })
-                | (ExtractAudio, ExtractAudio { .. })
-                | (VideoConvert, VideoConvert { .. })
-                | (VideoToGif, VideoToGif { .. })
-                | (ImageGrayscale | RemoveBackground | ExtractExif | LongPngToPdf | PdfMerge | DocToPdf | PdfToDoc, None)
+            (Tool::ImageConvert, Options::ImageConvert { .. })
+                | (Tool::ImageResize, Options::ImageResize { .. })
+                | (Tool::ImageCompress, Options::ImageCompress { .. })
+                | (Tool::ImagesToPdf, Options::ImagesToPdf { .. })
+                | (Tool::ImageOcr, Options::ImageOcr { .. })
+                | (Tool::GenerateQr, Options::GenerateQr { .. })
+                | (Tool::PdfSplit, Options::PdfSplit { .. })
+                | (Tool::PdfCompress, Options::PdfCompress { .. })
+                | (Tool::PdfRotate, Options::PdfRotate { .. })
+                | (Tool::PdfReorder, Options::PdfReorder { .. })
+                | (Tool::PdfToImages, Options::PdfToImages { .. })
+                | (Tool::PdfWatermark, Options::PdfWatermark { .. })
+                | (Tool::DataConvert, Options::DataConvert { .. })
+                | (Tool::ExtractAudio, Options::ExtractAudio { .. })
+                | (Tool::VideoConvert, Options::VideoConvert { .. })
+                | (Tool::VideoToGif, Options::VideoToGif { .. })
+                | (Tool::ImageGrayscale, Options::None)
+                | (Tool::RemoveBackground, Options::None)
+                | (Tool::ExtractExif, Options::None)
+                | (Tool::LongPngToPdf, Options::None)
+                | (Tool::PdfMerge, Options::None)
+                | (Tool::DocToPdf, Options::None)
+                | (Tool::PdfToDoc, Options::None)
         )
     }
 }
