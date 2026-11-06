@@ -16,7 +16,7 @@ sudo dnf install "${DNF_FLAGS[@]}" \
   gcc gcc-c++ make pkgconf-pkg-config git rust cargo rustfmt \
   libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel \
   libXi-devel libXcursor-devel libXinerama-devel mesa-libGL-devel \
-  ImageMagick poppler-utils ghostscript qpdf pdftk-java libreoffice \
+  ImageMagick python3-img2pdf poppler-utils ghostscript qpdf pdftk-java libreoffice \
   tesseract tesseract-langpack-eng tesseract-langpack-rus perl-Image-ExifTool
 
 find_working_rembg() {

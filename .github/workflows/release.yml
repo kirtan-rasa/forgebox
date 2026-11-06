@@ -80,14 +80,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            imagemagick ghostscript qpdf poppler-utils pdftk-java \
+            imagemagick img2pdf ghostscript qpdf poppler-utils pdftk-java \
             libreoffice tesseract-ocr tesseract-ocr-eng \
             libimage-exiftool-perl ffmpeg fonts-dejavu-core
       - name: Verify required integration commands
         shell: bash
         run: |
           set -euo pipefail
-          for command in convert gs qpdf pdfunite pdfseparate pdftoppm pdftk \
+          for command in convert img2pdf gs qpdf pdfunite pdfseparate pdftoppm pdftk \
             libreoffice tesseract exiftool ffmpeg; do
             command -v "$command"
           done
