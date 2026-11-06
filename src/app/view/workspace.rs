@@ -639,7 +639,7 @@ impl ForgeApp {
                         }
                         ui.add_space(10.0);
                         let can_run = self.can_run();
-                        if !self.running && ui.add_enabled(can_run, egui::Button::new(RichText::new("＋  Add to queue").size(15.0).strong()).fill(if can_run { ACCENT } else { Color32::from_rgb(15, 35, 52) }).min_size(Vec2::new(ui.available_width(), 44.0))).clicked() {
+                        if !self.running && ui.add_enabled(can_run, egui::Button::new(RichText::new(format!("{}  Add to queue", glyph_text(self.icons_loaded, "󰐕"))).font(icon_font(16.0)).strong()).fill(if can_run { ACCENT } else { Color32::from_rgb(15, 35, 52) }).min_size(Vec2::new(ui.available_width(), 44.0))).clicked() {
                             self.start_job();
                         }
                         if !self.running && !can_run {
