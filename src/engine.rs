@@ -172,15 +172,28 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
                     if error.contains("Error opening data file")
                         || error.contains("Failed loading language")
                     {
-                        let fedora_packages = lang
+                        let languages = lang
                             .split('+')
                             .map(str::trim)
                             .filter(|language| !language.is_empty())
+                            .collect::<Vec<_>>();
+                        let fedora_packages = languages
+                            .iter()
                             .map(|language| format!("tesseract-langpack-{language}"))
                             .collect::<Vec<_>>()
                             .join(" ");
+                        let debian_packages = languages
+                            .iter()
+                            .map(|language| format!("tesseract-ocr-{language}"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let arch_packages = languages
+                            .iter()
+                            .map(|language| format!("tesseract-data-{language}"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
                         format!(
-                            "Tesseract language data for `{lang}` is missing. Install the matching language package and try again. On Fedora, use `sudo dnf install {fedora_packages}`."
+                            "Tesseract language data for `{lang}` is missing. Install the matching language package and try again. Examples: Fedora: `sudo dnf install {fedora_packages}`; Debian/Ubuntu: `sudo apt install {debian_packages}`; Arch: `sudo pacman -S {arch_packages}`."
                         )
                     } else {
                         error
@@ -240,11 +253,15 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
         (Tool::PdfCompress, Options::PdfCompress { profile }) => {
             let input = first_file(&job)?;
             let out = output_for_input(&job, input, "compressed", "pdf");
+            let mut output_argument = OsString::from("-sOutputFile=");
+            // Preserve non-UTF-8 Linux path bytes instead of round-tripping
+            // through Path::display(), which is intentionally lossy.
+            output_argument.push(out.as_os_str());
             let result = run_ok("gs", vec![
                 os("-sDEVICE=pdfwrite"), os("-dCompatibilityLevel=1.4"),
                 os(&format!("-dPDFSETTINGS=/{}", profile.as_str())),
                 os("-dNOPAUSE"), os("-dQUIET"), os("-dBATCH"),
-                os(&format!("-sOutputFile={}", out.display())), os(input),
+                output_argument, os(input),
             ]);
             if let Err(error) = result { let _ = fs::remove_file(&out); return Err(error); }
             Ok(vec![out])
@@ -660,5 +677,28 @@ mod subprocess_environment_tests {
                 .get_envs()
                 .any(|(key, _)| key == OsStr::new("PYTHONPATH"))
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod ghostscript_path_tests {
+    use super::OsString;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    use std::path::PathBuf;
+
+    #[test]
+    fn ghostscript_output_argument_preserves_non_utf8_path_bytes() {
+        let path = PathBuf::from(OsString::from_vec(
+            b"/tmp/forgebox-output-\\xff.pdf".to_vec(),
+        ));
+        let mut argument = OsString::from("-sOutputFile=");
+        argument.push(path.as_os_str());
+
+        let expected = [
+            b"-sOutputFile=".as_slice(),
+            path.as_os_str().as_bytes(),
+        ]
+        .concat();
+        assert_eq!(argument.as_os_str().as_bytes(), expected);
     }
 }
