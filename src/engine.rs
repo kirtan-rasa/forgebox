@@ -1,10 +1,10 @@
 use crate::catalog::ToolId;
 mod command;
 
+pub(crate) use self::command::{image_magick_program, image_magick_thread_limit};
 use self::command::{
-    command_version_succeeds, configure_command_environment, image_magick_program,
-    image_magick_thread_limit, recommended_image_magick_threads, run_capture,
-    run_magick_owned, run_ok, run_qpdf,
+    command_version_succeeds, configure_command_environment, recommended_image_magick_threads,
+    run_capture, run_magick_owned, run_ok, run_qpdf,
 };
 
 use csv::{ReaderBuilder, WriterBuilder};
