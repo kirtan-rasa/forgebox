@@ -632,8 +632,29 @@ pub(crate) fn image_magick_program() -> &'static str {
     })
 }
 
+/// Reserve at least one available CPU thread for the desktop UI and the rest
+/// of the system. Cap ImageMagick's parallelism to avoid saturating low-core CPUs.
+pub(crate) fn image_magick_thread_limit() -> usize {
+    recommended_image_magick_threads(
+        std::thread::available_parallelism()
+            .map(|parallelism| parallelism.get())
+            .unwrap_or(1),
+    )
+}
+
+fn recommended_image_magick_threads(available: usize) -> usize {
+    available.saturating_sub(1).clamp(1, 4)
+}
+
 fn run_magick_owned(args: Vec<OsString>) -> Result<(), String> {
-    run_ok(image_magick_program(), args).map(|_| ())
+    let mut limited_args = Vec::with_capacity(args.len() + 3);
+    limited_args.extend([
+        os("-limit"),
+        os("thread"),
+        os(image_magick_thread_limit().to_string()),
+    ]);
+    limited_args.extend(args);
+    run_ok(image_magick_program(), limited_args).map(|_| ())
 }
 
 fn command_candidates(program: &str) -> Vec<OsString> {
@@ -1179,6 +1200,19 @@ mod video_tests {
             "wma",
         ).expect_err("WMA is not a supported audio output target");
         assert!(error.contains("is not supported"));
+    }
+}
+
+#[cfg(test)]
+mod image_magick_resource_tests {
+    use super::recommended_image_magick_threads;
+
+    #[test]
+    fn image_magick_reserves_a_thread_and_caps_parallelism() {
+        assert_eq!(recommended_image_magick_threads(1), 1);
+        assert_eq!(recommended_image_magick_threads(2), 1);
+        assert_eq!(recommended_image_magick_threads(4), 3);
+        assert_eq!(recommended_image_magick_threads(32), 4);
     }
 }
 
