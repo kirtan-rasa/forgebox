@@ -4,7 +4,7 @@ use serde_json::{Map, Value};
 use qrcode::QrCode;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -626,11 +626,35 @@ fn soffice_convert(input: &Path, extension: &str, output: &Path) -> Result<(), S
     result
 }
 
-fn run_magick_owned(args: Vec<OsString>) -> Result<(), String> {
-    let program = *IMAGEMAGICK_PROGRAM.get_or_init(|| {
+pub(crate) fn image_magick_program() -> &'static str {
+    *IMAGEMAGICK_PROGRAM.get_or_init(|| {
         if has_command("magick") { "magick" } else { "convert" }
-    });
-    run_ok(program, args).map(|_| ())
+    })
+}
+
+/// Reserve at least one available CPU thread for the desktop UI and the rest
+/// of the system. Cap ImageMagick's parallelism to avoid saturating low-core CPUs.
+pub(crate) fn image_magick_thread_limit() -> usize {
+    recommended_image_magick_threads(
+        std::thread::available_parallelism()
+            .map(|parallelism| parallelism.get())
+            .unwrap_or(1),
+    )
+}
+
+fn recommended_image_magick_threads(available: usize) -> usize {
+    available.saturating_sub(1).clamp(1, 4)
+}
+
+fn run_magick_owned(args: Vec<OsString>) -> Result<(), String> {
+    let mut limited_args = Vec::with_capacity(args.len() + 3);
+    limited_args.extend([
+        os("-limit"),
+        os("thread"),
+        os(image_magick_thread_limit().to_string()),
+    ]);
+    limited_args.extend(args);
+    run_ok(image_magick_program(), limited_args).map(|_| ())
 }
 
 fn command_candidates(program: &str) -> Vec<OsString> {
@@ -659,12 +683,24 @@ fn command_candidates(program: &str) -> Vec<OsString> {
     }
 }
 
+/// Do not leak an AppImage's bundled Python paths into the optional
+/// rembg virtual environment. Python uses PYTHONHOME/PYTHONPATH before the
+/// venv's own stdlib and can fail before importing the CLI.
+fn configure_command_environment(program: &str, command: &mut Command) {
+    if program == "rembg" {
+        command.env_remove("PYTHONHOME");
+        command.env_remove("PYTHONPATH");
+    }
+}
+
 fn run_ok(program: &str, args: Vec<OsString>) -> Result<Output, String> {
     let candidates = command_candidates(program);
     let mut tried: Vec<String> = Vec::new();
     for candidate in candidates {
         let label = candidate.to_string_lossy().into_owned();
-        match Command::new(&candidate).args(args.iter()).output() {
+        let mut command = Command::new(&candidate);
+        configure_command_environment(program, &mut command);
+        match command.args(args.iter()).output() {
             Ok(output) if output.status.success() => return Ok(output),
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -777,8 +813,18 @@ fn parse_pdf_page_order(value: &str, page_count: u32) -> Result<Vec<u32>, String
     }).collect()
 }
 
+fn command_version_succeeds(candidate: &OsStr) -> bool {
+    Command::new(candidate)
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
 fn has_command(program: &str) -> bool {
-    command_candidates(program).iter().any(|candidate| Command::new(candidate).arg("--version").output().is_ok())
+    command_candidates(program)
+        .iter()
+        .any(|candidate| command_version_succeeds(candidate))
 }
 
 fn require_files(job: &Job, min: usize, message: &str) -> Result<(), String> {
@@ -1154,5 +1200,73 @@ mod video_tests {
             "wma",
         ).expect_err("WMA is not a supported audio output target");
         assert!(error.contains("is not supported"));
+    }
+}
+
+#[cfg(test)]
+mod image_magick_resource_tests {
+    use super::recommended_image_magick_threads;
+
+    #[test]
+    fn image_magick_reserves_a_thread_and_caps_parallelism() {
+        assert_eq!(recommended_image_magick_threads(1), 1);
+        assert_eq!(recommended_image_magick_threads(2), 1);
+        assert_eq!(recommended_image_magick_threads(4), 3);
+        assert_eq!(recommended_image_magick_threads(32), 4);
+    }
+}
+
+#[cfg(test)]
+mod command_detection_tests {
+    use super::command_version_succeeds;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn command_detection_requires_a_successful_exit_status() {
+        assert!(command_version_succeeds(OsStr::new("/bin/true")));
+        assert!(!command_version_succeeds(OsStr::new("/bin/false")));
+        assert!(!command_version_succeeds(OsStr::new(
+            "/definitely/missing/forgebox-command"
+        )));
+    }
+}
+
+
+#[cfg(test)]
+mod subprocess_environment_tests {
+    use super::configure_command_environment;
+    use std::ffi::OsStr;
+    use std::process::Command;
+
+    #[test]
+    fn rembg_does_not_inherit_appimage_python_paths() {
+        let mut command = Command::new("true");
+        configure_command_environment("rembg", &mut command);
+
+        for variable in ["PYTHONHOME", "PYTHONPATH"] {
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(key, value)| key == OsStr::new(variable) && value.is_none()),
+                "{variable} must be removed from the rembg subprocess"
+            );
+        }
+    }
+
+    #[test]
+    fn other_tools_keep_their_python_environment() {
+        let mut command = Command::new("true");
+        configure_command_environment("ffmpeg", &mut command);
+
+        assert!(
+            !command
+                .get_envs()
+                .any(|(key, _)| key == OsStr::new("PYTHONHOME"))
+        );
+        assert!(
+            !command
+                .get_envs()
+                .any(|(key, _)| key == OsStr::new("PYTHONPATH"))
+        );
     }
 }
