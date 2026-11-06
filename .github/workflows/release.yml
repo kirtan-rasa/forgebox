@@ -257,8 +257,16 @@ jobs:
           chown -R builder:builder "$GITHUB_WORKSPACE/dist"
           su builder -c "cd '$WORKDIR' && makepkg --nodeps --noconfirm"
           su builder -c "cd '$WORKDIR' && makepkg --printsrcinfo > .SRCINFO"
-          grep -Fq 'depends = pdftk' dist/linux/.SRCINFO
-          grep -Fq 'optdepends = ffmpeg: Enable audio, video, and GIF conversion' dist/linux/.SRCINFO
+          echo "Generated Arch .SRCINFO:"
+          cat dist/linux/.SRCINFO
+          grep -Fq 'depends = pdftk' dist/linux/.SRCINFO || {
+            echo "Generated .SRCINFO is missing the mandatory pdftk dependency." >&2
+            exit 1
+          }
+          grep -Fq 'optdepends = ffmpeg: Enable audio, video, and GIF conversion' dist/linux/.SRCINFO || {
+            echo "Generated .SRCINFO is missing the optional FFmpeg dependency." >&2
+            exit 1
+          }
 
           # makepkg --nodeps validates package construction but deliberately
           # skips dependency resolution. Ask pacman to resolve every mandatory
