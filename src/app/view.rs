@@ -853,7 +853,7 @@ fn reorder_item_to_index<T>(items: &mut Vec<T>, from: usize, target_index: usize
     items.insert(target_index.min(items.len()), item);
 }
 
-fn load_thumbnail(path: &Path) -> Result<egui::ColorImage, String> {
+pub(super) fn load_thumbnail(path: &Path) -> Result<egui::ColorImage, String> {
     let mut decoded = (|| -> Result<image::DynamicImage, String> {
         let reader = image::ImageReader::open(path).map_err(|e| e.to_string())?;
         let mut decoder = reader.into_decoder().map_err(|e| e.to_string())?;

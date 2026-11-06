@@ -299,7 +299,7 @@ impl ForgeApp {
             self.thumbnail_pending.insert(path.clone());
             let tx = self.thumbnail_tx.clone();
             thread::spawn(move || {
-                let result = load_thumbnail(&path);
+                let result = view::load_thumbnail(&path);
                 let _ = tx.send((path, result));
             });
         }
