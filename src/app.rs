@@ -460,7 +460,8 @@ impl ForgeApp {
         self.running = true;
         thread::spawn(move || {
             let result = execute_with_control(job, control.clone());
-            let cancelled = control.is_cancelled() && result.is_err();
+            let cancelled = control.is_cancelled()
+                && result.as_ref().err().map(|error| error.contains("Operation cancelled by user.")).unwrap_or(false);
             let warnings = take_execution_warnings();
             let _ = tx.send(JobResult { result, warnings, cancelled });
         });
