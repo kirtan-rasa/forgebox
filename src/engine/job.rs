@@ -243,11 +243,31 @@ pub struct Job {
     pub options: JobOptions,
 }
 
+const MAX_IMAGE_RESIZE_DIMENSION: u32 = 16_384;
+const MAX_IMAGE_RESIZE_PIXELS: u64 = 64_000_000;
+
 impl Job {
     pub fn new(tool: ToolId, files: Vec<PathBuf>, output_dir: PathBuf, options: JobOptions) -> Result<Self, String> {
         if !options.matches_tool(tool) {
             return Err(format!("The settings do not match the selected tool ({tool:?})."));
         }
+
+        if let JobOptions::ImageResize { width, height } = &options {
+            let requested_pixels = u64::from(*width) * u64::from(*height);
+            if *width == 0 || *height == 0 {
+                return Err("Image resize width and height must be greater than zero.".into());
+            }
+            if *width > MAX_IMAGE_RESIZE_DIMENSION
+                || *height > MAX_IMAGE_RESIZE_DIMENSION
+                || requested_pixels > MAX_IMAGE_RESIZE_PIXELS
+            {
+                return Err(
+                    "Image resize bounds are limited to 16,384 px per side and 64 megapixels in total."
+                        .into(),
+                );
+            }
+        }
+
         Ok(Self { tool, files, output_dir, options })
     }
 }
@@ -262,6 +282,26 @@ mod tests {
         let options = JobOptions::PdfSplit { range: "1,last".into() };
         assert!(!options.matches_tool(ToolId::PdfReorder));
         assert!(options.matches_tool(ToolId::PdfSplit));
+    }
+
+    #[test]
+    fn image_resize_rejects_zero_and_excessive_bounds() {
+        use super::{Job, JobOptions};
+        use std::path::PathBuf;
+
+        let make_job = |width, height| {
+            Job::new(
+                ToolId::ImageResize,
+                Vec::new(),
+                PathBuf::from("/tmp"),
+                JobOptions::ImageResize { width, height },
+            )
+        };
+
+        assert!(make_job(0, 100).is_err());
+        assert!(make_job(16_385, 1).is_err());
+        assert!(make_job(8_001, 8_000).is_err());
+        assert!(make_job(8_000, 8_000).is_ok());
     }
 
     #[test]

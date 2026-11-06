@@ -26,7 +26,7 @@ pub(super) fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
                 labeled_text(ui, "Width", &mut app.width, "1600");
                 labeled_text(ui, "Height", &mut app.height, "1200");
             });
-            ui.label(RichText::new("Image aspect ratio is preserved.").size(11.0).color(MUTED));
+            ui.label(RichText::new("Image aspect ratio is preserved. Resize bounds are limited to 16,384 px per side and 64 MP total.").size(11.0).color(MUTED));
         }
         ToolId::ImageCompress => {
             ui.label(RichText::new(format!("Quality: {}%", app.quality)).size(12.0));
