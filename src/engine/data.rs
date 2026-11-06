@@ -1,8 +1,16 @@
-use super::{display_io, first_file, normalized_ext, os, output_for_input, run_ok, temp_dir, Job};
+use super::{
+    check_cancelled, display_io, first_file, normalized_ext, os, output_for_input, report_status,
+    run_ok, temp_dir, Job,
+};
 use csv::{ReaderBuilder, WriterBuilder};
+use serde::de::{Error as _, SeqAccess, Visitor};
+use serde::ser::SerializeSeq;
+use serde::{Deserializer, Serializer};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
+use std::fmt;
 use std::fs;
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub(super) fn data_convert(job: &Job, target_format: &str) -> Result<Vec<PathBuf>, String> {
@@ -58,10 +66,16 @@ pub(super) fn data_convert(job: &Job, target_format: &str) -> Result<Vec<PathBuf
 }
 
 pub(super) fn csv_to_json(input: &Path, output: &Path) -> Result<(), String> {
-    // Keep short rows compatible by filling missing cells with empty strings,
-    // but reject extra cells and duplicate headers instead of silently losing data.
-    let mut reader = ReaderBuilder::new().flexible(true).from_path(input).map_err(|e| format!("Could not read CSV: {e}"))?;
-    let headers = reader.headers().map_err(|e| format!("Failed to read CSV headers: {e}"))?.clone();
+    // Serialize one CSV row at a time instead of keeping the whole document in memory.
+    let mut reader = ReaderBuilder::new()
+        .flexible(true)
+        .from_path(input)
+        .map_err(|e| format!("Could not read CSV: {e}"))?;
+    let headers = reader
+        .headers()
+        .map_err(|e| format!("Failed to read CSV headers: {e}"))?
+        .clone();
+
     let mut unique_headers = BTreeSet::new();
     for header in &headers {
         if !unique_headers.insert(header) {
@@ -69,45 +83,164 @@ pub(super) fn csv_to_json(input: &Path, output: &Path) -> Result<(), String> {
         }
     }
 
-    let mut rows = Vec::new();
-    for (row_index, row) in reader.records().enumerate() {
-        let record = row.map_err(|e| format!("CSV row {}: {e}", row_index + 2))?;
-        if record.len() > headers.len() {
-            return Err(format!(
-                "CSV row {} contains {} fields, but the header has {} columns. Extra fields would be lost; check the source CSV.",
-                row_index + 2,
-                record.len(),
-                headers.len()
-            ));
+    let result = (|| -> Result<(), String> {
+        let file = fs::File::create(output).map_err(display_io)?;
+        let mut serializer = serde_json::Serializer::pretty(BufWriter::new(file));
+        let mut sequence = serializer
+            .serialize_seq(None)
+            .map_err(|error| format!("Failed to write JSON: {error}"))?;
+
+        for (row_index, row) in reader.records().enumerate() {
+            check_cancelled()?;
+            if row_index == 0 || (row_index + 1) % 10_000 == 0 {
+                report_status(format!("Converting CSV row {}", row_index + 1));
+            }
+
+            let record = row.map_err(|error| format!("CSV row {}: {error}", row_index + 2))?;
+            if record.len() > headers.len() {
+                return Err(format!(
+                    "CSV row {} contains {} fields, but the header has {} columns. Extra fields would be lost; check the source CSV.",
+                    row_index + 2,
+                    record.len(),
+                    headers.len()
+                ));
+            }
+
+            let mut object = Map::new();
+            for (index, header) in headers.iter().enumerate() {
+                object.insert(
+                    header.to_string(),
+                    Value::String(record.get(index).unwrap_or("").to_string()),
+                );
+            }
+            sequence
+                .serialize_element(&object)
+                .map_err(|error| format!("Failed to write JSON: {error}"))?;
         }
 
-        let mut object = Map::new();
-        for (i, header) in headers.iter().enumerate() {
-            object.insert(header.to_string(), Value::String(record.get(i).unwrap_or("").to_string()));
-        }
-        rows.push(Value::Object(object));
+        sequence
+            .end()
+            .map_err(|error| format!("Failed to write JSON: {error}"))?;
+        let mut writer = serializer.into_inner();
+        writer.flush().map_err(display_io)?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(output);
     }
-    fs::write(output, serde_json::to_vec_pretty(&Value::Array(rows)).map_err(|e| e.to_string())?).map_err(display_io)
+    result
 }
 
 pub(super) fn json_to_csv(input: &Path, output: &Path) -> Result<(), String> {
-    let text = fs::read_to_string(input).map_err(display_io)?;
-    let value: Value = serde_json::from_str(&text).map_err(|e| format!("Invalid JSON: {e}"))?;
-    let rows = value.as_array().ok_or("JSON must contain an array of objects, for example [{\"name\":\"Ada\"}].")?;
+    // Discover the union of object keys in a first streaming pass. A second pass
+    // writes rows, so JSON arrays with differing object keys remain supported.
     let mut header_set = BTreeSet::new();
-    for row in rows {
-        let object = row.as_object().ok_or("Each JSON row must be an object.")?;
+    let mut scanned_rows = 0usize;
+    let input_file = fs::File::open(input).map_err(display_io)?;
+    visit_json_rows(BufReader::new(input_file), |row| {
+        check_cancelled()?;
+        scanned_rows += 1;
+        if scanned_rows == 1 || scanned_rows % 10_000 == 0 {
+            report_status(format!("Scanning JSON rows ({scanned_rows})"));
+        }
+        let object = row
+            .as_object()
+            .ok_or("Each JSON row must be an object.")?;
         header_set.extend(object.keys().cloned());
-    }
+        Ok(())
+    })?;
+
+    check_cancelled()?;
     let headers: Vec<String> = header_set.into_iter().collect();
-    let mut writer = WriterBuilder::new().from_path(output).map_err(|e| format!("Failed to create CSV: {e}"))?;
-    writer.write_record(&headers).map_err(|e| e.to_string())?;
-    for row in rows {
-        let object = row.as_object().expect("validated above");
-        let record = headers.iter().map(|key| object.get(key).map(json_cell).unwrap_or_default()).collect::<Vec<_>>();
-        writer.write_record(record).map_err(|e| e.to_string())?;
+    let file = fs::File::create(output).map_err(display_io)?;
+    let mut writer = WriterBuilder::new().from_writer(BufWriter::new(file));
+
+    let result = (|| -> Result<(), String> {
+        writer.write_record(&headers).map_err(|error| error.to_string())?;
+
+        let mut written_rows = 0usize;
+        let input_file = fs::File::open(input).map_err(display_io)?;
+        visit_json_rows(BufReader::new(input_file), |row| {
+            check_cancelled()?;
+            written_rows += 1;
+            if written_rows == 1 || written_rows % 10_000 == 0 {
+                report_status(format!("Writing CSV row ({written_rows})"));
+            }
+
+            let object = row
+                .as_object()
+                .ok_or("Each JSON row must be an object.")?;
+            let record = headers
+                .iter()
+                .map(|key| object.get(key).map(json_cell).unwrap_or_default())
+                .collect::<Vec<_>>();
+            writer
+                .write_record(record)
+                .map_err(|error| error.to_string())
+        })?;
+
+        writer.flush().map_err(display_io)
+    })();
+
+    if result.is_err() {
+        drop(writer);
+        let _ = fs::remove_file(output);
     }
-    writer.flush().map_err(display_io)
+    result
+}
+
+fn visit_json_rows<R, F>(reader: R, mut visit: F) -> Result<(), String>
+where
+    R: Read,
+    F: FnMut(Value) -> Result<(), String>,
+{
+    struct RowsVisitor<'a, F> {
+        visit: &'a mut F,
+        row_error: &'a mut Option<String>,
+    }
+
+    impl<'de, F> Visitor<'de> for RowsVisitor<'_, F>
+    where
+        F: FnMut(Value) -> Result<(), String>,
+    {
+        type Value = ();
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("an array of JSON objects")
+        }
+
+        fn visit_seq<A>(mut self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            while let Some(row) = sequence.next_element::<Value>()? {
+                if let Err(error) = (self.visit)(row) {
+                    *self.row_error = Some(error.clone());
+                    return Err(A::Error::custom(error));
+                }
+            }
+            Ok(())
+        }
+    }
+
+    let mut deserializer = serde_json::Deserializer::from_reader(reader);
+    let mut row_error = None;
+    let parsed = deserializer.deserialize_seq(RowsVisitor {
+        visit: &mut visit,
+        row_error: &mut row_error,
+    });
+
+    match parsed {
+        Ok(()) => deserializer
+            .end()
+            .map_err(|error| format!("Invalid JSON: {error}")),
+        Err(_) if row_error.is_some() => Err(row_error.expect("checked above")),
+        Err(error) if error.is_data() => Err(
+            "JSON must contain an array of objects, for example [{\"name\":\"Ada\"}].".into(),
+        ),
+        Err(error) => Err(format!("Invalid JSON: {error}")),
+    }
 }
 
 fn json_cell(value: &Value) -> String {
@@ -171,4 +304,112 @@ pub(super) fn soffice_convert(input: &Path, extension: &str, output: &Path) -> R
     let _ = fs::remove_dir_all(&temp);
     if result.is_err() { let _ = fs::remove_file(output); }
     result
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::{csv_to_json, json_to_csv, temp_dir};
+    use csv::Reader;
+    use serde_json::Value;
+    use std::fs;
+
+    #[test]
+    fn csv_to_json_streams_rows_and_fills_missing_cells() {
+        let directory = temp_dir("csv-json-stream-test").unwrap();
+        let input = directory.join("input.csv");
+        let output = directory.join("output.json");
+        fs::write(&input, "name,city\nAda\nGrace,London\n").unwrap();
+
+        csv_to_json(&input, &output).unwrap();
+
+        let value: Value =
+            serde_json::from_slice(&fs::read(&output).unwrap()).expect("output must be JSON");
+        assert_eq!(
+            value,
+            serde_json::json!([
+                {"name": "Ada", "city": ""},
+                {"name": "Grace", "city": "London"}
+            ])
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn json_to_csv_streams_rows_and_unions_object_keys() {
+        let directory = temp_dir("json-csv-stream-test").unwrap();
+        let input = directory.join("input.json");
+        let output = directory.join("output.csv");
+        fs::write(
+            &input,
+            r#"[{"z":1,"name":"Ada","nested":{"ok":true}},{"active":true,"name":null}]"#,
+        )
+        .unwrap();
+
+        json_to_csv(&input, &output).unwrap();
+
+        let mut reader = Reader::from_path(&output).unwrap();
+        assert_eq!(
+            reader.headers().unwrap().iter().collect::<Vec<_>>(),
+            vec!["active", "name", "nested", "z"]
+        );
+        let rows = reader
+            .records()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].get(0), Some(""));
+        assert_eq!(rows[0].get(1), Some("Ada"));
+        assert_eq!(rows[0].get(2), Some(r#"{"ok":true}"#));
+        assert_eq!(rows[0].get(3), Some("1"));
+        assert_eq!(rows[1].get(0), Some("true"));
+        assert_eq!(rows[1].get(1), Some(""));
+        assert_eq!(rows[1].get(2), Some(""));
+        assert_eq!(rows[1].get(3), Some(""));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn json_to_csv_rejects_invalid_shapes_without_leaving_partial_output() {
+        let directory = temp_dir("json-csv-invalid-test").unwrap();
+        let input = directory.join("input.json");
+        let output = directory.join("output.csv");
+
+        fs::write(&input, "{}").unwrap();
+        assert_eq!(
+            json_to_csv(&input, &output).unwrap_err(),
+            "JSON must contain an array of objects, for example [{\"name\":\"Ada\"}]."
+        );
+        assert!(!output.exists());
+
+        fs::write(&input, "[1]").unwrap();
+        assert_eq!(
+            json_to_csv(&input, &output).unwrap_err(),
+            "Each JSON row must be an object."
+        );
+        assert!(!output.exists());
+
+        fs::write(&input, "[").unwrap();
+        assert!(json_to_csv(&input, &output)
+            .unwrap_err()
+            .starts_with("Invalid JSON:"));
+        assert!(!output.exists());
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn csv_to_json_removes_partial_output_on_invalid_rows() {
+        let directory = temp_dir("csv-json-invalid-test").unwrap();
+        let input = directory.join("input.csv");
+        let output = directory.join("output.json");
+        fs::write(&input, "name\nAda,extra\n").unwrap();
+
+        assert!(csv_to_json(&input, &output)
+            .unwrap_err()
+            .contains("Extra fields would be lost"));
+        assert!(!output.exists());
+
+        fs::remove_dir_all(directory).unwrap();
+    }
 }
