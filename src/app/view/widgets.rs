@@ -1,4 +1,5 @@
 use super::super::theme::*;
+use super::icons::{glyph_text, icon_font};
 use eframe::egui::{self, Color32, FontId, RichText, Stroke, Vec2};
 
 pub(super) fn reorder_arrow_button(ui: &mut egui::Ui, enabled: bool, up: bool, tooltip: &str) -> bool {
