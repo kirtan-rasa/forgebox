@@ -7,8 +7,6 @@ mod media;
 mod pdf;
 mod command;
 
-mod command;
-
 pub(crate) use self::command::{image_magick_program, image_magick_thread_limit};
 use self::command::{
     command_version_succeeds, configure_command_environment, recommended_image_magick_threads,
