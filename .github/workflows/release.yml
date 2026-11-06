@@ -106,22 +106,24 @@ jobs:
           # --assumeno performs dependency resolution but refuses the
           # transaction, so the Fedora runner remains unchanged.
           set +e
-          dnf install --assumeno --nogpgcheck ./dist/*.rpm >"$DNF_LOG" 2>&1
+          dnf install --assumeno --nogpgcheck \
+            --setopt=install_weak_deps=False ./dist/*.rpm >"$DNF_LOG" 2>&1
           dnf_status=$?
           set -e
 
-          if ! grep -Eq 'Dependencies resolved|Nothing to do' "$DNF_LOG"; then
+          # DNF 5 exits non-zero when --assumeno rejects an otherwise valid
+          # transaction. A transaction summary followed by the expected abort
+          # confirms the dependency solver completed without installing.
+          if grep -Fq 'Transaction Summary:' "$DNF_LOG" \
+            && grep -Fq 'Operation aborted by the user.' "$DNF_LOG"; then
+            echo "DNF resolved the RPM runtime dependencies; the transaction was intentionally declined."
+          elif grep -Fq 'Nothing to do.' "$DNF_LOG"; then
+            echo "DNF reports no additional RPM dependencies are required."
+          else
             cat "$DNF_LOG"
-            echo "DNF could not resolve the RPM runtime dependencies." >&2
+            echo "DNF could not resolve the RPM runtime dependencies (exit $dnf_status)." >&2
             exit 1
           fi
-
-          if (( dnf_status > 1 )); then
-            cat "$DNF_LOG"
-            exit "$dnf_status"
-          fi
-
-          echo "DNF resolved all declared RPM dependencies without installing them."
 
       - name: Test RPM signing in an isolated environment
         shell: bash
@@ -264,7 +266,15 @@ jobs:
           # downloading or installing the application dependencies.
           mapfile -t RUNTIME_DEPENDS < <(sed -n 's/^depends = //p' dist/linux/.SRCINFO)
           test "${#RUNTIME_DEPENDS[@]}" -gt 0
-          pacman -Sp --print-format '%n' "${RUNTIME_DEPENDS[@]}" >/dev/null
+
+          PACMAN_LOG="$(mktemp)"
+          trap 'rm -f "$PACMAN_LOG"' EXIT
+          if ! pacman -Sp --print-format '%n' "${RUNTIME_DEPENDS[@]}" >"$PACMAN_LOG" 2>&1; then
+            cat "$PACMAN_LOG"
+            echo "Pacman could not resolve one or more mandatory runtime dependencies." >&2
+            exit 1
+          fi
+          cat "$PACMAN_LOG"
 
           test -n "$(find dist/linux -maxdepth 1 -type f -name '*.pkg.tar.*' -print -quit)"
           test -s dist/linux/.SRCINFO
