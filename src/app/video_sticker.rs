@@ -291,120 +291,358 @@ impl VideoStickerEditor {
     }
 
     pub(super) fn render(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Trim the clip, preview the result, then position the square sticker frame.").size(12.5).color(Color32::from_rgb(176, 196, 211)));
-        ui.add_space(7.0);
+        // Keep the editor at a comfortable reading width and center it in the
+        // workspace instead of letting the preview hug the left edge.
+        let available_width = ui.available_width();
+        let editor_width = available_width.min(900.0);
+        let side_padding = ((available_width - editor_width) * 0.5).max(0.0);
+
+        ui.horizontal(|ui| {
+            if side_padding > 0.0 {
+                ui.add_space(side_padding);
+            }
+            ui.vertical(|ui| {
+                ui.set_width(editor_width);
+                self.render_editor_contents(ui);
+            });
+        });
+    }
+
+    fn render_editor_contents(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            RichText::new("Trim the clip, preview the result, then position the square sticker frame.")
+                .size(12.5)
+                .color(Color32::from_rgb(176, 196, 211)),
+        );
+        ui.add_space(9.0);
+
         if let Some(error) = &self.error {
             ui.colored_label(Color32::from_rgb(239, 125, 139), error);
             return;
         }
         let Some(info) = self.info else {
-            ui.horizontal(|ui| { ui.spinner(); ui.label("Analyzing video with FFprobe…"); });
+            ui.vertical_centered(|ui| {
+                ui.add_space(24.0);
+                ui.spinner();
+                ui.label("Analyzing video with FFprobe…");
+                ui.add_space(24.0);
+            });
             return;
         };
 
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(format!("{} × {}", info.width, info.height)).size(11.5).color(Color32::from_rgb(176, 196, 211)));
-            ui.separator();
-            ui.label(RichText::new(format!("Source {}", time_label(info.duration_ms))).size(11.5).color(Color32::from_rgb(176, 196, 211)));
-            ui.separator();
-            ui.label(RichText::new("512 × 512 · VP9 · WebM").size(11.5).color(Color32::from_rgb(72, 190, 218)));
-        });
-        ui.add_space(8.0);
-        self.draw_preview(ui, info);
-        ui.add_space(8.0);
-
-        ui.horizontal(|ui| {
-            let can_start = self.playback_worker.is_none() && !self.is_playing;
-            let label = if self.is_playing { "Ⅱ  Pause" } else if self.playback_worker.is_some() { "Stopping…" } else { "▶  Play preview" };
-            let enabled = self.is_playing || can_start;
-            if ui.add_enabled(enabled, egui::Button::new(RichText::new(label).strong()).min_size(Vec2::new(132.0, 34.0)).fill(Color32::from_rgb(24, 91, 126))).clicked() {
-                if self.is_playing { self.stop_playback(); } else { self.start_playback(); }
-            }
-            ui.label(RichText::new(format!("{} / {}", time_label(self.playhead_ms), time_label(self.end_ms))).monospace().size(12.0).color(Color32::from_rgb(176, 196, 211)));
-            if let Some(error) = &self.playback_error {
-                ui.colored_label(Color32::from_rgb(239, 125, 139), error);
-            }
-        });
-
-        ui.add_space(12.0);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("TRIM CLIP").strong().size(11.0).color(Color32::from_rgb(72, 190, 218)));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new(format!("{:.2}s selected · 3.00s maximum", (self.end_ms - self.start_ms) as f32 / 1_000.0)).monospace().size(11.0).color(Color32::from_rgb(176, 196, 211)));
+        egui::Frame::none()
+            .fill(Color32::from_rgb(7, 19, 32))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(24, 76, 106)))
+            .rounding(8.0)
+            .inner_margin(egui::Margin::symmetric(12.0, 9.0))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new(format!("{} × {}", info.width, info.height))
+                            .size(11.5)
+                            .color(Color32::from_rgb(176, 196, 211)),
+                    );
+                    ui.separator();
+                    ui.label(
+                        RichText::new(format!("Source {}", time_label(info.duration_ms)))
+                            .size(11.5)
+                            .color(Color32::from_rgb(176, 196, 211)),
+                    );
+                    ui.separator();
+                    ui.label(
+                        RichText::new("512 × 512 · VP9 · WebM")
+                            .size(11.5)
+                            .color(Color32::from_rgb(72, 190, 218)),
+                    );
+                });
             });
-        });
-        self.draw_timeline(ui, info);
+
+        ui.add_space(9.0);
+        egui::Frame::none()
+            .fill(Color32::from_rgb(5, 15, 26))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(24, 76, 106)))
+            .rounding(10.0)
+            .inner_margin(egui::Margin::symmetric(10.0, 10.0))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                self.draw_preview(ui, info);
+            });
+
+        ui.add_space(9.0);
+        let controls_width = 300.0_f32.min(ui.available_width());
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("IN  {}", time_label(self.start_ms))).monospace().size(11.0).color(Color32::from_rgb(72, 190, 218)));
-            ui.separator();
-            ui.label(RichText::new(format!("OUT  {}", time_label(self.end_ms))).monospace().size(11.0).color(Color32::from_rgb(72, 190, 218)));
+            let row_width = ui.available_width();
+            ui.add_space(((row_width - controls_width) * 0.5).max(0.0));
+            let can_start = self.playback_worker.is_none() && !self.is_playing;
+            let label = if self.is_playing {
+                "Ⅱ  Pause"
+            } else if self.playback_worker.is_some() {
+                "Stopping…"
+            } else {
+                "▶  Play preview"
+            };
+            let enabled = self.is_playing || can_start;
+            if ui
+                .add_enabled(
+                    enabled,
+                    egui::Button::new(RichText::new(label).strong())
+                        .min_size(Vec2::new(132.0, 34.0))
+                        .fill(Color32::from_rgb(24, 91, 126)),
+                )
+                .clicked()
+            {
+                if self.is_playing {
+                    self.stop_playback();
+                } else {
+                    self.start_playback();
+                }
+            }
+            ui.label(
+                RichText::new(format!(
+                    "{} / {}",
+                    time_label(self.playhead_ms),
+                    time_label(self.end_ms)
+                ))
+                .monospace()
+                .size(12.0)
+                .color(Color32::from_rgb(176, 196, 211)),
+            );
         });
+        if let Some(error) = &self.playback_error {
+            ui.vertical_centered(|ui| {
+                ui.colored_label(Color32::from_rgb(239, 125, 139), error);
+            });
+        }
 
         ui.add_space(14.0);
-        ui.label(RichText::new("FRAME").strong().size(11.0).color(Color32::from_rgb(72, 190, 218)));
-        ui.add_space(4.0);
-        let previous_fit = self.fit;
-        ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.fit, VideoStickerFit::Crop, "Fill · Crop");
-            ui.selectable_value(&mut self.fit, VideoStickerFit::Fit, "Fit whole frame");
-        });
-        if self.fit != previous_fit { self.stop_playback(); }
-        if self.fit == VideoStickerFit::Crop {
-            ui.label(RichText::new("Drag the square to move it. Drag any corner to resize it while keeping the square shape.").size(11.0).color(Color32::from_rgb(150, 173, 191)));
-        } else {
-            ui.label(RichText::new("The entire source frame remains visible; empty space is transparent.").size(11.0).color(Color32::from_rgb(150, 173, 191)));
-        }
-        ui.add_space(7.0);
-        ui.label(RichText::new("Telegram constraints are checked on export: 3 seconds, 30 FPS, no audio, maximum 256 KB.").size(11.0).color(Color32::from_rgb(150, 173, 191)));
+        egui::Frame::none()
+            .fill(Color32::from_rgb(7, 19, 32))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(24, 76, 106)))
+            .rounding(8.0)
+            .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("TRIM CLIP")
+                            .strong()
+                            .size(11.0)
+                            .color(Color32::from_rgb(72, 190, 218)),
+                    );
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{:.2}s selected · 3.00s maximum",
+                                    (self.end_ms - self.start_ms) as f32 / 1_000.0
+                                ))
+                                .monospace()
+                                .size(11.0)
+                                .color(Color32::from_rgb(176, 196, 211)),
+                            );
+                        },
+                    );
+                });
+                ui.add_space(5.0);
+                self.draw_timeline(ui, info);
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("IN  {}", time_label(self.start_ms)))
+                            .monospace()
+                            .size(11.0)
+                            .color(Color32::from_rgb(72, 190, 218)),
+                    );
+                    ui.separator();
+                    ui.label(
+                        RichText::new(format!("OUT  {}", time_label(self.end_ms)))
+                            .monospace()
+                            .size(11.0)
+                            .color(Color32::from_rgb(72, 190, 218)),
+                    );
+                });
+            });
+
+        ui.add_space(10.0);
+        egui::Frame::none()
+            .fill(Color32::from_rgb(7, 19, 32))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(24, 76, 106)))
+            .rounding(8.0)
+            .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    RichText::new("FRAME")
+                        .strong()
+                        .size(11.0)
+                        .color(Color32::from_rgb(72, 190, 218)),
+                );
+                ui.add_space(5.0);
+                let previous_fit = self.fit;
+                ui.horizontal_wrapped(|ui| {
+                    ui.selectable_value(&mut self.fit, VideoStickerFit::Crop, "Fill · Crop");
+                    ui.selectable_value(&mut self.fit, VideoStickerFit::Fit, "Fit whole frame");
+                });
+                if self.fit != previous_fit {
+                    self.stop_playback();
+                }
+                ui.add_space(4.0);
+                if self.fit == VideoStickerFit::Crop {
+                    ui.label(
+                        RichText::new("Drag the square to move it. Drag any corner to resize it while keeping the square shape.")
+                            .size(11.0)
+                            .color(Color32::from_rgb(150, 173, 191)),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new("The entire source frame remains visible; empty space is transparent.")
+                            .size(11.0)
+                            .color(Color32::from_rgb(150, 173, 191)),
+                    );
+                }
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new("Telegram constraints are checked on export: 3 seconds, 30 FPS, no audio, maximum 256 KB.")
+                        .size(11.0)
+                        .color(Color32::from_rgb(150, 173, 191)),
+                );
+            });
     }
 
     fn draw_preview(&mut self, ui: &mut egui::Ui, info: VideoInfo) {
         if self.is_playing {
-            let desired = 320.0_f32.min(ui.available_width().max(220.0));
-            let (rect, _) = ui.allocate_exact_size(Vec2::splat(desired), Sense::hover());
-            ui.painter().rect_filled(rect, 8.0, Color32::from_rgb(5, 15, 26));
-            if let Some(texture) = self.playback_texture.as_ref() {
-                ui.painter().image(texture.id(), rect.shrink(2.0), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
-            } else {
-                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Starting preview…", FontId::proportional(12.0), Color32::from_rgb(145, 169, 188));
-            }
+            let desired = ui.available_width().min(360.0);
+            let row_width = ui.available_width();
+            ui.horizontal(|ui| {
+                ui.add_space(((row_width - desired) * 0.5).max(0.0));
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(desired), Sense::hover());
+                ui.painter().rect_filled(rect, 8.0, Color32::from_rgb(5, 15, 26));
+                if let Some(texture) = self.playback_texture.as_ref() {
+                    ui.painter().image(
+                        texture.id(),
+                        rect.shrink(2.0),
+                        egui::Rect::from_min_max(
+                            egui::pos2(0.0, 0.0),
+                            egui::pos2(1.0, 1.0),
+                        ),
+                        Color32::WHITE,
+                    );
+                } else {
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "Starting preview…",
+                        FontId::proportional(12.0),
+                        Color32::from_rgb(145, 169, 188),
+                    );
+                }
+            });
             return;
         }
 
         let Some(texture) = self.texture.as_ref() else {
-            let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width().min(640.0), 250.0), Sense::hover());
-            ui.painter().rect_filled(rect, 7.0, Color32::from_rgb(5, 15, 26));
-            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Rendering preview frame…", FontId::proportional(13.0), Color32::from_rgb(145, 169, 188));
-            if let Some(error) = &self.frame_error { ui.colored_label(Color32::from_rgb(239, 125, 139), error); }
+            let desired_width = ui.available_width().min(680.0);
+            let row_width = ui.available_width();
+            ui.horizontal(|ui| {
+                ui.add_space(((row_width - desired_width) * 0.5).max(0.0));
+                let (rect, _) = ui.allocate_exact_size(
+                    Vec2::new(desired_width, 250.0),
+                    Sense::hover(),
+                );
+                ui.painter().rect_filled(rect, 7.0, Color32::from_rgb(5, 15, 26));
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "Rendering preview frame…",
+                    FontId::proportional(13.0),
+                    Color32::from_rgb(145, 169, 188),
+                );
+            });
+            if let Some(error) = &self.frame_error {
+                ui.vertical_centered(|ui| {
+                    ui.colored_label(Color32::from_rgb(239, 125, 139), error);
+                });
+            }
             return;
         };
 
+        let texture_id = texture.id();
         let source_size = texture.size_vec2();
-        let scale = (ui.available_width().min(680.0).max(220.0) / source_size.x).min(370.0 / source_size.y);
+        let max_width = ui.available_width().min(680.0);
+        let scale = (max_width / source_size.x).min(370.0 / source_size.y);
         let display_size = source_size * scale;
-        let (image_rect, _) = ui.allocate_exact_size(display_size, Sense::hover());
-        ui.painter().rect_filled(image_rect, 5.0, Color32::from_rgb(5, 15, 26));
-        ui.painter().image(texture.id(), image_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+        let row_width = ui.available_width();
+        ui.horizontal(|ui| {
+            ui.add_space(((row_width - display_size.x) * 0.5).max(0.0));
+            let (image_rect, _) = ui.allocate_exact_size(display_size, Sense::hover());
+            ui.painter().rect_filled(image_rect, 5.0, Color32::from_rgb(5, 15, 26));
+            ui.painter().image(
+                texture_id,
+                image_rect,
+                egui::Rect::from_min_max(
+                    egui::pos2(0.0, 0.0),
+                    egui::pos2(1.0, 1.0),
+                ),
+                Color32::WHITE,
+            );
 
-        if self.fit == VideoStickerFit::Crop {
-            let crop = crop_rect_for_preview(info, image_rect, self.left, self.top, self.zoom);
-            let shade = Color32::from_black_alpha(145);
-            for r in [
-                egui::Rect::from_min_max(image_rect.min, egui::pos2(image_rect.right(), crop.top())),
-                egui::Rect::from_min_max(egui::pos2(image_rect.left(), crop.bottom()), image_rect.max),
-                egui::Rect::from_min_max(egui::pos2(image_rect.left(), crop.top()), egui::pos2(crop.left(), crop.bottom())),
-                egui::Rect::from_min_max(egui::pos2(crop.right(), crop.top()), egui::pos2(image_rect.right(), crop.bottom())),
-            ] {
-                if r.is_positive() { ui.painter().rect_filled(r, 0.0, shade); }
+            if self.fit == VideoStickerFit::Crop {
+                let crop = crop_rect_for_preview(info, image_rect, self.left, self.top, self.zoom);
+                let shade = Color32::from_black_alpha(145);
+                for r in [
+                    egui::Rect::from_min_max(
+                        image_rect.min,
+                        egui::pos2(image_rect.right(), crop.top()),
+                    ),
+                    egui::Rect::from_min_max(
+                        egui::pos2(image_rect.left(), crop.bottom()),
+                        image_rect.max,
+                    ),
+                    egui::Rect::from_min_max(
+                        egui::pos2(image_rect.left(), crop.top()),
+                        egui::pos2(crop.left(), crop.bottom()),
+                    ),
+                    egui::Rect::from_min_max(
+                        egui::pos2(crop.right(), crop.top()),
+                        egui::pos2(image_rect.right(), crop.bottom()),
+                    ),
+                ] {
+                    if r.is_positive() {
+                        ui.painter().rect_filled(r, 0.0, shade);
+                    }
+                }
+                ui.painter().rect_stroke(
+                    crop,
+                    2.0,
+                    Stroke::new(2.0, Color32::from_rgb(72, 190, 218)),
+                );
+                self.draw_crop_handles(ui, image_rect, crop, info);
+            } else {
+                let fitted = egui::Rect::from_center_size(
+                    image_rect.center(),
+                    Vec2::splat(image_rect.width().min(image_rect.height())),
+                );
+                ui.painter().rect_stroke(
+                    fitted,
+                    2.0,
+                    Stroke::new(2.0, Color32::from_rgb(72, 190, 218)),
+                );
+                ui.painter().text(
+                    fitted.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "FIT",
+                    FontId::proportional(10.0),
+                    Color32::from_rgb(72, 190, 218),
+                );
             }
-            ui.painter().rect_stroke(crop, 2.0, Stroke::new(2.0, Color32::from_rgb(72, 190, 218)));
-            self.draw_crop_handles(ui, image_rect, crop, info);
-        } else {
-            let fitted = egui::Rect::from_center_size(image_rect.center(), Vec2::splat(image_rect.width().min(image_rect.height())));
-            ui.painter().rect_stroke(fitted, 2.0, Stroke::new(2.0, Color32::from_rgb(72, 190, 218)));
-            ui.painter().text(fitted.center(), egui::Align2::CENTER_CENTER, "FIT", FontId::proportional(10.0), Color32::from_rgb(72, 190, 218));
+        });
+        if let Some(error) = &self.frame_error {
+            ui.vertical_centered(|ui| {
+                ui.colored_label(Color32::from_rgb(239, 125, 139), error);
+            });
         }
-        if let Some(error) = &self.frame_error { ui.colored_label(Color32::from_rgb(239, 125, 139), error); }
     }
 
     fn draw_crop_handles(&mut self, ui: &mut egui::Ui, image_rect: egui::Rect, crop: egui::Rect, info: VideoInfo) {
