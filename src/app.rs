@@ -297,6 +297,10 @@ impl ForgeApp {
             }
         }
 
+        if self.selected_tool == ToolId::ImagesToPdf {
+            view::sort_image_paths_naturally(&mut self.files);
+        }
+
         if self.selected_tool == ToolId::VideoSticker {
             self.video_sticker.set_input(self.files.first().cloned());
         }
