@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.1
+
 ### Fixed
 - Create private temporary directories for conversion intermediates and reserve output names across concurrent ForgeBox instances.
 - Stop and join background FFprobe/FFmpeg preview workers when the selected video changes or the editor closes.
