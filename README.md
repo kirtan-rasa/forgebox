@@ -30,11 +30,12 @@ ForgeBox brings common image, PDF, document, spreadsheet, and media tools into o
 | **PDF** | Merge, split, compress, rotate, reorder pages, render pages to images, add watermarks |
 | **Documents** | DOC/DOCX → PDF and text-first PDF → DOCX conversion |
 | **Data** | CSV ↔ JSON, CSV ↔ XLSX, JSON ↔ XLSX |
-| **Audio & video** | Convert video, extract audio, create GIFs, and prepare DNxHR MOV files for DaVinci Resolve on Linux |
+| **Audio & video** | Convert audio between MP3, WAV, FLAC, AAC, M4A, OGG, and Opus; extract audio from video; convert video, create GIFs, and prepare DNxHR MOV files for DaVinci Resolve on Linux |
 
 ### A few useful details
 
 - Batch operations support multiple input files where the tool allows it.
+- Audio conversion supports bitrate selection for lossy formats; WAV and FLAC use lossless codecs. Source metadata is copied when supported.
 - Images-to-PDF includes page previews and drag-to-reorder controls.
 - Original files are never overwritten. ForgeBox chooses an unused output name.
 - File dialogs and thumbnail generation run outside the UI thread.

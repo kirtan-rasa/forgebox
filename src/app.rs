@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
+mod open_folder;
 mod theme;
 mod view;
 
@@ -69,6 +70,7 @@ struct ForgeApp {
     secondary_file: Option<PathBuf>,
     output_dir: PathBuf,
     target_format: String,
+    audio_bitrate: String,
     text: String,
     width: String,
     height: String,
@@ -136,6 +138,7 @@ impl ForgeApp {
             secondary_file: None,
             output_dir: view::default_output_dir(),
             target_format: "png".into(),
+            audio_bitrate: "192".into(),
             text: String::new(),
             width: "1600".into(),
             height: "1200".into(),
@@ -201,6 +204,7 @@ impl ForgeApp {
             ToolId::ImageConvert => self.target_format = "png".into(),
             ToolId::ImagesToPdf => self.target_format = "pdf".into(),
             ToolId::PdfToImages => { self.target_format = "png".into(); self.dpi = "150".into(); },
+            ToolId::AudioConvert => { self.target_format = "mp3".into(); self.audio_bitrate = "192".into(); },
             ToolId::ExtractAudio => self.target_format = "mp3".into(),
             ToolId::VideoConvert => { self.target_format = "mp4".into(); self.quality = "23".into(); self.video_preset = "fast".into(); },
             ToolId::DavinciResolve => self.resolve_profile = "auto".into(),
@@ -300,7 +304,8 @@ impl ForgeApp {
             ToolId::ImageOcr | ToolId::ExtractExif | ToolId::ImagesToPdf | ToolId::ImageConvert | ToolId::ImageResize | ToolId::ImageCompress | ToolId::ImageGrayscale | ToolId::RemoveBackground | ToolId::LongPngToPdf => { dialog = dialog.add_filter("Images", &["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "heic", "avif", "gif"]); }
             ToolId::DataConvert => { dialog = dialog.add_filter("Spreadsheets and data", &["csv", "json", "xlsx"]); }
             ToolId::VideoConvert | ToolId::VideoToGif | ToolId::DavinciResolve => { dialog = dialog.add_filter("Videos", &["mp4", "mkv", "mov", "webm", "avi", "m4v", "mpeg", "mpg", "3gp", "ogv", "flv", "mts", "m2ts"]); }
-            ToolId::ExtractAudio => { dialog = dialog.add_filter("Video and audio", &["mp4", "mkv", "mov", "webm", "avi", "m4v", "mpeg", "mpg", "3gp", "ogv", "flv", "mp3", "wav", "flac", "m4a", "ogg", "aac", "mts", "m2ts"]); }
+            ToolId::AudioConvert => { dialog = dialog.add_filter("Audio files", &["mp3", "wav", "flac", "m4a", "ogg", "aac", "opus", "aif", "aiff", "wma", "amr", "ac3"]); }
+            ToolId::ExtractAudio => { dialog = dialog.add_filter("Video and audio", &["mp4", "mkv", "mov", "webm", "avi", "m4v", "mpeg", "mpg", "3gp", "ogv", "flv", "mp3", "wav", "flac", "m4a", "ogg", "aac", "opus", "aif", "aiff", "wma", "amr", "ac3", "mts", "m2ts"]); }
             _ => {}
         }
         self.dialog_open = true;
@@ -467,6 +472,10 @@ impl ForgeApp {
             },
             ToolId::DataConvert => JobOptions::DataConvert {
                 format: DataFormat::parse(&self.target_format)?,
+            },
+            ToolId::AudioConvert => JobOptions::AudioConvert {
+                format: AudioFormat::parse(&self.target_format)?,
+                bitrate: positive_u32(&self.audio_bitrate, 192).clamp(64, 320) as u16,
             },
             ToolId::ExtractAudio => JobOptions::ExtractAudio {
                 format: AudioFormat::parse(&self.target_format)?,

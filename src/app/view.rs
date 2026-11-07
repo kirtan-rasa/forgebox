@@ -110,6 +110,8 @@ mod tests {
         assert!(super::files::is_supported_input_file(ToolId::ImageConvert, std::path::Path::new("input.HEIC")));
         assert!(!super::files::is_supported_input_file(ToolId::ImageConvert, std::path::Path::new("input.docx")));
         assert!(super::files::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("track.FLAC")));
+        assert!(super::files::is_supported_input_file(ToolId::AudioConvert, std::path::Path::new("track.opus")));
+        assert!(!super::files::is_supported_input_file(ToolId::AudioConvert, std::path::Path::new("clip.mkv")));
         assert!(super::files::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("clip.mkv")));
         assert!(!super::files::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("table.xlsx")));
         assert!(super::files::is_supported_input_file(ToolId::DocToPdf, std::path::Path::new("report.docx")));

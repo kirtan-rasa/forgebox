@@ -33,7 +33,7 @@ pub(super) fn is_image_file(path: &Path) -> bool {
 
 pub(super) fn is_audio_file(path: &Path) -> bool {
     matches!(file_extension(path).as_str(),
-        "mp3" | "wav" | "flac" | "m4a" | "ogg" | "aac")
+        "mp3" | "wav" | "flac" | "m4a" | "ogg" | "aac" | "opus" | "aif" | "aiff" | "wma" | "amr" | "ac3")
 }
 
 pub(in crate::app) fn is_supported_input_file(tool: ToolId, path: &Path) -> bool {
@@ -49,6 +49,7 @@ pub(in crate::app) fn is_supported_input_file(tool: ToolId, path: &Path) -> bool
         ToolId::DataConvert => {
             matches!(file_extension(path).as_str(), "csv" | "json" | "xlsx")
         }
+        ToolId::AudioConvert => is_audio_file(path),
         ToolId::ExtractAudio => is_video_file(path) || is_audio_file(path),
         ToolId::VideoConvert | ToolId::VideoToGif | ToolId::DavinciResolve => is_video_file(path),
         ToolId::ImagesToPdf | ToolId::ImageConvert | ToolId::ImageResize | ToolId::ImageCompress
@@ -64,6 +65,7 @@ pub(in crate::app) fn accepted_input_description(tool: ToolId) -> &'static str {
         | ToolId::PdfReorder | ToolId::PdfToImages | ToolId::PdfWatermark | ToolId::PdfToDoc => "PDF files",
         ToolId::DocToPdf => "DOC, DOCX, ODT, or RTF files",
         ToolId::DataConvert => "CSV, JSON, or XLSX files",
+        ToolId::AudioConvert => "audio files",
         ToolId::ExtractAudio => "audio or video files",
         ToolId::VideoConvert | ToolId::VideoToGif | ToolId::DavinciResolve => "video files",
         _ => "image files",
@@ -75,6 +77,7 @@ pub(super) fn file_glyph(path: &PathBuf) -> &'static str {
         "pdf" => "󰈙",
         "png" | "jpg" | "jpeg" | "webp" | "tif" | "tiff" | "heic" | "avif" | "gif" | "bmp" => "󰋩",
         "mp4" | "mov" | "mkv" | "webm" | "avi" | "m4v" | "mpeg" | "mpg" | "3gp" | "ogv" | "flv" | "mts" | "m2ts" => "▶",
+        "mp3" | "wav" | "flac" | "m4a" | "ogg" | "aac" | "opus" | "aif" | "aiff" | "wma" | "amr" | "ac3" => "♫",
         "csv" | "json" | "xlsx" => "󰘦",
         _ => "󰈔",
     }

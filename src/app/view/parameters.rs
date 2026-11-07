@@ -88,9 +88,32 @@ pub(super) fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
             format_combo(ui, &mut app.target_format, &["csv", "json", "xlsx"]);
             ui.label(RichText::new("CSV → JSON treats all values as text. JSON input for CSV must be an array of objects.").size(11.0).color(MUTED));
         }
+        ToolId::AudioConvert => {
+            ui.label(RichText::new("Output format").size(12.0));
+            format_combo(ui, &mut app.target_format, &["mp3", "wav", "flac", "aac", "m4a", "ogg", "opus"]);
+            let lossless = matches!(app.target_format.as_str(), "wav" | "flac");
+            ui.add_space(8.0);
+            ui.add_enabled_ui(!lossless, |ui| {
+                ui.label(RichText::new("Audio bitrate").size(12.0));
+                egui::ComboBox::from_id_salt("audio-convert-bitrate")
+                    .selected_text(format!("{} kb/s", app.audio_bitrate))
+                    .width(ui.available_width().min(220.0))
+                    .show_ui(ui, |ui| {
+                        for bitrate in ["96", "128", "160", "192", "256", "320"] {
+                            ui.selectable_value(&mut app.audio_bitrate, bitrate.to_owned(), format!("{bitrate} kb/s"));
+                        }
+                    });
+            });
+            ui.label(RichText::new(if lossless {
+                "WAV and FLAC use lossless encoding. The bitrate setting is not used."
+            } else {
+                "Bitrate applies to MP3, AAC, M4A, OGG, and Opus. Higher values usually produce larger files."
+            }).size(11.0).color(MUTED));
+            ui.label(RichText::new("The first audio stream is converted and source metadata is copied when supported. Original files are kept unchanged.").size(11.0).color(MUTED));
+        }
         ToolId::ExtractAudio => {
             ui.label(RichText::new("Audio format").size(12.0));
-            format_combo(ui, &mut app.target_format, &["mp3", "wav", "aac", "ogg", "flac", "m4a"]);
+            format_combo(ui, &mut app.target_format, &["mp3", "wav", "aac", "ogg", "flac", "m4a", "opus"]);
         }
         ToolId::VideoConvert => {
             ui.label(RichText::new("Output format").size(12.0));

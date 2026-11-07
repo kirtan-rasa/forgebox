@@ -38,6 +38,7 @@ string_option!(AudioFormat, "audio format", {
     Ogg => "ogg",
     Flac => "flac",
     M4a => "m4a",
+    Opus => "opus",
 });
 
 string_option!(VideoFormat, "video format", {
@@ -234,6 +235,7 @@ pub enum JobOptions {
     PdfToImages { format: PdfImageFormat, dpi: u16 },
     PdfWatermark { watermark_file: PathBuf },
     DataConvert { format: DataFormat },
+    AudioConvert { format: AudioFormat, bitrate: u16 },
     ExtractAudio { format: AudioFormat },
     VideoConvert { format: VideoFormat, preset: VideoPreset, quality: u8 },
     DavinciResolve { profile: ResolveProfile },
@@ -257,6 +259,7 @@ impl JobOptions {
                 | (ToolId::PdfToImages, Self::PdfToImages { .. })
                 | (ToolId::PdfWatermark, Self::PdfWatermark { .. })
                 | (ToolId::DataConvert, Self::DataConvert { .. })
+                | (ToolId::AudioConvert, Self::AudioConvert { .. })
                 | (ToolId::ExtractAudio, Self::ExtractAudio { .. })
                 | (ToolId::VideoConvert, Self::VideoConvert { .. })
                 | (ToolId::DavinciResolve, Self::DavinciResolve { .. })
@@ -289,6 +292,12 @@ impl Job {
             return Err(format!("The settings do not match the selected tool ({tool:?})."));
         }
 
+        if let JobOptions::AudioConvert { bitrate, .. } = &options {
+            if !(64..=320).contains(bitrate) {
+                return Err("Audio bitrate must be between 64 and 320 kb/s.".into());
+            }
+        }
+
         if let JobOptions::ImageResize { width, height } = &options {
             let requested_pixels = u64::from(*width) * u64::from(*height);
             if *width == 0 || *height == 0 {
@@ -311,7 +320,7 @@ impl Job {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImageFormat, JobOptions, PdfRotation, ResolveProfile, VideoFormat};
+    use super::{AudioFormat, ImageFormat, JobOptions, PdfRotation, ResolveProfile, VideoFormat};
     use crate::catalog::ToolId;
 
     #[test]
@@ -319,6 +328,24 @@ mod tests {
         let options = JobOptions::PdfSplit { range: "1,last".into() };
         assert!(!options.matches_tool(ToolId::PdfReorder));
         assert!(options.matches_tool(ToolId::PdfSplit));
+    }
+
+    #[test]
+    fn audio_formats_include_opus_and_bitrate_is_bounded() {
+        use super::{Job, JobOptions};
+        use std::path::PathBuf;
+
+        assert_eq!(AudioFormat::parse("OPUS").unwrap().as_str(), "opus");
+        let make_job = |bitrate| Job::new(
+            ToolId::AudioConvert,
+            vec![PathBuf::from("track.flac")],
+            PathBuf::from("/tmp"),
+            JobOptions::AudioConvert { format: AudioFormat::Mp3, bitrate },
+        );
+        assert!(make_job(64).is_ok());
+        assert!(make_job(320).is_ok());
+        assert!(make_job(63).is_err());
+        assert!(make_job(321).is_err());
     }
 
     #[test]

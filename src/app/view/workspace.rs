@@ -793,9 +793,12 @@ impl ForgeApp {
                                                                 output_dir.parent().filter(|path| path.is_dir()).map(PathBuf::from)
                                                             };
                                                             if let Some(directory) = directory {
-                                                                if std::process::Command::new("gio").arg("open").arg(&directory).spawn().is_err() {
-                                                                    let _ = std::process::Command::new("xdg-open").arg(&directory).spawn();
-                                                                }
+                                                                let status_tx = self.status_tx.clone();
+                                                                std::thread::spawn(move || {
+                                                                    if let Err(error) = super::super::open_folder::open_folder(&directory) {
+                                                                        let _ = status_tx.send(format!("Could not open output folder: {error}"));
+                                                                    }
+                                                                });
                                                             }
                                                         }
                                                         #[cfg(target_os = "macos")]

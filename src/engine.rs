@@ -21,7 +21,7 @@ use self::common::{
 };
 use self::data::{csv_to_json, data_convert, encode_file_url_path, pdf_to_docx, soffice_convert};
 use self::images::{images_to_pdf, long_png_to_pdf};
-use self::media::{convert_davinci_resolve, convert_video, extract_audio};
+use self::media::{convert_audio, convert_davinci_resolve, convert_video, extract_audio};
 use self::pdf::{parse_pdf_page_order, parse_pdf_page_range, pdf_page_count};
 pub use self::job::{
     AudioFormat, DataFormat, ImageFormat, Job, JobOptions, PdfCompressionProfile,
@@ -325,6 +325,9 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
         (Tool::DocToPdf, Options::None) => process_each_convert(&job, "pdf"),
         (Tool::PdfToDoc, Options::None) => process_each(&job, pdf_to_docx),
         (Tool::DataConvert, Options::DataConvert { format }) => data_convert(&job, format.as_str()),
+        (Tool::AudioConvert, Options::AudioConvert { format, bitrate }) => process_each(&job, |input, out| {
+            convert_audio(input, out, format.as_str(), *bitrate)
+        }),
         (Tool::ExtractAudio, Options::ExtractAudio { format }) => process_each(&job, |input, out| {
             extract_audio(input, out, format.as_str())
         }),
@@ -591,7 +594,7 @@ mod execution_warning_tests {
 
 #[cfg(test)]
 mod video_tests {
-    use super::{convert_video, extract_audio};
+    use super::{convert_audio, convert_video, extract_audio};
     use std::path::Path;
 
     #[test]
@@ -614,6 +617,14 @@ mod video_tests {
             "wma",
         ).expect_err("WMA is not a supported audio output target");
         assert!(error.contains("is not supported"));
+    }
+
+    #[test]
+    fn audio_converter_rejects_unsupported_output_formats() {
+        let error = convert_audio(
+            Path::new("input.wav"), Path::new("output.wma"), "wma", 192,
+        ).expect_err("WMA is not a supported audio output format");
+        assert!(error.contains("MP3, WAV, AAC, OGG, FLAC, M4A, or Opus"));
     }
 }
 

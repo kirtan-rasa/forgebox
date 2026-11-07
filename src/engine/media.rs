@@ -50,6 +50,78 @@ pub(super) fn convert_video(input: &Path, output: &Path, target_format: &str, pr
     })
 }
 
+pub(super) fn convert_audio(
+    input: &Path,
+    output: &Path,
+    target_format: &str,
+    bitrate: u16,
+) -> Result<(), String> {
+    let format = normalized_ext(target_format);
+    let bitrate = bitrate.clamp(64, 320).to_string();
+    let mut args = vec![
+        os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"),
+        os("-i"), os(input),
+        os("-map"), os("0:a:0"),
+        os("-map_metadata"), os("0"),
+        os("-vn"), os("-sn"), os("-dn"),
+        os("-threads"), os("2"),
+    ];
+
+    let encoder = match format.as_str() {
+        "mp3" => {
+            args.extend([os("-c:a"), os("libmp3lame"), os("-b:a"), os(&format!("{bitrate}k"))]);
+            "libmp3lame"
+        }
+        "wav" => {
+            args.extend([os("-c:a"), os("pcm_s16le")]);
+            "pcm_s16le"
+        }
+        "aac" => {
+            args.extend([os("-c:a"), os("aac"), os("-b:a"), os(&format!("{bitrate}k"))]);
+            "aac"
+        }
+        "ogg" => {
+            args.extend([os("-c:a"), os("libvorbis"), os("-b:a"), os(&format!("{bitrate}k"))]);
+            "libvorbis"
+        }
+        "flac" => {
+            args.extend([os("-c:a"), os("flac")]);
+            "flac"
+        }
+        "m4a" => {
+            args.extend([
+                os("-c:a"), os("aac"), os("-b:a"), os(&format!("{bitrate}k")),
+                os("-movflags"), os("+faststart"),
+            ]);
+            "aac"
+        }
+        "opus" => {
+            args.extend([
+                os("-c:a"), os("libopus"), os("-b:a"), os(&format!("{bitrate}k")),
+                os("-vbr"), os("on"),
+            ]);
+            "libopus"
+        }
+        _ => return Err(format!(
+            "Audio format \"{format}\" is not supported. Choose MP3, WAV, AAC, OGG, FLAC, M4A, or Opus."
+        )),
+    };
+
+    args.push(os(output));
+    run_ok("ffmpeg", args).map(|_| ()).map_err(|error| {
+        if error.contains("matches no streams") || error.contains("does not contain any stream") {
+            "No audio stream was found in the selected file.".into()
+        } else if error.contains("Unknown encoder") || error.contains("Encoder not found") {
+            format!(
+                "This FFmpeg build does not include the {encoder} encoder required for {} output. Install a full FFmpeg build with that codec.",
+                format.to_uppercase()
+            )
+        } else {
+            format!("FFmpeg audio conversion to {} failed: {error}", format.to_uppercase())
+        }
+    })
+}
+
 pub(super) fn extract_audio(input: &Path, output: &Path, target_format: &str) -> Result<(), String> {
     let format = normalized_ext(target_format);
     let mut args = vec![os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"), os("-i"), os(input), os("-map"), os("0:a:0"), os("-vn")];
@@ -60,6 +132,7 @@ pub(super) fn extract_audio(input: &Path, output: &Path, target_format: &str) ->
         "ogg" => args.extend([os("-c:a"), os("libvorbis"), os("-q:a"), os("5")]),
         "flac" => args.extend([os("-c:a"), os("flac")]),
         "m4a" => args.extend([os("-c:a"), os("aac"), os("-b:a"), os("192k")]),
+        "opus" => args.extend([os("-c:a"), os("libopus"), os("-b:a"), os("192k")]),
         _ => return Err(format!(r#"Audio format "{format}" is not supported."#)),
     }
     args.push(os(output));

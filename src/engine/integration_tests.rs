@@ -408,6 +408,40 @@ fn audio_and_video_tools_extract_convert_and_generate_gif() {
     outputs(&audio, 1);
     assert_eq!(audio[0].extension().and_then(|e| e.to_str()), Some("mp3"));
 
+    for (format, expected_codec) in [
+        (super::AudioFormat::Mp3, "mp3"),
+        (super::AudioFormat::Wav, "pcm_s16le"),
+        (super::AudioFormat::Flac, "flac"),
+        (super::AudioFormat::Aac, "aac"),
+        (super::AudioFormat::M4a, "aac"),
+        (super::AudioFormat::Ogg, "vorbis"),
+        (super::AudioFormat::Opus, "opus"),
+    ] {
+        let converted = execute(job(
+            ToolId::AudioConvert,
+            audio.clone(),
+            ws.path(&format!("audio-{}", format.as_str())),
+            JobOptions::AudioConvert { format, bitrate: 192 },
+        )).unwrap_or_else(|error| panic!("{} audio conversion failed: {error}", format.as_str()));
+        outputs(&converted, 1);
+        assert_eq!(
+            converted[0].extension().and_then(|ext| ext.to_str()),
+            Some(format.as_str())
+        );
+
+        let probe = Command::new("ffprobe")
+            .args(["-v", "error", "-show_entries", "stream=codec_type,codec_name", "-of", "json"])
+            .arg(&converted[0])
+            .output()
+            .expect("probe converted audio");
+        assert!(probe.status.success(), "FFprobe failed: {}", String::from_utf8_lossy(&probe.stderr));
+        let metadata: serde_json::Value = serde_json::from_slice(&probe.stdout).expect("parse audio metadata");
+        let streams = metadata["streams"].as_array().expect("audio stream list");
+        assert_eq!(streams.len(), 1, "audio conversion should not retain video streams");
+        assert_eq!(streams[0]["codec_type"], "audio");
+        assert_eq!(streams[0]["codec_name"], expected_codec);
+    }
+
     let video = execute(job(
         ToolId::VideoConvert, vec![source.clone()], ws.path("video"),
         JobOptions::VideoConvert {

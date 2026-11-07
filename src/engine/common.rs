@@ -24,6 +24,7 @@ fn output_details(job: &Job, input: &Path) -> (&'static str, String) {
         (Tool::ExtractExif, Options::None) => ("exif", "json".into()),
         (Tool::PdfToDoc, Options::None) => ("converted", "docx".into()),
         (Tool::ImageOcr, Options::ImageOcr { .. }) => ("ocr", "txt".into()),
+        (Tool::AudioConvert, Options::AudioConvert { format, .. }) => ("converted", format.as_str().to_owned()),
         (Tool::ExtractAudio, Options::ExtractAudio { format }) => ("audio", format.as_str().to_owned()),
         (Tool::VideoConvert, Options::VideoConvert { format, .. }) => ("converted", format.as_str().to_owned()),
         (Tool::DavinciResolve, Options::DavinciResolve { .. }) => ("davinci-resolve", "mov".into()),
