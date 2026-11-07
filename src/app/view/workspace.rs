@@ -602,7 +602,17 @@ impl ForgeApp {
                             if let Some((from, insertion_index)) = reorder_request {
                                 if !self.running { reorder_item(&mut self.files, from, insertion_index); }
                             }
-                            if let Some(index) = remove_index { if index < self.files.len() && !self.running { self.files.remove(index); if self.selected_tool == ToolId::VideoSticker { self.video_sticker.set_input(self.files.first().cloned()); } } }
+                            if let Some(index) = remove_index {
+                                if index < self.files.len() && !self.running {
+                                    self.files.remove(index);
+                                    if self.selected_tool == ToolId::ImagesToPdf && self.files.is_empty() {
+                                        self.images_order_manually_edited = false;
+                                    }
+                                    if self.selected_tool == ToolId::VideoSticker {
+                                        self.video_sticker.set_input(self.files.first().cloned());
+                                    }
+                                }
+                            }
                             ui.add_space(5.0);
                             ui.label(RichText::new(format!("Files selected: {}", self.files.len())).size(12.0).color(MUTED));
                             if self.selected_tool == ToolId::PdfWatermark {
