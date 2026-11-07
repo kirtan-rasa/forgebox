@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Add a DaVinci Resolve Linux export tool that creates DNxHR MOV files with 24-bit Linear PCM audio.
+- Automatically select DNxHR HQ, HQX, or 444 from the source pixel format and bit depth.
+- Verify exported DNxHR profile, pixel format, and PCM audio with FFprobe.
+- Warn when subtitles, alpha, data streams, attachments, or additional video tracks are not preserved.
+
+### Improved
+- Document DaVinci Resolve export profiles, Linux requirements, and media-preservation limits.
+- Exercise DNxHR HQ, HQX, YUV 4:4:4, and RGB 4:4:4 encoding in conversion integration tests.
+
 ## 0.4.1
 
 ### Added
