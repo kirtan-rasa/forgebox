@@ -284,3 +284,66 @@ mod cancellation_cleanup_tests {
     }
 }
 
+
+
+#[cfg(test)]
+mod output_reservation_tests {
+    use super::{reserve_unique_path, temp_dir};
+    use std::fs;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    #[test]
+    fn concurrent_reservations_never_return_the_same_path() {
+        let directory = temp_dir("output-reservation-test").unwrap();
+        let barrier = Arc::new(Barrier::new(8));
+        let workers = (0..8)
+            .map(|_| {
+                let directory = directory.clone();
+                let barrier = barrier.clone();
+                thread::spawn(move || {
+                    barrier.wait();
+                    let reservation = reserve_unique_path(&directory, "result", "pdf").unwrap();
+                    let path = reservation.path().to_path_buf();
+                    (reservation, path)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut reservations = Vec::new();
+        let mut paths = Vec::new();
+        for worker in workers {
+            let (reservation, path) = worker.join().unwrap();
+            reservations.push(reservation);
+            paths.push(path);
+        }
+
+        paths.sort();
+        paths.dedup();
+        assert_eq!(paths.len(), 8);
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 8);
+
+        drop(reservations);
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn existing_files_and_symlinks_are_never_reserved() {
+        let directory = temp_dir("output-reservation-existing-test").unwrap();
+        fs::write(directory.join("result.pdf"), b"keep").unwrap();
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("missing-target", directory.join("result-2.pdf")).unwrap();
+
+        let reservation = reserve_unique_path(&directory, "result", "pdf").unwrap();
+        #[cfg(unix)]
+        assert_eq!(reservation.path().file_name().unwrap(), "result-3.pdf");
+        #[cfg(not(unix))]
+        assert_eq!(reservation.path().file_name().unwrap(), "result-2.pdf");
+        assert_eq!(fs::read(directory.join("result.pdf")).unwrap(), b"keep");
+
+        drop(reservation);
+        fs::remove_dir_all(directory).unwrap();
+    }
+}

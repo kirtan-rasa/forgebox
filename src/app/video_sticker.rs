@@ -37,6 +37,25 @@ struct PlaybackControl {
     pid: Arc<AtomicI32>,
 }
 
+struct PreviewWorker {
+    cancelled: Arc<AtomicBool>,
+    worker: JoinHandle<()>,
+}
+
+impl PreviewWorker {
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    fn is_finished(&self) -> bool {
+        self.worker.is_finished()
+    }
+
+    fn join(self) {
+        let _ = self.worker.join();
+    }
+}
+
 pub(super) struct VideoStickerEditor {
     path: Option<PathBuf>,
     info: Option<VideoInfo>,
@@ -58,7 +77,7 @@ pub(super) struct VideoStickerEditor {
     timeline_drag: Option<TimelineDrag>,
     tx: Sender<Message>,
     rx: Receiver<Message>,
-    workers: Vec<JoinHandle<()>>,
+    workers: Vec<PreviewWorker>,
     playback_tx: SyncSender<PlaybackMessage>,
     playback_rx: Receiver<PlaybackMessage>,
     playback_control: Option<PlaybackControl>,
@@ -107,6 +126,9 @@ impl VideoStickerEditor {
     pub(super) fn set_input(&mut self, path: Option<PathBuf>) {
         if self.path == path { return; }
         self.stop_playback();
+        for worker in &self.workers {
+            worker.cancel();
+        }
         self.path = path.clone();
         self.info = None;
         self.error = None;
@@ -128,10 +150,13 @@ impl VideoStickerEditor {
         if let Some(path) = path {
             self.metadata_pending = Some(path.clone());
             let tx = self.tx.clone();
-            self.workers.push(thread::spawn(move || {
-                let result = inspect_video(&path);
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let worker_cancelled = cancelled.clone();
+            let worker = thread::spawn(move || {
+                let result = inspect_video(&path, &worker_cancelled);
                 let _ = tx.send(Message::Metadata(path, result));
-            }));
+            });
+            self.workers.push(PreviewWorker { cancelled, worker });
         }
     }
 
@@ -212,7 +237,7 @@ impl VideoStickerEditor {
         while index < self.workers.len() {
             if self.workers[index].is_finished() {
                 let worker = self.workers.swap_remove(index);
-                let _ = worker.join();
+                worker.join();
             } else {
                 index += 1;
             }
@@ -224,10 +249,13 @@ impl VideoStickerEditor {
                     let at = self.playhead_ms.min(info.duration_ms.saturating_sub(1));
                     self.frame_pending = Some((path.clone(), at));
                     let tx = self.tx.clone();
-                    self.workers.push(thread::spawn(move || {
-                        let result = preview_frame(&path, at);
+                    let cancelled = Arc::new(AtomicBool::new(false));
+                    let worker_cancelled = cancelled.clone();
+                    let worker = thread::spawn(move || {
+                        let result = preview_frame(&path, at, &worker_cancelled);
                         let _ = tx.send(Message::Frame(path, at, result));
-                    }));
+                    });
+                    self.workers.push(PreviewWorker { cancelled, worker });
                 }
             }
         }
@@ -845,6 +873,12 @@ impl Drop for VideoStickerEditor {
     fn drop(&mut self) {
         self.stop_playback();
         if let Some(worker) = self.playback_worker.take() { let _ = worker.join(); }
+        for worker in &self.workers {
+            worker.cancel();
+        }
+        for worker in self.workers.drain(..) {
+            worker.join();
+        }
     }
 }
 
@@ -996,12 +1030,64 @@ fn terminate_preview_process(pid: i32) {
     }
 }
 
-fn inspect_video(path: &Path) -> Result<VideoInfo, String> {
-    let output = Command::new("ffprobe")
-        .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,duration:format=duration", "-of", "json"])
-        .arg(path)
-        .output()
-        .map_err(|e| format!("Could not start FFprobe: {e}. Install FFmpeg and FFprobe."))?;
+fn run_preview_command(mut command: Command, cancelled: &AtomicBool) -> Result<std::process::Output, String> {
+    if cancelled.load(Ordering::Acquire) {
+        return Err("Preview cancelled.".into());
+    }
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    let stdout = child.stdout.take().expect("preview stdout is piped");
+    let stderr = child.stderr.take().expect("preview stderr is piped");
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut pipe = stdout;
+        pipe.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut pipe = stderr;
+        pipe.read_to_end(&mut bytes).map(|_| bytes)
+    });
+
+    let status = loop {
+        if cancelled.load(Ordering::Acquire) {
+            stop_preview_child(&mut child);
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err("Preview cancelled.".into());
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Err(error) => {
+                stop_preview_child(&mut child);
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(error.to_string());
+            }
+        }
+    };
+
+    let stdout = stdout_reader.join()
+        .map_err(|_| "FFmpeg preview output reader panicked.".to_string())?
+        .map_err(|error| format!("Could not read preview output: {error}"))?;
+    let stderr = stderr_reader.join()
+        .map_err(|_| "FFmpeg preview error reader panicked.".to_string())?
+        .map_err(|error| format!("Could not read preview errors: {error}"))?;
+    Ok(std::process::Output { status, stdout, stderr })
+}
+
+fn inspect_video(path: &Path, cancelled: &AtomicBool) -> Result<VideoInfo, String> {
+    let mut command = Command::new("ffprobe");
+    command.args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,duration:format=duration", "-of", "json"])
+        .arg(path);
+    let output = run_preview_command(command, cancelled)
+        .map_err(|e| format!("Could not inspect the selected video: {e}. Install FFmpeg and FFprobe if they are missing."))?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         return Err(if detail.is_empty() { "FFprobe could not read the selected video.".into() } else { detail });
@@ -1018,14 +1104,14 @@ fn inspect_video(path: &Path) -> Result<VideoInfo, String> {
     Ok(VideoInfo { width, height, duration_ms: (duration * 1_000.0).round().clamp(1.0, u32::MAX as f64) as u32 })
 }
 
-fn preview_frame(path: &Path, time_ms: u32) -> Result<egui::ColorImage, String> {
+fn preview_frame(path: &Path, time_ms: u32, cancelled: &AtomicBool) -> Result<egui::ColorImage, String> {
     let seek = format!("{:.3}", time_ms as f64 / 1_000.0);
-    let output = Command::new("ffmpeg")
-        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-ss", &seek, "-i"])
+    let mut command = Command::new("ffmpeg");
+    command.args(["-hide_banner", "-loglevel", "error", "-nostdin", "-ss", &seek, "-i"])
         .arg(path)
-        .args(["-frames:v", "1", "-vf", "scale=960:960:force_original_aspect_ratio=decrease:flags=lanczos", "-f", "image2pipe", "-vcodec", "png", "pipe:1"])
-        .output()
-        .map_err(|e| format!("Could not start FFmpeg preview: {e}"))?;
+        .args(["-frames:v", "1", "-vf", "scale=960:960:force_original_aspect_ratio=decrease:flags=lanczos", "-f", "image2pipe", "-vcodec", "png", "pipe:1"]);
+    let output = run_preview_command(command, cancelled)
+        .map_err(|e| format!("Could not render FFmpeg preview: {e}"))?;
     if !output.status.success() || output.stdout.is_empty() {
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         return Err(if detail.is_empty() { "FFmpeg could not render a preview frame.".into() } else { detail });

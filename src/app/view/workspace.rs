@@ -233,7 +233,7 @@ impl ForgeApp {
                         ui.add_space(14.0);
                         ui.horizontal_wrapped(|ui| {
                             if ui.add_enabled(!self.running && !self.dialog_open, egui::Button::new(RichText::new(format!("{}  Choose files", glyph_text(self.icons_loaded, "󰈔"))).font(icon_font(14.0)).strong()).fill(ACCENT).min_size(Vec2::new(160.0, 40.0))).clicked() { self.choose_files(); }
-                            if ui.add_enabled(!self.running && !self.files.is_empty(), egui::Button::new("Clear list")).clicked() { self.files.clear(); self.secondary_file = None; self.selection_notice = None; self.dragging_file = None; self.drag_insert_index = None; self.drag_card_size = None; }
+                            if ui.add_enabled(!self.running && !self.files.is_empty(), egui::Button::new("Clear list")).clicked() { self.files.clear(); self.images_order_manually_edited = false; self.secondary_file = None; self.selection_notice = None; self.dragging_file = None; self.drag_insert_index = None; self.drag_card_size = None; }
                         });
                         ui.add_space(12.0);
                         // Persistent drop target: keep it visible even after files have been added.
@@ -563,6 +563,9 @@ impl ForgeApp {
                                                 if let Some(from) = self.files.iter().position(|path| path == &dragged_path) {
                                                     let target = self.drag_insert_index.unwrap_or(from).min(self.files.len().saturating_sub(1));
                                                     reorder_item_to_index(&mut self.files, from, target);
+                                                    if self.selected_tool == ToolId::ImagesToPdf {
+                                                        self.images_order_manually_edited = true;
+                                                    }
                                                 }
                                             }
                                         }

@@ -27,7 +27,8 @@ pub(super) fn data_convert(job: &Job, target_format: &str) -> Result<Vec<PathBuf
         return Err("The input and output formats are the same.".into());
     }
 
-    let out = output_for_input(job, input, "converted", &target_ext);
+    let reservation = super::reserve_output_for_input(job, input, "converted", &target_ext)?;
+    let out = reservation.path().to_path_buf();
     let result = (|| -> Result<(), String> {
         match (source_ext.as_str(), target_ext.as_str()) {
             ("csv", "json") => csv_to_json(input, &out)?,

@@ -143,3 +143,48 @@ pub(in crate::app) fn default_output_dir() -> PathBuf {
 
     std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir())
 }
+
+
+#[cfg(test)]
+mod natural_sort_tests {
+    use super::sort_image_paths_naturally;
+    use std::path::PathBuf;
+
+    #[test]
+    fn numbered_image_names_sort_numerically() {
+        let mut paths = vec![
+            PathBuf::from("/pages/PDF10.png"),
+            PathBuf::from("/pages/PDF2.png"),
+            PathBuf::from("/pages/PDF1.png"),
+        ];
+        sort_image_paths_naturally(&mut paths);
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/pages/PDF1.png"),
+                PathBuf::from("/pages/PDF2.png"),
+                PathBuf::from("/pages/PDF10.png"),
+            ]
+        );
+    }
+
+    #[test]
+    fn natural_sort_is_case_insensitive_and_stable_for_zero_padded_numbers() {
+        let mut paths = vec![
+            PathBuf::from("/pages/page10.png"),
+            PathBuf::from("/pages/Page002.png"),
+            PathBuf::from("/pages/page2.png"),
+            PathBuf::from("/pages/PAGE1.png"),
+        ];
+        sort_image_paths_naturally(&mut paths);
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/pages/PAGE1.png"),
+                PathBuf::from("/pages/page2.png"),
+                PathBuf::from("/pages/Page002.png"),
+                PathBuf::from("/pages/page10.png"),
+            ]
+        );
+    }
+}

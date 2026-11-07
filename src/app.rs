@@ -67,6 +67,7 @@ struct ForgeApp {
     active_category: Option<Category>,
     search: String,
     files: Vec<PathBuf>,
+    images_order_manually_edited: bool,
     selection_notice: Option<String>,
     secondary_file: Option<PathBuf>,
     output_dir: PathBuf,
@@ -137,6 +138,7 @@ impl ForgeApp {
             active_category: None,
             search: String::new(),
             files: Vec::new(),
+            images_order_manually_edited: false,
             selection_notice: None,
             secondary_file: None,
             output_dir: view::default_output_dir(),
@@ -199,6 +201,7 @@ impl ForgeApp {
         self.video_sticker.set_input(None);
         self.secondary_file = None;
         self.files.clear();
+        self.images_order_manually_edited = false;
         self.selection_notice = None;
         self.wizard_step = 0;
         self.dragging_file = None;
@@ -274,10 +277,7 @@ impl ForgeApp {
 
         let requested = paths.len();
         paths.retain(|path| path.is_file() && view::is_supported_input_file(self.selected_tool, path));
-        if self.selected_tool == ToolId::ImagesToPdf {
-            view::sort_image_paths_naturally(&mut paths);
-        }
-        let skipped = requested.saturating_sub(paths.len());
+           let skipped = requested.saturating_sub(paths.len());
         let mut notices = Vec::new();
         if skipped > 0 {
             notices.push(format!(
@@ -294,6 +294,11 @@ impl ForgeApp {
                 self.files.clear();
                 self.files.push(path);
             }
+        } else if self.selected_tool == ToolId::ImagesToPdf && !self.images_order_manually_edited {
+            for path in paths {
+                if !self.files.contains(&path) { self.files.push(path); }
+            }
+            view::sort_image_paths_naturally(&mut self.files);
         } else {
             for path in paths {
                 if !self.files.contains(&path) { self.files.push(path); }
@@ -579,6 +584,7 @@ impl ForgeApp {
             // The job owns snapshots of its inputs and options. Reset the editor
             // so another task can be staged without changing queued work.
             self.files.clear();
+            self.images_order_manually_edited = false;
             self.secondary_file = None;
             self.selection_notice = None;
             self.dragging_file = None;
