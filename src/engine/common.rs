@@ -2,6 +2,8 @@ use super::{check_cancelled, report_status, soffice_convert, Job};
 use std::ffi::OsString;
 use std::fs;
 use std::io;
+use std::fs::OpenOptions;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -55,7 +57,8 @@ where
         let name = input.file_name().and_then(|value| value.to_str()).unwrap_or("file");
         report_status(format!("Processing {name} ({}/{})", index + 1, job.files.len()));
         let (suffix, extension) = output_details(job, input);
-        let out = output_for_input(job, input, suffix, &extension);
+        let reservation = reserve_output_for_input(job, input, suffix, &extension)?;
+        let out = reservation.path().to_path_buf();
         if let Err(error) = operation(input, &out) {
             let _ = fs::remove_file(&out);
             for created in &outputs { let _ = fs::remove_file(created); }
@@ -77,7 +80,8 @@ where
         check_cancelled_or_remove_outputs(&outputs)?;
         let name = input.file_name().and_then(|value| value.to_str()).unwrap_or("file");
         report_status(format!("Reading metadata from {name} ({}/{})", index + 1, job.files.len()));
-        let out = output_for_input(job, input, "exif", "json");
+        let reservation = reserve_output_for_input(job, input, "exif", "json")?;
+        let out = reservation.path().to_path_buf();
         if let Err(error) = operation(input, &out) {
             let _ = fs::remove_file(&out);
             for created in &outputs { let _ = fs::remove_file(created); }
@@ -96,7 +100,8 @@ pub(super) fn process_each_convert(job: &Job, target_ext: &str) -> Result<Vec<Pa
         check_cancelled_or_remove_outputs(&outputs)?;
         let name = input.file_name().and_then(|value| value.to_str()).unwrap_or("document");
         report_status(format!("Converting {name} ({}/{})", index + 1, job.files.len()));
-        let out = output_for_input(job, input, "converted", target_ext);
+        let reservation = reserve_output_for_input(job, input, "converted", target_ext)?;
+        let out = reservation.path().to_path_buf();
         if let Err(error) = soffice_convert(input, target_ext, &out) {
             let _ = fs::remove_file(&out);
             for created in &outputs { let _ = fs::remove_file(created); }
@@ -116,20 +121,93 @@ pub(super) fn first_file(job: &Job) -> Result<&Path, String> {
     job.files.first().map(PathBuf::as_path).ok_or_else(|| "Add a file first.".to_string())
 }
 
-pub(super) fn output_for_input(job: &Job, input: &Path, suffix: &str, extension: &str) -> PathBuf {
-    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
-    unique_path(&job.output_dir, &format!("{stem}-{suffix}"), extension)
+pub(super) struct OutputReservation {
+    path: PathBuf,
+    lock_path: PathBuf,
 }
 
-pub(super) fn unique_path(dir: &Path, stem: &str, extension: &str) -> PathBuf {
-    let ext = normalized_ext(extension);
-    let first = dir.join(format!("{stem}.{ext}"));
-    if !first.exists() { return first; }
-    for index in 2..10_000 {
-        let candidate = dir.join(format!("{stem}-{index}.{ext}"));
-        if !candidate.exists() { return candidate; }
+impl OutputReservation {
+    pub(super) fn path(&self) -> &Path {
+        &self.path
     }
-    dir.join(format!("{stem}-{}.{}", timestamp(), ext))
+}
+
+impl Drop for OutputReservation {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.lock_path);
+    }
+}
+
+pub(super) fn reserve_output_for_input(
+    job: &Job,
+    input: &Path,
+    suffix: &str,
+    extension: &str,
+) -> Result<OutputReservation, String> {
+    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+    reserve_unique_path(&job.output_dir, &format!("{stem}-{suffix}"), extension)
+}
+
+pub(super) fn reserve_unique_path(
+    dir: &Path,
+    stem: &str,
+    extension: &str,
+) -> Result<OutputReservation, String> {
+    let ext = normalized_ext(extension);
+    for index in 1..=10_000 {
+        let candidate_stem = if index == 1 { stem.to_owned() } else { format!("{stem}-{index}") };
+        let path = dir.join(format!("{candidate_stem}.{ext}"));
+        match fs::symlink_metadata(&path) {
+            Ok(_) => continue,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Could not inspect output path {}: {error}", path.display())),
+        }
+
+        let file_name = path.file_name().ok_or_else(|| "Could not construct an output filename.".to_string())?;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        file_name.hash(&mut hasher);
+        let lock_path = dir.join(format!(".forgebox-output-{:016x}.lock", hasher.finish()));
+
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&lock_path) {
+            Ok(lock) => drop(lock),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("Could not reserve output name {}: {error}", path.display())),
+        }
+
+        match fs::symlink_metadata(&path) {
+            Ok(_) => {
+                let _ = fs::remove_file(&lock_path);
+                continue;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                let _ = fs::remove_file(&lock_path);
+                return Err(format!("Could not inspect output path {}: {error}", path.display()));
+            }
+        }
+        return Ok(OutputReservation { path, lock_path });
+    }
+    Err(format!("Could not reserve a unique output filename for {stem}.{ext} after 10,000 attempts."))
+}
+
+fn create_private_dir(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700).create(path)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir(path)
+    }
 }
 
 pub(super) fn unique_prefix(dir: &Path, stem: &str) -> PathBuf {
@@ -184,7 +262,7 @@ pub(super) fn temp_dir(prefix: &str) -> Result<PathBuf, String> {
             timestamp()
         ));
 
-        match fs::create_dir(&path) {
+        match create_private_dir(&path) {
             Ok(()) => return Ok(path),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(display_io(error)),
@@ -207,6 +285,11 @@ mod temp_dir_tests {
         assert_ne!(first, second);
         assert!(first.is_dir());
         assert!(second.is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&first).unwrap().permissions().mode() & 0o077, 0);
+        }
 
         fs::remove_dir_all(first).unwrap();
         fs::remove_dir_all(second).unwrap();
