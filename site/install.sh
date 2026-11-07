@@ -21,135 +21,6 @@ run_privileged() {
     fi
 }
 
-ensure_fedora_ffmpeg() {
-    command -v rpm >/dev/null 2>&1 || fail "The rpm command is required to configure RPM Fusion."
-    fedora_version=$(rpm -E %fedora) || fail "Could not determine the Fedora release version."
-    case "$fedora_version" in
-        ''|*[!0-9]*) fail "Could not determine a valid Fedora release version: $fedora_version" ;;
-    esac
-
-    if ! rpm -q rpmfusion-free-release >/dev/null 2>&1; then
-        printf 'Enabling RPM Fusion Free for the full FFmpeg package...\n'
-        run_privileged dnf install --assumeyes \
-            "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-${fedora_version}.noarch.rpm"
-    fi
-
-    if rpm -q ffmpeg-free >/dev/null 2>&1; then
-        printf 'Switching from Fedora ffmpeg-free to the full RPM Fusion FFmpeg build...\n'
-        run_privileged dnf swap --assumeyes ffmpeg-free ffmpeg --allowerasing
-    else
-        run_privileged dnf install --assumeyes ffmpeg --allowerasing
-    fi
-}
-
-has_working_rembg() {
-    data_home=${XDG_DATA_HOME:-"$HOME/.local/share"}
-    candidate="$data_home/forgebox/rembg-venv/bin/rembg"
-    if [ -x "$candidate" ] && "$candidate" --help >/dev/null 2>&1; then return 0; fi
-    candidate="$HOME/.local/bin/rembg"
-    if [ -x "$candidate" ] && "$candidate" --help >/dev/null 2>&1; then return 0; fi
-    if command -v rembg >/dev/null 2>&1 && rembg --help >/dev/null 2>&1; then return 0; fi
-    return 1
-}
-
-has_russian_ocr() {
-    command -v tesseract >/dev/null 2>&1 || return 1
-    tesseract --list-langs 2>/dev/null | grep -qx 'rus'
-}
-
-prompt_yes_no() {
-    prompt=$1
-    printf '%s [y/N] ' "$prompt" > /dev/tty
-    answer=''
-    IFS= read -r answer < /dev/tty || return 1
-    case "$answer" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
-}
-
-install_russian_ocr() {
-    case "$PACKAGE_FAMILY" in
-        fedora) run_privileged dnf install --assumeyes tesseract-langpack-rus ;;
-        debian)
-            run_privileged apt-get update || return 1
-            run_privileged apt-get install --yes tesseract-ocr-rus
-            ;;
-        arch) run_privileged pacman -S --needed --noconfirm tesseract-data-rus ;;
-    esac
-}
-
-install_rembg_backend() {
-    case "$PACKAGE_FAMILY" in
-        fedora)
-            helper=/usr/share/doc/forgebox/install-rembg-fedora.sh
-            [ -r "$helper" ] || { printf 'The Fedora rembg helper was not found: %s\n' "$helper" >&2; return 1; }
-            bash "$helper" || return 1
-            return 0
-            ;;
-        debian)
-            run_privileged apt-get update || return 1
-            run_privileged apt-get install --yes python3-venv || return 1
-            ;;
-        arch) run_privileged pacman -S --needed --noconfirm python || return 1 ;;
-    esac
-
-    PYTHON_BIN=$(command -v python3) || return 1
-    if ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] < (4, 0) else 1)' 2>/dev/null; then
-        printf 'rembg requires Python >=3.11 and <4.0. The installed python3 does not meet that requirement.\n' >&2
-        return 1
-    fi
-
-    DATA_HOME=${XDG_DATA_HOME:-"$HOME/.local/share"}
-    VENV_DIR="$DATA_HOME/forgebox/rembg-venv"
-    mkdir -p "$DATA_HOME/forgebox" || return 1
-
-    if [ -e "$VENV_DIR" ]; then
-        if [ ! -x "$VENV_DIR/bin/python" ] || ! "$VENV_DIR/bin/python" -c 'import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] < (4, 0) else 1)' 2>/dev/null; then
-            printf 'An existing ForgeBox rembg environment uses an incompatible Python.\n' >&2
-            printf 'Remove it manually and run the installer again: %s\n' "$VENV_DIR" >&2
-            return 1
-        fi
-    else
-        "$PYTHON_BIN" -m venv "$VENV_DIR" || return 1
-    fi
-
-    if ! "$VENV_DIR/bin/python" -m pip --version >/dev/null 2>&1; then
-        "$VENV_DIR/bin/python" -m ensurepip --upgrade || return 1
-    fi
-    "$VENV_DIR/bin/python" -m pip install --upgrade pip || return 1
-    "$VENV_DIR/bin/python" -m pip install --upgrade 'rembg[cpu,cli]' || return 1
-    "$VENV_DIR/bin/rembg" --help >/dev/null 2>&1 || return 1
-    printf 'rembg is ready. Its AI model will be downloaded on first use.\n'
-}
-
-install_optional_components() {
-    if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
-        printf '\nNo interactive terminal is available. Skipping optional components.\n'
-        printf 'You can rerun the ForgeBox installer from a terminal to configure them.\n'
-        return 0
-    fi
-
-    printf '\nOptional ForgeBox components:\n'
-    if has_working_rembg; then
-        printf '  rembg: already installed.\n'
-    elif prompt_yes_no 'Install rembg for AI background removal?'; then
-        if install_rembg_backend; then
-            printf '  rembg installation completed.\n'
-        else
-            printf '  Warning: rembg setup failed. ForgeBox itself is installed; you can retry later.\n' >&2
-        fi
-    fi
-
-    if has_russian_ocr; then
-        printf '  Russian OCR data: already installed.\n'
-    elif prompt_yes_no 'Install Russian language data for Tesseract OCR?'; then
-        if install_russian_ocr; then
-            printf '  Russian OCR data installed.\n'
-        else
-            printf '  Warning: Russian OCR data could not be installed. ForgeBox itself is installed.\n' >&2
-        fi
-    fi
-}
-
-
 command -v curl >/dev/null 2>&1 || fail "curl is required."
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required."
 
@@ -329,7 +200,6 @@ printf 'The package manager will install ForgeBox and its declared dependencies.
 
 case "$PACKAGE_FAMILY" in
     fedora)
-        ensure_fedora_ffmpeg
         run_privileged dnf install --assumeyes "$PACKAGE_PATH"
         ;;
     debian)
@@ -347,4 +217,3 @@ esac
 
 printf '\nForgeBox %s was installed successfully.\n' "$RELEASE_TAG"
 printf 'Launch it from your application menu or run: forgebox\n'
-install_optional_components

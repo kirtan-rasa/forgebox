@@ -12,46 +12,12 @@ if [[ ! -t 0 ]]; then
   DNF_FLAGS+=(--assumeyes)
 fi
 
-FEDORA_VERSION="$(rpm -E %fedora)"
-case "$FEDORA_VERSION" in
-  ''|*[!0-9]*) echo "Could not determine the Fedora release version." >&2; exit 1 ;;
-esac
-
-# ForgeBox uses libx264, which is not included in Fedora's ffmpeg-free build.
-if ! rpm -q rpmfusion-free-release >/dev/null 2>&1; then
-  echo "Enabling RPM Fusion Free for the full FFmpeg package..."
-  sudo dnf install "${DNF_FLAGS[@]}" \
-    "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-${FEDORA_VERSION}.noarch.rpm"
-fi
-
-if rpm -q ffmpeg-free >/dev/null 2>&1; then
-  sudo dnf swap "${DNF_FLAGS[@]}" ffmpeg-free ffmpeg --allowerasing
-else
-  sudo dnf install "${DNF_FLAGS[@]}" ffmpeg --allowerasing
-fi
-
 sudo dnf install "${DNF_FLAGS[@]}" \
   gcc gcc-c++ make pkgconf-pkg-config git rust cargo rustfmt \
   libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel \
   libXi-devel libXcursor-devel libXinerama-devel mesa-libGL-devel \
   ImageMagick python3-img2pdf poppler-utils ghostscript qpdf pdftk-java libreoffice \
-  tesseract tesseract-langpack-eng perl-Image-ExifTool
-
-if tesseract --list-langs 2>/dev/null | grep -qx 'rus'; then
-  echo "Russian OCR language data is already installed."
-elif [[ -t 0 ]]; then
-  read -r -p "Install Russian language data for Tesseract OCR? [y/N] " install_russian
-  case "$install_russian" in
-    y|Y|yes|YES|Yes)
-      sudo dnf install "${DNF_FLAGS[@]}" tesseract-langpack-rus
-      ;;
-    *)
-      echo "Skipping Russian OCR language data."
-      ;;
-  esac
-else
-  echo "Skipping optional Russian OCR language data in non-interactive mode."
-fi
+  tesseract tesseract-langpack-eng tesseract-langpack-rus perl-Image-ExifTool
 
 find_working_rembg() {
   local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
@@ -102,8 +68,8 @@ fi
 cat <<'MSG'
 ForgeBox build dependencies and common file utilities installed.
 
-Optional components:
-  - Russian OCR data: sudo dnf install tesseract-langpack-rus
+Optional dependencies:
+  - ffmpeg: enable video/audio conversion and GIF export. Codec support for H.264/VP9 varies by build; Fedora may require RPM Fusion.
   - rembg: optional background-removal backend. For an installed Fedora RPM, run:
       bash /usr/share/doc/forgebox/install-rembg-fedora.sh
     From a source checkout, run:

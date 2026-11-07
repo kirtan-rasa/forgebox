@@ -4,13 +4,11 @@
 
 ### Added
 - Add a one-command POSIX shell installer for Linux, deployed through GitHub Pages.
-- Offer optional installation of the rembg CPU backend and Russian OCR language data.
 
 ### Improved
 - Refactor the application UI and conversion engine into focused modules.
 - Strengthen conversion integration tests and improve Linux packaging.
 - Improve Fedora dependency setup and release build infrastructure.
-- Require FFmpeg for audio and video conversion, including automatic RPM Fusion Free setup on Fedora.
 
 
 ## 0.3.0-beta.1

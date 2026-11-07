@@ -129,6 +129,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # FFmpeg with libx264 is provided by RPM Fusion Free, not Fedora's base repos.
+          fedora_version="$(rpm -E %fedora)"
+          dnf install -y "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-${fedora_version}.noarch.rpm"
+          dnf makecache
           DNF_LOG="$(mktemp)"
           trap 'rm -f "$DNF_LOG"' EXIT
 
@@ -244,7 +248,20 @@ jobs:
 
           bash packaging/linux/prepare-pacman-pkgbuild.sh dist/linux/PKGBUILD
           grep -Fq 'pdftk' dist/linux/PKGBUILD
-          grep -Fq "optdepends=('ffmpeg: Enable audio, video, and GIF conversion')" dist/linux/PKGBUILD
+          python3 - dist/linux/PKGBUILD <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          pkgbuild = Path(sys.argv[1]).read_text(encoding="utf-8")
+          for variable in ("depends", "optdepends"):
+              match = re.search(rf"(?ms)^{variable}=\\((.*?)\\)", pkgbuild)
+              if variable == "depends":
+                  if not match or not re.search(r"(?<![\\w-])ffmpeg(?![\\w-])", match.group(1)):
+                      raise SystemExit("FFmpeg must be a required Arch package dependency.")
+              elif match and re.search(r"(?<![\\w-])ffmpeg(?![\\w-])", match.group(1)):
+                  raise SystemExit("FFmpeg must not be listed as an optional Arch dependency.")
+          PY
 
           chmod +x "$APPIMAGE"
           APPIMAGE_CHECK_DIR="$(mktemp -d)"

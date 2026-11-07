@@ -19,7 +19,6 @@ Requires:       ghostscript
 Requires:       qpdf
 Requires:       pdftk-java
 Requires:       libreoffice
-Requires:       ffmpeg
 Requires:       tesseract
 Requires:       tesseract-langpack-eng
 Requires:       perl-Image-ExifTool
@@ -27,6 +26,7 @@ Requires:       xdg-utils
 
 # Optional backends are weak dependencies so they do not make installation
 # fail on systems where their repositories are not enabled.
+Recommends:     ffmpeg
 Recommends:     tesseract-langpack-rus
 
 %description

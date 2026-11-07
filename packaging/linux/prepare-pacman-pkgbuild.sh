@@ -44,11 +44,34 @@ replacement = """package() {
 }"""
 replace_one(package_pattern, replacement, "package()")
 
-# FFmpeg is required by ForgeBox's media tools and must remain in depends.
-# Cargo.toml is the source of truth for native package dependencies.
-depends_match = re.search(r"(?ms)^depends=\((.*?)\)", text)
-if not depends_match or not re.search(r"(?<![\\w-])ffmpeg(?![\\w-])", depends_match.group(1)):
-    raise SystemExit("Generated PKGBUILD is missing the required ffmpeg dependency.")
+# FFmpeg is intentionally optional: the image, PDF, document, and data tools do
+# not need the sizeable audio/video backend. cargo-packager does not currently
+# expose Pacman optdepends, so add the supported media backend to PKGBUILD here.
+optional_dependency = "ffmpeg: Enable audio, video, and GIF conversion"
+if re.search(r"(?m)^optdepends=", text):
+    optdepends_match = re.search(r"(?ms)^optdepends=\((.*?)\)", text)
+    if not optdepends_match:
+        raise SystemExit("Could not parse generated optdepends array.")
+    if optional_dependency not in optdepends_match.group(1):
+        insertion = optdepends_match.end() - 1
+        text = text[:insertion] + f"\n  '{optional_dependency}'" + text[insertion:]
+else:
+    depends_start = re.search(r"(?m)^depends=\(", text)
+    if not depends_start:
+        raise SystemExit("Generated PKGBUILD does not contain depends.")
+    depth = 0
+    depends_end = None
+    for index in range(depends_start.start(), len(text)):
+        if text[index] == "(":
+            depth += 1
+        elif text[index] == ")":
+            depth -= 1
+            if depth == 0:
+                depends_end = index + 1
+                break
+    if depends_end is None:
+        raise SystemExit("Could not find the end of the generated depends array.")
+    text = text[:depends_end] + f"\noptdepends=('{optional_dependency}')" + text[depends_end:]
 
 path.write_text(text, encoding="utf-8")
 PY
