@@ -488,6 +488,7 @@ fn davinci_resolve_profile_creates_verified_dnxhr_mov_with_pcm_audio() {
     for (fixture_name, pixel_format, expected_profile, expected_pix_fmt) in [
         ("source-10bit.mkv", "yuv420p10le", "DNxHR HQX", "yuv422p10le"),
         ("source-444.mkv", "yuv444p10le", "DNxHR 444", "yuv444p10le"),
+        ("source-rgb.mkv", "gbrp10le", "DNxHR 444", "gbrp10le"),
     ] {
         let source = ws.path(fixture_name);
         fixture_command("ffmpeg", vec![

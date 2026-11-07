@@ -77,6 +77,9 @@ struct VideoProbe {
     has_alpha: bool,
     has_audio: bool,
     has_subtitles: bool,
+    additional_video_streams: usize,
+    has_data_streams: bool,
+    has_attachments: bool,
     color_range: Option<String>,
     color_space: Option<String>,
     color_transfer: Option<String>,
@@ -159,6 +162,11 @@ fn probe_video(input: &Path) -> Result<VideoProbe, String> {
         has_alpha,
         has_audio: streams.iter().any(|stream| value_string(stream, "codec_type") == Some("audio")),
         has_subtitles: streams.iter().any(|stream| value_string(stream, "codec_type") == Some("subtitle")),
+        additional_video_streams: streams.iter()
+            .filter(|stream| value_string(stream, "codec_type") == Some("video"))
+            .count().saturating_sub(1),
+        has_data_streams: streams.iter().any(|stream| value_string(stream, "codec_type") == Some("data")),
+        has_attachments: streams.iter().any(|stream| value_string(stream, "codec_type") == Some("attachment")),
         color_range: parse_optional_string(video, "color_range"),
         color_space: parse_optional_string(video, "color_space"),
         color_transfer: parse_optional_string(video, "color_transfer"),
@@ -245,6 +253,18 @@ pub(super) fn convert_davinci_resolve(input: &Path, output: &Path, requested_pro
     if source.has_subtitles {
         record_execution_warning("Subtitle tracks were found in the source but are not embedded in the DNxHR MOV. Keep the original file if you need them.".into());
     }
+    if source.additional_video_streams > 0 {
+        record_execution_warning(format!(
+            "The source contains {} additional video stream(s). Only the first video stream is exported; alternate angles and embedded previews are not included.",
+            source.additional_video_streams
+        ));
+    }
+    if source.has_data_streams {
+        record_execution_warning("The source contains data streams (for example, timed metadata or timecode tracks). These are not copied to the DNxHR MOV.".into());
+    }
+    if source.has_attachments {
+        record_execution_warning("The source contains embedded attachments. They are not copied to the DNxHR MOV.".into());
+    }
     if source.has_alpha {
         record_execution_warning("The source contains an alpha channel. The selected DNxHR output is opaque and will not preserve transparency.".into());
     }
@@ -313,6 +333,9 @@ mod davinci_tests {
             has_alpha: pixel_format_has_alpha(pixel_format),
             has_audio: true,
             has_subtitles: false,
+            additional_video_streams: 0,
+            has_data_streams: false,
+            has_attachments: false,
             color_range: None,
             color_space: None,
             color_transfer: None,

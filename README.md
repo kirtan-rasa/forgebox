@@ -30,7 +30,7 @@ ForgeBox brings common image, PDF, document, spreadsheet, and media tools into o
 | **PDF** | Merge, split, compress, rotate, reorder pages, render pages to images, add watermarks |
 | **Documents** | DOC/DOCX → PDF and text-first PDF → DOCX conversion |
 | **Data** | CSV ↔ JSON, CSV ↔ XLSX, JSON ↔ XLSX |
-| **Audio & video** | Convert video, extract audio, and create GIFs with frame-rate and size controls |
+| **Audio & video** | Convert video, extract audio, create GIFs, and prepare DNxHR MOV files for DaVinci Resolve on Linux |
 
 ### A few useful details
 
@@ -69,7 +69,7 @@ Get individual packages from [GitHub Releases](https://github.com/kirtan-rasa/fo
 
 The AppImage contains the ForgeBox application and its packaged shared libraries, but not every conversion engine. Install the external utilities required by the tools you use. RPM, DEB, and Arch packages declare the dependencies available in their respective package repositories.
 
-For package details and RPM signature verification, see [Linux packages](docs/LINUX-PACKAGES.md).
+For package details and RPM signature verification, see [Linux packages](docs/LINUX-PACKAGES.md). For DNxHR profiles, Linux requirements, and export limitations, see [DaVinci Resolve export](docs/DAVINCI-RESOLVE.md).
 
 ## Dependencies
 
@@ -84,10 +84,11 @@ ForgeBox uses external tools only for the features that need them.
 | LibreOffice | Office document and spreadsheet conversion |
 | Tesseract OCR | Extracting text from images |
 | ExifTool | Reading EXIF metadata |
-| FFmpeg | Video conversion, audio extraction, and GIF creation |
+| FFmpeg | Video conversion, audio extraction, GIF creation, and DNxHR encoding |
+| FFprobe | Source inspection and output verification for DaVinci Resolve export |
 | `rembg` | Background removal |
 
-QR generation is built into ForgeBox and does not require a separate QR command-line tool. HEIC/HEIF support depends on the ImageMagick build and its format delegates. Video format support still depends on the codecs available in the installed FFmpeg build.
+QR generation is built into ForgeBox and does not require a separate QR command-line tool. HEIC/HEIF support depends on the ImageMagick build and its format delegates. Video format support still depends on the codecs available in the installed FFmpeg build. FFprobe is normally distributed alongside FFmpeg.
 
 ## Build from source
 
