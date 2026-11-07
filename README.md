@@ -35,7 +35,7 @@ ForgeBox brings common image, PDF, document, spreadsheet, and media tools into o
 ### A few useful details
 
 - Batch operations support multiple input files where the tool allows it.
-- Audio conversion supports bitrate selection for lossy formats; WAV and FLAC use lossless codecs. Source metadata is copied when supported.
+- Audio conversion supports bitrate selection for lossy formats; WAV uses uncompressed 16-bit PCM, while FLAC uses lossless compression. Source metadata is copied when supported.
 - Images-to-PDF includes page previews and drag-to-reorder controls.
 - Original files are never overwritten. ForgeBox chooses an unused output name.
 - File dialogs and thumbnail generation run outside the UI thread.

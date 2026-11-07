@@ -105,7 +105,7 @@ pub(super) fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
                     });
             });
             ui.label(RichText::new(if lossless {
-                "WAV and FLAC use lossless encoding. The bitrate setting is not used."
+                "WAV uses uncompressed 16-bit PCM; FLAC uses lossless compression. Neither uses a bitrate setting."
             } else {
                 "Bitrate applies to MP3, AAC, M4A, OGG, and Opus. Higher values usually produce larger files."
             }).size(11.0).color(MUTED));

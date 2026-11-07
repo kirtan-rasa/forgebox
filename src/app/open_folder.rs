@@ -83,7 +83,6 @@ pub(super) fn open_folder(path: &Path) -> Result<(), String> {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::{file_uri, folders_argument};
-    use std::path::Path;
 
     #[test]
     fn file_uri_encodes_spaces_unicode_and_quotes() {
