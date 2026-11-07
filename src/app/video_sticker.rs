@@ -32,7 +32,6 @@ enum PlaybackMessage {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TimelineDrag { Start, End, Playhead }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
 struct PlaybackControl {
     stop: Arc<AtomicBool>,
     pid: Arc<AtomicI32>,
@@ -575,6 +574,7 @@ impl VideoStickerEditor {
                         let value = (fraction * info.duration_ms as f32).round() as u32;
                         let old_start = self.start_ms;
                         let old_end = self.end_ms;
+                        let old_playhead = self.playhead_ms;
                         match self.timeline_drag.unwrap_or(TimelineDrag::Playhead) {
                             TimelineDrag::Start => {
                                 let earliest = self.end_ms.saturating_sub(3_000);
@@ -593,6 +593,8 @@ impl VideoStickerEditor {
                         if old_start != self.start_ms || old_end != self.end_ms {
                             self.stop_playback();
                             self.playhead_ms = self.playhead_ms.clamp(self.start_ms, self.end_ms);
+                        } else if old_playhead != self.playhead_ms {
+                            self.stop_playback();
                         }
                     }
                 }

@@ -341,7 +341,7 @@ impl Job {
 
 #[cfg(test)]
 mod tests {
-    use super::{AudioFormat, ImageFormat, JobOptions, PdfRotation, ResolveProfile, VideoFormat, VideoStickerFit};
+    use super::{AudioFormat, ImageFormat, JobOptions, PdfRotation, ResolveProfile, VideoFormat};
     use crate::catalog::ToolId;
 
     #[test]
