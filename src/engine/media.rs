@@ -197,10 +197,16 @@ fn select_resolve_encoding(profile: ResolveProfile, source: &VideoProbe) -> Reso
     }
 }
 
+fn ffmpeg_color_space_tag(source: &VideoProbe) -> Option<&str> {
+    // FFprobe reports RGB's matrix coefficients as "gbr", but FFmpeg's
+    // -colorspace option accepts YUV matrix names and rejects "gbr".
+    source.color_space.as_deref().filter(|value| *value != "gbr")
+}
+
 fn copy_color_metadata(args: &mut Vec<std::ffi::OsString>, source: &VideoProbe) {
     for (option, value) in [
         ("-color_range", source.color_range.as_deref()),
-        ("-colorspace", source.color_space.as_deref()),
+        ("-colorspace", ffmpeg_color_space_tag(source)),
         ("-color_trc", source.color_transfer.as_deref()),
         ("-color_primaries", source.color_primaries.as_deref()),
     ] {
@@ -322,7 +328,7 @@ pub(super) fn convert_davinci_resolve(input: &Path, output: &Path, requested_pro
 
 #[cfg(test)]
 mod davinci_tests {
-    use super::{is_rgb_pixel_format, pixel_format_has_alpha, select_resolve_encoding, ResolveProfile, VideoProbe};
+    use super::{ffmpeg_color_space_tag, is_rgb_pixel_format, pixel_format_has_alpha, select_resolve_encoding, ResolveProfile, VideoProbe};
 
     fn source(pixel_format: &str, bit_depth: u8) -> VideoProbe {
         VideoProbe {
@@ -341,6 +347,17 @@ mod davinci_tests {
             color_transfer: None,
             color_primaries: None,
         }
+    }
+
+    #[test]
+    fn rgb_gbr_matrix_tag_is_not_passed_to_ffmpeg_colorspace_option() {
+        let mut rgb = source("gbrp10le", 10);
+        rgb.color_space = Some("gbr".into());
+        assert_eq!(ffmpeg_color_space_tag(&rgb), None);
+
+        let mut yuv = source("yuv422p10le", 10);
+        yuv.color_space = Some("bt709".into());
+        assert_eq!(ffmpeg_color_space_tag(&yuv), Some("bt709"));
     }
 
     #[test]
