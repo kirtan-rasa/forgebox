@@ -1,6 +1,8 @@
 use super::{normalized_ext, os, positive, record_execution_warning, report_status, run_ok, ResolveProfile};
 use serde_json::Value;
 use std::path::Path;
+use std::process::Command;
+use std::sync::OnceLock;
 
 pub(super) fn convert_video(input: &Path, output: &Path, target_format: &str, preset: &str, quality: &str) -> Result<(), String> {
     let format = normalized_ext(target_format);
@@ -197,6 +199,50 @@ fn select_resolve_encoding(profile: ResolveProfile, source: &VideoProbe) -> Reso
     }
 }
 
+fn video_sync_args_from_help(help: &str) -> Result<Vec<&'static str>, String> {
+    let has_option = |name: &str| {
+        help.lines().any(|line| {
+            line.trim_start()
+                .split_whitespace()
+                .next()
+                .map(|option| option.starts_with(name))
+                .unwrap_or(false)
+        })
+    };
+
+    if has_option("-fps_mode") {
+        Ok(vec!["-fps_mode", "passthrough"])
+    } else if has_option("-vsync") {
+        Ok(vec!["-vsync", "0"])
+    } else {
+        Err("This FFmpeg build exposes neither -fps_mode nor the legacy -vsync option. Update FFmpeg and try again.".into())
+    }
+}
+
+fn ffmpeg_video_sync_args() -> Result<Vec<std::ffi::OsString>, String> {
+    static CACHED_ARGS: OnceLock<Result<Vec<std::ffi::OsString>, String>> = OnceLock::new();
+
+    CACHED_ARGS.get_or_init(|| {
+        let output = Command::new("ffmpeg")
+            .args(["-hide_banner", "-h", "full"])
+            .output()
+            .map_err(|error| format!("Could not inspect FFmpeg options: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "FFmpeg could not report its supported options: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        let help = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let options = video_sync_args_from_help(&help)?;
+        Ok(options.into_iter().map(os).collect())
+    }).clone()
+}
+
 fn ffmpeg_color_space_tag(source: &VideoProbe) -> Option<&str> {
     // FFprobe reports RGB's matrix coefficients as "gbr", but FFmpeg's
     // -colorspace option accepts YUV matrix names and rejects "gbr".
@@ -296,8 +342,6 @@ pub(super) fn convert_davinci_resolve(input: &Path, output: &Path, requested_pro
         os("-map"), os("0:a?"),
         os("-map_metadata"), os("0"),
         os("-map_chapters"), os("0"),
-        // -vsync 0 is supported by FFmpeg 4.4 and newer; it passes source frame timestamps through.
-        os("-vsync"), os("0"),
         os("-c:v"), os("dnxhd"),
         os("-profile:v"), os(encoding.profile),
         os("-pix_fmt"), os(encoding.pixel_format),
@@ -306,6 +350,9 @@ pub(super) fn convert_davinci_resolve(input: &Path, output: &Path, requested_pro
         os("-ar"), os("48000"),
         os("-movflags"), os("+faststart"),
     ];
+    // FFmpeg 7+ may reject -vsync; use -fps_mode when advertised, with a
+    // legacy -vsync fallback for older builds such as FFmpeg 4.4.
+    args.extend(ffmpeg_video_sync_args()?);
     if source.is_interlaced {
         args.extend([os("-vf"), os("bwdif=mode=send_frame:parity=auto:deint=all")]);
     }
@@ -328,7 +375,7 @@ pub(super) fn convert_davinci_resolve(input: &Path, output: &Path, requested_pro
 
 #[cfg(test)]
 mod davinci_tests {
-    use super::{ffmpeg_color_space_tag, is_rgb_pixel_format, pixel_format_has_alpha, select_resolve_encoding, ResolveProfile, VideoProbe};
+    use super::{ffmpeg_color_space_tag, is_rgb_pixel_format, pixel_format_has_alpha, select_resolve_encoding, video_sync_args_from_help, ResolveProfile, VideoProbe};
 
     fn source(pixel_format: &str, bit_depth: u8) -> VideoProbe {
         VideoProbe {
@@ -347,6 +394,23 @@ mod davinci_tests {
             color_transfer: None,
             color_primaries: None,
         }
+    }
+
+    #[test]
+    fn modern_ffmpeg_uses_fps_mode_passthrough() {
+        let help = "  -fps_mode[:stream_specifier]  set framerate mode\n  -vsync parameter  legacy sync mode";
+        assert_eq!(video_sync_args_from_help(help).unwrap(), vec!["-fps_mode", "passthrough"]);
+    }
+
+    #[test]
+    fn legacy_ffmpeg_falls_back_to_numeric_vsync() {
+        let help = "  -vsync parameter  video sync method";
+        assert_eq!(video_sync_args_from_help(help).unwrap(), vec!["-vsync", "0"]);
+    }
+
+    #[test]
+    fn ffmpeg_without_a_frame_sync_option_returns_a_clear_error() {
+        assert!(video_sync_args_from_help("  -threads number  set thread count").unwrap_err().contains("neither"));
     }
 
     #[test]

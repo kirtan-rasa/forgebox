@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Improved
+- Run conversions immediately by default; make multi-task queueing an explicit optional mode.
+- Detect the installed FFmpeg frame-sync options, preferring `-fps_mode passthrough` on newer builds and retaining `-vsync 0` for older builds.
+- Open the directory containing the generated output through GIO, rather than relying on an assumed output path.
+
 ### Added
 - Add a DaVinci Resolve Linux export tool that creates DNxHR MOV files with 24-bit Linear PCM audio.
 - Automatically select DNxHR HQ, HQX, or 444 from the source pixel format and bit depth.
