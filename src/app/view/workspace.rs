@@ -679,7 +679,8 @@ impl ForgeApp {
                         // One live status area for running, success or error; never duplicate status below the card.
                         if self.running || !self.logs.is_empty() {
                             ui.add_space(12.0);
-                            let has_error = self.logs.iter().any(|(ok, _)| !ok);
+                            let has_error = self.logs.iter().any(|(ok, message)| !ok && !message.starts_with("Open folder:"));
+                            let folder_open_error = self.logs.iter().find(|(ok, message)| !*ok && message.starts_with("Open folder:")).map(|(_, message)| message.clone());
                             let has_warning = self.logs.iter().any(|(ok, message)| *ok && message.starts_with("Warning:"));
                             let success_count = self.logs.iter().filter(|(ok, message)| *ok && message.starts_with("Done:")).count();
                             let (status_fill, status_edge) = if self.running {
@@ -778,6 +779,9 @@ impl ForgeApp {
                                                 for (_, warning) in self.logs.iter().filter(|(ok, message)| *ok && message.starts_with("Warning:")) {
                                                     ui.add(egui::Label::new(RichText::new(warning).size(11.5).color(WARNING)).wrap());
                                                 }
+                                                if let Some(error) = folder_open_error.as_ref() {
+                                                    ui.add(egui::Label::new(RichText::new(error).size(11.5).color(RED)).wrap());
+                                                }
                                             });
 
                                         }
@@ -785,6 +789,7 @@ impl ForgeApp {
                                             if let Some(output_dir) = self.last_output_dir.clone() {
                                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                                     if ui.button("Open folder").clicked() {
+                                                        self.logs.retain(|(_, message)| !message.starts_with("Open folder:"));
                                                         #[cfg(target_os = "linux")]
                                                         {
                                                             let directory = if output_dir.is_dir() {
@@ -796,7 +801,7 @@ impl ForgeApp {
                                                                 let status_tx = self.status_tx.clone();
                                                                 std::thread::spawn(move || {
                                                                     if let Err(error) = super::super::open_folder::open_folder(&directory) {
-                                                                        let _ = status_tx.send(format!("Could not open output folder: {error}"));
+                                                                        let _ = status_tx.send(format!("OPEN_FOLDER_ERROR:{error}"));
                                                                     }
                                                                 });
                                                             }

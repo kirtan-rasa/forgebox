@@ -679,7 +679,11 @@ impl ForgeApp {
 
     fn poll_execution_status(&mut self) {
         while let Ok(status) = self.status_rx.try_recv() {
-            self.execution_status = status;
+            if let Some(error) = status.strip_prefix("OPEN_FOLDER_ERROR:") {
+                self.logs.push((false, format!("Open folder: {}", error.trim())));
+            } else {
+                self.execution_status = status;
+            }
         }
     }
 
