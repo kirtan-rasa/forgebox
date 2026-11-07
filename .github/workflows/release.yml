@@ -309,10 +309,14 @@ jobs:
             echo "Generated .SRCINFO is missing the mandatory pdftk dependency." >&2
             exit 1
           }
-          grep -Fq 'optdepends = ffmpeg: Enable audio, video, and GIF conversion' dist/linux/.SRCINFO || {
-            echo "Generated .SRCINFO is missing the optional FFmpeg dependency." >&2
+          grep -Fq 'depends = ffmpeg' dist/linux/.SRCINFO || {
+            echo "Generated .SRCINFO is missing the required FFmpeg dependency." >&2
             exit 1
           }
+          if grep -Fq 'optdepends = ffmpeg' dist/linux/.SRCINFO; then
+            echo "FFmpeg must not be listed as an optional Arch dependency." >&2
+            exit 1
+          fi
 
           # makepkg --nodeps validates package construction but deliberately
           # skips dependency resolution. Ask pacman to resolve every mandatory
