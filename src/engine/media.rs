@@ -203,7 +203,7 @@ fn verify_resolve_output(output: &Path, source_had_audio: bool, expected_profile
     if value_string(video, "codec_name") != Some("dnxhd") {
         return Err("The output file does not contain the expected DNxHR video stream.".into());
     }
-    if value_string(video, "profile") != Some(expected_profile) {
+    if !value_string(video, "profile").map(|actual| actual.eq_ignore_ascii_case(expected_profile)).unwrap_or(false) {
         return Err(format!("The output DNxHR profile could not be verified (expected {expected_profile})."));
     }
     if value_string(video, "pix_fmt") != Some(expected_pixel_format) {
@@ -247,7 +247,8 @@ pub(super) fn convert_davinci_resolve(input: &Path, output: &Path, requested_pro
         os("-map"), os("0:a?"),
         os("-map_metadata"), os("0"),
         os("-map_chapters"), os("0"),
-        os("-fps_mode"), os("passthrough"),
+        // -vsync 0 is supported by FFmpeg 4.4 and newer; it passes source frame timestamps through.
+        os("-vsync"), os("0"),
         os("-c:v"), os("dnxhd"),
         os("-profile:v"), os(encoding.profile),
         os("-pix_fmt"), os(encoding.pixel_format),

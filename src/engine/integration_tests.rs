@@ -478,7 +478,7 @@ fn davinci_resolve_profile_creates_verified_dnxhr_mov_with_pcm_audio() {
     let streams = metadata["streams"].as_array().expect("output stream list");
     let video = streams.iter().find(|stream| stream["codec_type"] == "video").expect("video stream");
     assert_eq!(video["codec_name"], "dnxhd");
-    assert_eq!(video["profile"], "DNxHR HQ");
+    assert!(video["profile"].as_str().map(|profile| profile.eq_ignore_ascii_case("DNxHR HQ")).unwrap_or(false), "unexpected DNxHR profile: {}", video["profile"]);
     assert_eq!(video["pix_fmt"], "yuv422p");
     let audio = streams.iter().find(|stream| stream["codec_type"] == "audio").expect("audio stream");
     assert_eq!(audio["codec_name"], "pcm_s24le");
