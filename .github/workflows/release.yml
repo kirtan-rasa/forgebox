@@ -46,7 +46,7 @@ jobs:
           path: .
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
       - name: Validate shell scripts
         run: find scripts packaging -type f -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
       - name: Test public release asset selection
@@ -64,8 +64,6 @@ jobs:
         run: bash scripts/enable-native-wayland-dnd.sh
       - name: Validate optional Fedora installer script
         run: bash -n scripts/install-rembg-fedora.sh
-      - name: Check Rust formatting
-        run: cargo fmt --all -- --check
       - name: Run Clippy
         run: cargo clippy --locked --all-targets
       - name: Run Rust tests

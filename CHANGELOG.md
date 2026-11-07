@@ -9,7 +9,7 @@
 - Make the quick installer skip draft and prerelease GitHub releases and align the rembg Python version range.
 
 ### Improved
-- Run formatting and Clippy checks in the Linux source CI job; extend image sorting, output reservation, and video-preview lifecycle coverage.
+- Run Clippy in the Linux source CI job; extend image sorting, output reservation, and video-preview lifecycle coverage.
 
 ## 0.5.0
 

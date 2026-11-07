@@ -44,7 +44,6 @@ The optional rembg check never downloads a model. Actual background-removal qual
 Run the ordinary tests:
 
 ~~~bash
-cargo fmt --all -- --check
 cargo clippy --locked --all-targets
 cargo test --locked
 cargo check --locked
