@@ -4,7 +4,7 @@
 
 use super::{
     execute, image_magick_program, os, pdf_page_count, run_magick_owned, temp_dir, Job,
-    JobOptions, PdfCompressionProfile, PdfImageFormat, PdfRotation,
+    JobOptions, PdfCompressionProfile, PdfImageFormat, PdfRotation, ResolveProfile,
 };
 use crate::catalog::ToolId;
 use image::{Rgba, RgbaImage};
@@ -426,4 +426,61 @@ fn audio_and_video_tools_extract_convert_and_generate_gif() {
     let decoded = image::ImageReader::open(&gif[0]).unwrap()
         .with_guessed_format().unwrap().decode().unwrap();
     assert_eq!(decoded.width(), 128);
+}
+
+
+#[test]
+fn davinci_resolve_profile_creates_verified_dnxhr_mov_with_pcm_audio() {
+    if !require(&["ffmpeg", "ffprobe"], "DaVinci Resolve") {
+        return;
+    }
+
+    let encoder_list = Command::new("ffmpeg")
+        .args(["-hide_banner", "-encoders"])
+        .output()
+        .expect("query FFmpeg encoders");
+    let encoder_text = String::from_utf8_lossy(&encoder_list.stdout);
+    if !encoder_text.lines().any(|line| line.contains("dnxhd")) {
+        eprintln!("Skipping DaVinci Resolve integration test: this FFmpeg build has no DNxHR encoder.");
+        return;
+    }
+
+    let ws = Workspace::new("davinci-resolve");
+    let input = ws.path("source.mkv");
+    fixture_command("ffmpeg", vec![
+        os("-y"), os("-hide_banner"), os("-loglevel"), os("error"),
+        os("-f"), os("lavfi"), os("-i"), os("testsrc2=size=320x240:rate=25:duration=1"),
+        os("-f"), os("lavfi"), os("-i"), os("sine=frequency=1000:sample_rate=48000:duration=1"),
+        os("-c:v"), os("mpeg4"), os("-q:v"), os("5"), os("-pix_fmt"), os("yuv420p"),
+        os("-c:a"), os("pcm_s16le"), os("-shortest"), os(&input),
+    ]);
+
+    let result = execute(job(
+        ToolId::DavinciResolve,
+        vec![input],
+        ws.path("resolve-output"),
+        JobOptions::DavinciResolve { profile: ResolveProfile::Auto },
+    )).expect("DaVinci Resolve export should succeed");
+    outputs(&result, 1);
+    assert_eq!(result[0].extension().and_then(|ext| ext.to_str()), Some("mov"));
+
+    let probe = Command::new("ffprobe")
+        .args([
+            "-v", "error",
+            "-show_entries", "stream=codec_type,codec_name,profile,pix_fmt,sample_rate",
+            "-of", "json",
+        ])
+        .arg(&result[0])
+        .output()
+        .expect("probe exported MOV");
+    assert!(probe.status.success(), "FFprobe failed: {}", String::from_utf8_lossy(&probe.stderr));
+    let metadata: serde_json::Value = serde_json::from_slice(&probe.stdout).expect("parse output metadata");
+    let streams = metadata["streams"].as_array().expect("output stream list");
+    let video = streams.iter().find(|stream| stream["codec_type"] == "video").expect("video stream");
+    assert_eq!(video["codec_name"], "dnxhd");
+    assert_eq!(video["profile"], "DNxHR HQ");
+    assert_eq!(video["pix_fmt"], "yuv422p");
+    let audio = streams.iter().find(|stream| stream["codec_type"] == "audio").expect("audio stream");
+    assert_eq!(audio["codec_name"], "pcm_s24le");
+    assert_eq!(audio["sample_rate"], "48000");
 }

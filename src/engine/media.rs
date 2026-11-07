@@ -73,6 +73,7 @@ struct VideoProbe {
     pixel_format: String,
     bit_depth: u8,
     is_444: bool,
+    is_rgb: bool,
     has_alpha: bool,
     has_audio: bool,
     has_subtitles: bool,
@@ -128,9 +129,8 @@ fn probe_video(input: &Path) -> Result<VideoProbe, String> {
         .and_then(|value| value.as_str().and_then(|s| s.parse::<u8>().ok()).or_else(|| value.as_u64().map(|v| v as u8)))
         .unwrap_or(0);
     let bit_depth = raw_depth.max(inferred_pixel_depth(&pixel_format));
-    let is_444 = pixel_format.contains("444")
-        || pixel_format.starts_with("gbr")
-        || pixel_format.starts_with("rgb");
+    let is_rgb = pixel_format.starts_with("gbr") || pixel_format.starts_with("rgb");
+    let is_444 = pixel_format.contains("444") || is_rgb;
     let has_alpha = pixel_format.contains("yuva")
         || pixel_format.contains("rgba")
         || pixel_format.contains("gbrap")
@@ -139,6 +139,7 @@ fn probe_video(input: &Path) -> Result<VideoProbe, String> {
         pixel_format,
         bit_depth,
         is_444,
+        is_rgb,
         has_alpha,
         has_audio: streams.iter().any(|stream| value_string(stream, "codec_type") == Some("audio")),
         has_subtitles: streams.iter().any(|stream| value_string(stream, "codec_type") == Some("subtitle")),
@@ -168,7 +169,7 @@ fn select_resolve_encoding(profile: ResolveProfile, source: &VideoProbe) -> Reso
         ResolveProfile::Hqx => ResolveEncoding { profile: "dnxhr_hqx", pixel_format: "yuv422p10le", label: "DNxHR HQX" },
         ResolveProfile::Sq => ResolveEncoding { profile: "dnxhr_sq", pixel_format: "yuv422p", label: "DNxHR SQ" },
         ResolveProfile::Lb => ResolveEncoding { profile: "dnxhr_lb", pixel_format: "yuv422p", label: "DNxHR LB" },
-        ResolveProfile::Dnxhr444 => ResolveEncoding { profile: "dnxhr_444", pixel_format: "yuv444p10le", label: "DNxHR 444" },
+        ResolveProfile::Dnxhr444 => ResolveEncoding { profile: "dnxhr_444", pixel_format: if source.is_rgb { "gbrp10le" } else { "yuv444p10le" }, label: "DNxHR 444" },
     }
 }
 
@@ -186,7 +187,7 @@ fn copy_color_metadata(args: &mut Vec<std::ffi::OsString>, source: &VideoProbe) 
     }
 }
 
-fn verify_resolve_output(output: &Path, source_had_audio: bool) -> Result<(), String> {
+fn verify_resolve_output(output: &Path, source_had_audio: bool, expected_profile: &str, expected_pixel_format: &str) -> Result<(), String> {
     let result = run_ok("ffprobe", vec![
         os("-v"), os("error"),
         os("-show_entries"), os("stream=codec_type,codec_name,profile,pix_fmt,sample_rate,channels"),
@@ -202,12 +203,18 @@ fn verify_resolve_output(output: &Path, source_had_audio: bool) -> Result<(), St
     if value_string(video, "codec_name") != Some("dnxhd") {
         return Err("The output file does not contain the expected DNxHR video stream.".into());
     }
-    let has_audio = streams.iter().any(|stream| {
-        value_string(stream, "codec_type") == Some("audio")
-            && value_string(stream, "codec_name") == Some("pcm_s24le")
-    });
-    if source_had_audio && !has_audio {
-        return Err("The source had audio, but the exported MOV does not contain a Linear PCM audio stream.".into());
+    if value_string(video, "profile") != Some(expected_profile) {
+        return Err(format!("The output DNxHR profile could not be verified (expected {expected_profile})."));
+    }
+    if value_string(video, "pix_fmt") != Some(expected_pixel_format) {
+        return Err(format!("The output pixel format could not be verified (expected {expected_pixel_format})."));
+    }
+    let audio = streams.iter().find(|stream| value_string(stream, "codec_type") == Some("audio"));
+    if source_had_audio {
+        let audio = audio.ok_or_else(|| "The source had audio, but the exported MOV does not contain an audio stream.".to_string())?;
+        if value_string(audio, "codec_name") != Some("pcm_s24le") || value_string(audio, "sample_rate") != Some("48000") {
+            return Err("The output audio does not match the expected 24-bit Linear PCM at 48 kHz.".into());
+        }
     }
     Ok(())
 }
@@ -262,7 +269,7 @@ pub(super) fn convert_davinci_resolve(input: &Path, output: &Path, requested_pro
         }
     })?;
 
-    verify_resolve_output(output, source.has_audio)?;
+    verify_resolve_output(output, source.has_audio, encoding.label, encoding.pixel_format)?;
     Ok(())
 }
 
@@ -275,6 +282,7 @@ mod davinci_tests {
             pixel_format: pixel_format.into(),
             bit_depth,
             is_444: pixel_format.contains("444") || pixel_format.starts_with("gbr") || pixel_format.starts_with("rgb"),
+            is_rgb: pixel_format.starts_with("gbr") || pixel_format.starts_with("rgb"),
             has_alpha: false,
             has_audio: true,
             has_subtitles: false,
@@ -306,5 +314,6 @@ mod davinci_tests {
         assert_eq!(selected.pixel_format, "yuv444p10le");
         let rgb = select_resolve_encoding(ResolveProfile::Auto, &source("gbrp", 8));
         assert_eq!(rgb.profile, "dnxhr_444");
+        assert_eq!(rgb.pixel_format, "gbrp10le");
     }
 }

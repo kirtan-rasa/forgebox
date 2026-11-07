@@ -145,7 +145,7 @@ pub(super) fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
             ui.add_space(8.0);
             ui.label(RichText::new("Output: QuickTime MOV · DNxHR video · Linear PCM audio at 48 kHz / 24-bit. Original resolution and timestamps are retained; source color tags are copied when available.").size(11.5).color(MUTED));
             ui.add_space(4.0);
-            ui.label(RichText::new("Automatic selects HQ for 8-bit 4:2:2/4:2:0, HQX for 10-bit material, and DNxHR 444 for 4:4:4/RGB sources. It does not turn 8-bit footage into real 10-bit footage.").size(11.0).color(MUTED));
+            ui.label(RichText::new("Automatic selects HQ for 8-bit 4:2:0/4:2:2, HQX for 10-bit 4:2:0/4:2:2, and DNxHR 444 for 4:4:4/RGB sources. It does not turn 8-bit footage into real 10-bit footage.").size(11.0).color(MUTED));
             ui.add_space(4.0);
             ui.label(RichText::new("Subtitle streams are not embedded in the MOV. ForgeBox reports discarded tracks and checks the encoded file with FFprobe.").size(11.0).color(MUTED));
         }
