@@ -2,15 +2,17 @@ use crate::catalog::{info, Category, ToolId};
 use crate::engine::{
     execute_with_control, take_execution_warnings, AudioFormat, DataFormat, ExecutionControl,
     ImageFormat, Job, JobOptions, PdfCompressionProfile, PdfImageFormat, PdfRotation,
-    VideoFormat, VideoPreset,
+    VideoFormat, VideoPreset, ResolveProfile,
 };
 use eframe::egui::{self, Vec2};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
+mod open_folder;
 mod theme;
+mod video_sticker;
 mod view;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,6 +32,15 @@ struct QueuedJob {
     output_count: usize,
     summary: Option<String>,
     warnings: Vec<String>,
+}
+
+fn output_directory_for_results(outputs: &[PathBuf], fallback: &Path) -> PathBuf {
+    outputs.first()
+        .and_then(|output| {
+            let candidate = if output.is_dir() { output.as_path() } else { output.parent()? };
+            candidate.is_dir().then(|| candidate.to_path_buf())
+        })
+        .unwrap_or_else(|| fallback.to_path_buf())
 }
 
 enum QueueEvent {
@@ -60,16 +71,19 @@ struct ForgeApp {
     secondary_file: Option<PathBuf>,
     output_dir: PathBuf,
     target_format: String,
+    audio_bitrate: String,
     text: String,
     width: String,
     height: String,
     quality: String,
+    combine_images_pdf: bool,
     compress_pdf: bool,
     pdf_profile: String,
     rotation: String,
     pages: String,
     fps: String,
     video_preset: String,
+    resolve_profile: String,
     language: String,
     dpi: String,
     running: bool,
@@ -86,6 +100,8 @@ struct ForgeApp {
     queue_finished: usize,
     queue: Vec<QueuedJob>,
     queue_run_indices: Vec<usize>,
+    queue_mode: bool,
+    active_queue_mode: bool,
     last_output_dir: Option<PathBuf>,
     wizard_step: usize,
     dragging_file: Option<PathBuf>,
@@ -104,6 +120,7 @@ struct ForgeApp {
     dialog_rx: Receiver<DialogResult>,
     thumbnail_tx: Sender<(PathBuf, Result<egui::ColorImage, String>)>,
     thumbnail_rx: Receiver<(PathBuf, Result<egui::ColorImage, String>)>,
+    video_sticker: video_sticker::VideoStickerEditor,
 }
 
 impl ForgeApp {
@@ -124,16 +141,19 @@ impl ForgeApp {
             secondary_file: None,
             output_dir: view::default_output_dir(),
             target_format: "png".into(),
+            audio_bitrate: "192".into(),
             text: String::new(),
             width: "1600".into(),
             height: "1200".into(),
             quality: "82".into(),
+            combine_images_pdf: true,
             compress_pdf: false,
             pdf_profile: "ebook".into(),
             rotation: "90".into(),
             pages: "1,last".into(),
             fps: "12".into(),
             video_preset: "fast".into(),
+            resolve_profile: "auto".into(),
             language: "eng".into(),
             dpi: "150".into(),
             running: false,
@@ -150,6 +170,8 @@ impl ForgeApp {
             queue_finished: 0,
             queue: Vec::new(),
             queue_run_indices: Vec::new(),
+            queue_mode: false,
+            active_queue_mode: false,
             last_output_dir: None,
             wizard_step: 0,
             dragging_file: None,
@@ -168,11 +190,13 @@ impl ForgeApp {
             dialog_rx,
             thumbnail_tx,
             thumbnail_rx,
+            video_sticker: video_sticker::VideoStickerEditor::default(),
         }
     }
 
     fn select_tool(&mut self, id: ToolId) {
         self.selected_tool = id;
+        self.video_sticker.set_input(None);
         self.secondary_file = None;
         self.files.clear();
         self.selection_notice = None;
@@ -186,10 +210,13 @@ impl ForgeApp {
             ToolId::ImageConvert => self.target_format = "png".into(),
             ToolId::ImagesToPdf => self.target_format = "pdf".into(),
             ToolId::PdfToImages => { self.target_format = "png".into(); self.dpi = "150".into(); },
+            ToolId::AudioConvert => { self.target_format = "mp3".into(); self.audio_bitrate = "192".into(); },
             ToolId::ExtractAudio => self.target_format = "mp3".into(),
             ToolId::VideoConvert => { self.target_format = "mp4".into(); self.quality = "23".into(); self.video_preset = "fast".into(); },
+            ToolId::DavinciResolve => self.resolve_profile = "auto".into(),
             ToolId::DataConvert => self.target_format = "json".into(),
             ToolId::VideoToGif => { self.width = "480".into(); self.fps = "12".into(); },
+            ToolId::VideoSticker => {},
             ToolId::ImageResize => { self.width = "1600".into(); self.height = "1200".into(); },
             ToolId::ImageCompress => self.quality = "82".into(),
             ToolId::PdfRotate => self.rotation = "90".into(),
@@ -203,7 +230,7 @@ impl ForgeApp {
     fn is_single_file_tool(&self) -> bool {
         matches!(self.selected_tool,
             ToolId::PdfSplit | ToolId::PdfCompress | ToolId::PdfRotate | ToolId::PdfReorder |
-            ToolId::PdfToImages | ToolId::PdfWatermark | ToolId::DataConvert | ToolId::LongPngToPdf
+            ToolId::PdfToImages | ToolId::PdfWatermark | ToolId::DataConvert | ToolId::LongPngToPdf | ToolId::VideoSticker
         )
     }
 
@@ -247,6 +274,9 @@ impl ForgeApp {
 
         let requested = paths.len();
         paths.retain(|path| path.is_file() && view::is_supported_input_file(self.selected_tool, path));
+        if self.selected_tool == ToolId::ImagesToPdf {
+            view::sort_image_paths_naturally(&mut paths);
+        }
         let skipped = requested.saturating_sub(paths.len());
         let mut notices = Vec::new();
         if skipped > 0 {
@@ -270,6 +300,9 @@ impl ForgeApp {
             }
         }
 
+        if self.selected_tool == ToolId::VideoSticker {
+            self.video_sticker.set_input(self.files.first().cloned());
+        }
         if !notices.is_empty() {
             self.selection_notice = Some(notices.join(" "));
         }
@@ -283,8 +316,9 @@ impl ForgeApp {
             ToolId::DocToPdf => { dialog = dialog.add_filter("Documents", &["doc", "docx", "odt", "rtf"]); }
             ToolId::ImageOcr | ToolId::ExtractExif | ToolId::ImagesToPdf | ToolId::ImageConvert | ToolId::ImageResize | ToolId::ImageCompress | ToolId::ImageGrayscale | ToolId::RemoveBackground | ToolId::LongPngToPdf => { dialog = dialog.add_filter("Images", &["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "heic", "avif", "gif"]); }
             ToolId::DataConvert => { dialog = dialog.add_filter("Spreadsheets and data", &["csv", "json", "xlsx"]); }
-            ToolId::VideoConvert | ToolId::VideoToGif => { dialog = dialog.add_filter("Videos", &["mp4", "mkv", "mov", "webm", "avi", "m4v", "mpeg", "mpg", "3gp", "ogv", "flv", "mts", "m2ts"]); }
-            ToolId::ExtractAudio => { dialog = dialog.add_filter("Video and audio", &["mp4", "mkv", "mov", "webm", "avi", "m4v", "mpeg", "mpg", "3gp", "ogv", "flv", "mp3", "wav", "flac", "m4a", "ogg", "aac", "mts", "m2ts"]); }
+            ToolId::VideoConvert | ToolId::VideoToGif | ToolId::DavinciResolve | ToolId::VideoSticker => { dialog = dialog.add_filter("Videos", &["mp4", "mkv", "mov", "webm", "avi", "m4v", "mpeg", "mpg", "3gp", "ogv", "flv", "mts", "m2ts"]); }
+            ToolId::AudioConvert => { dialog = dialog.add_filter("Audio files", &["mp3", "wav", "flac", "m4a", "ogg", "aac", "opus", "aif", "aiff", "wma", "amr", "ac3"]); }
+            ToolId::ExtractAudio => { dialog = dialog.add_filter("Video and audio", &["mp4", "mkv", "mov", "webm", "avi", "m4v", "mpeg", "mpg", "3gp", "ogv", "flv", "mp3", "wav", "flac", "m4a", "ogg", "aac", "opus", "aif", "aiff", "wma", "amr", "ac3", "mts", "m2ts"]); }
             _ => {}
         }
         self.dialog_open = true;
@@ -427,6 +461,7 @@ impl ForgeApp {
                 quality: positive_u8(&self.quality, 82, 1, 100),
             },
             ToolId::ImagesToPdf => JobOptions::ImagesToPdf {
+                combine: self.combine_images_pdf,
                 compress: self.compress_pdf,
                 quality: positive_u8(&self.quality, 82, 20, 100),
             },
@@ -452,6 +487,10 @@ impl ForgeApp {
             ToolId::DataConvert => JobOptions::DataConvert {
                 format: DataFormat::parse(&self.target_format)?,
             },
+            ToolId::AudioConvert => JobOptions::AudioConvert {
+                format: AudioFormat::parse(&self.target_format)?,
+                bitrate: positive_u32(&self.audio_bitrate, 192).clamp(64, 320) as u16,
+            },
             ToolId::ExtractAudio => JobOptions::ExtractAudio {
                 format: AudioFormat::parse(&self.target_format)?,
             },
@@ -463,6 +502,10 @@ impl ForgeApp {
             ToolId::VideoToGif => JobOptions::VideoToGif {
                 width: positive_u32(&self.width, 480).clamp(64, 1280) as u16,
                 fps: positive_u32(&self.fps, 12).clamp(1, 30) as u8,
+            },
+            ToolId::VideoSticker => self.video_sticker.job_options()?,
+            ToolId::DavinciResolve => JobOptions::DavinciResolve {
+                profile: ResolveProfile::parse(&self.resolve_profile)?,
             },
             ToolId::ImageGrayscale
             | ToolId::RemoveBackground
@@ -512,6 +555,14 @@ impl ForgeApp {
             }
         };
 
+        // Immediate mode is the default. The internal worker still uses the
+        // same cancellation and cleanup path, but users do not need to stage
+        // a one-item queue before getting a result.
+        if !self.queue_mode {
+            self.queue.clear();
+            self.queue_run_indices.clear();
+        }
+
         let file_count = job.files.len();
         let tool_name = info(self.selected_tool).name.to_string();
         self.queue.push(QueuedJob {
@@ -524,18 +575,22 @@ impl ForgeApp {
             warnings: Vec::new(),
         });
 
-        // The job owns snapshots of all its inputs and options. Clear the editor
-        // so another tool or file set can be prepared without altering queued work.
-        self.files.clear();
-        self.secondary_file = None;
-        self.selection_notice = None;
-        self.dragging_file = None;
-        self.drag_insert_index = None;
-        self.drag_card_size = None;
-        self.wizard_step = 0;
-        self.last_output_dir = None;
-        self.logs.clear();
-        self.logs.push((true, format!("Added to queue: {tool_name}")));
+        if self.queue_mode {
+            // The job owns snapshots of its inputs and options. Reset the editor
+            // so another task can be staged without changing queued work.
+            self.files.clear();
+            self.secondary_file = None;
+            self.selection_notice = None;
+            self.dragging_file = None;
+            self.drag_insert_index = None;
+            self.drag_card_size = None;
+            self.wizard_step = 0;
+            self.last_output_dir = None;
+            self.logs.clear();
+            self.logs.push((true, format!("Added to queue: {tool_name}")));
+        } else {
+            self.start_queue();
+        }
     }
 
     fn start_queue(&mut self) {
@@ -554,8 +609,9 @@ impl ForgeApp {
             return;
         }
 
-        // Queue execution is independent of the editor's current step.
-        // Always show the live queue monitor while tasks are running.
+        // The worker is shared by immediate and optional queue mode. The UI
+        // uses active_queue_mode to display the appropriate progress language.
+        self.active_queue_mode = self.queue_mode;
         self.wizard_step = 2;
         self.last_output_dir = None;
 
@@ -563,8 +619,8 @@ impl ForgeApp {
         let queue_tx = self.queue_tx.clone();
         let control = ExecutionControl::new(self.status_tx.clone());
         self.execution_control = Some(control.clone());
-        self.execution_status = "Preparing queue…".into();
-        self.active_task_name = "Queued tasks".into();
+        self.execution_status = if self.active_queue_mode { "Preparing queue…".into() } else { "Preparing conversion…".into() };
+        self.active_task_name = if self.active_queue_mode { "Queued tasks".into() } else { "Conversion".into() };
         self.active_queue_index = 0;
         self.queue_total = total;
         self.queue_finished = 0;
@@ -621,7 +677,7 @@ impl ForgeApp {
             if !self.cancel_requested {
                 control.cancel();
                 self.cancel_requested = true;
-                self.execution_status = "Stopping queue…".into();
+                self.execution_status = if self.active_queue_mode { "Stopping queue…".into() } else { "Cancelling conversion…".into() };
             }
         }
     }
@@ -638,7 +694,11 @@ impl ForgeApp {
 
     fn poll_execution_status(&mut self) {
         while let Ok(status) = self.status_rx.try_recv() {
-            self.execution_status = status;
+            if let Some(error) = status.strip_prefix("OPEN_FOLDER_ERROR:") {
+                self.logs.push((false, format!("Open folder: {}", error.trim())));
+            } else {
+                self.execution_status = status;
+            }
         }
     }
 
@@ -652,7 +712,11 @@ impl ForgeApp {
                     self.active_queue_index = self.queue_finished;
                     self.queue_total = total;
                     self.active_task_name = tool_name;
-                    self.execution_status = format!("Task {} of {total}", self.active_queue_index + 1);
+                    self.execution_status = if self.active_queue_mode {
+                        format!("Task {} of {total}", self.active_queue_index + 1)
+                    } else {
+                        "Starting conversion…".into()
+                    };
                 }
                 QueueEvent::Finished { index, result, warnings, cancelled } => {
                     if let Some(entry) = self.queue.get_mut(index) {
@@ -666,7 +730,10 @@ impl ForgeApp {
                                     entry.status = QueueStatus::Completed;
                                     entry.output_count = paths.len();
                                     if !paths.is_empty() {
-                                        self.last_output_dir = Some(entry.job.output_dir.clone());
+                                        self.last_output_dir = Some(output_directory_for_results(
+                                            &paths,
+                                            &entry.job.output_dir,
+                                        ));
                                     }
                                     entry.summary = Some(if paths.is_empty() {
                                         "Completed".into()
@@ -712,9 +779,16 @@ impl ForgeApp {
                     let cancelled_count = run_entries.iter().filter(|entry| entry.status == QueueStatus::Cancelled).count();
                     let output_count: usize = run_entries.iter().map(|entry| entry.output_count).sum();
                     self.completed_cancelled = cancelled && cancelled_count > 0;
-                    self.logs.push((true, format!(
-                        "Queue finished · {completed} completed · {output_count} output(s) · {failed} failed · {cancelled_count} cancelled"
-                    )));
+                    let summary = if self.active_queue_mode {
+                        format!("Queue finished · {completed} completed · {output_count} output(s) · {failed} failed · {cancelled_count} cancelled")
+                    } else if cancelled {
+                        format!("Conversion cancelled · {output_count} output(s) completed")
+                    } else if failed > 0 {
+                        format!("Conversion failed · {failed} task(s) failed")
+                    } else {
+                        format!("Conversion completed · {output_count} output(s)")
+                    };
+                    self.logs.push((failed == 0, summary));
                     for entry in &run_entries {
                         match entry.status {
                             QueueStatus::Completed => {

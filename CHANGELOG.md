@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Improved
+- Run conversions immediately by default; make multi-task queueing an explicit optional mode.
+- Detect the installed FFmpeg frame-sync options, preferring `-fps_mode passthrough` on newer builds and retaining `-vsync 0` for older builds.
+- Open the actual output directory through the freedesktop FileManager1 D-Bus interface, with direct file-manager fallbacks instead of default file-opening handlers.
+
+### Added
+- Add a Telegram video sticker editor with trim handles, movable square framing, Crop/Fit modes, and VP9 WebM export under the 256 KB limit.
+- Add an audio converter for MP3, WAV, FLAC, AAC, M4A, OGG, and Opus with selectable lossy-output bitrates.
+- Add a DaVinci Resolve Linux export tool that creates DNxHR MOV files with 24-bit Linear PCM audio.
+- Automatically select DNxHR HQ, HQX, or 444 from the source pixel format and bit depth.
+- Verify exported DNxHR profile, pixel format, and PCM audio with FFprobe.
+- Warn when subtitles, alpha, data streams, attachments, or additional video tracks are not preserved.
+
+### Improved
+- Document DaVinci Resolve export profiles, Linux requirements, and media-preservation limits.
+- Exercise DNxHR HQ, HQX, YUV 4:4:4, and RGB 4:4:4 encoding in conversion integration tests.
+
 ## 0.4.1
 
 ### Added

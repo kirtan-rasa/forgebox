@@ -1,5 +1,47 @@
 use crate::catalog::ToolId;
+use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
+
+
+pub(in crate::app) fn sort_image_paths_naturally(paths: &mut [PathBuf]) {
+    paths.sort_by(|left, right| {
+        let left_name = left.file_name().unwrap_or_default().to_string_lossy();
+        let right_name = right.file_name().unwrap_or_default().to_string_lossy();
+        natural_name_cmp(&left_name, &right_name).then_with(|| left.cmp(right))
+    });
+}
+
+fn natural_name_cmp(left: &str, right: &str) -> Ordering {
+    let left = left.to_lowercase();
+    let right = right.to_lowercase();
+    let (left, right) = (left.as_bytes(), right.as_bytes());
+    let (mut li, mut ri) = (0, 0);
+
+    while li < left.len() && ri < right.len() {
+        if left[li].is_ascii_digit() && right[ri].is_ascii_digit() {
+            let (ls, rs) = (li, ri);
+            while li < left.len() && left[li].is_ascii_digit() { li += 1; }
+            while ri < right.len() && right[ri].is_ascii_digit() { ri += 1; }
+
+            let (mut ln, mut rn) = (ls, rs);
+            while ln < li && left[ln] == b'0' { ln += 1; }
+            while rn < ri && right[rn] == b'0' { rn += 1; }
+            let numeric_order = (li - ln).cmp(&(ri - rn))
+                .then_with(|| left[ln..li].cmp(&right[rn..ri]));
+            if numeric_order != Ordering::Equal { return numeric_order; }
+
+            let width_order = (li - ls).cmp(&(ri - rs));
+            if width_order != Ordering::Equal { return width_order; }
+        } else {
+            let order = left[li].cmp(&right[ri]);
+            if order != Ordering::Equal { return order; }
+            li += 1;
+            ri += 1;
+        }
+    }
+
+    (left.len() - li).cmp(&(right.len() - ri))
+}
 
 pub(super) fn reorder_item<T>(items: &mut Vec<T>, from: usize, insertion_index: usize) {
     if from >= items.len() { return; }
@@ -33,7 +75,7 @@ pub(super) fn is_image_file(path: &Path) -> bool {
 
 pub(super) fn is_audio_file(path: &Path) -> bool {
     matches!(file_extension(path).as_str(),
-        "mp3" | "wav" | "flac" | "m4a" | "ogg" | "aac")
+        "mp3" | "wav" | "flac" | "m4a" | "ogg" | "aac" | "opus" | "aif" | "aiff" | "wma" | "amr" | "ac3")
 }
 
 pub(in crate::app) fn is_supported_input_file(tool: ToolId, path: &Path) -> bool {
@@ -49,8 +91,9 @@ pub(in crate::app) fn is_supported_input_file(tool: ToolId, path: &Path) -> bool
         ToolId::DataConvert => {
             matches!(file_extension(path).as_str(), "csv" | "json" | "xlsx")
         }
+        ToolId::AudioConvert => is_audio_file(path),
         ToolId::ExtractAudio => is_video_file(path) || is_audio_file(path),
-        ToolId::VideoConvert | ToolId::VideoToGif => is_video_file(path),
+        ToolId::VideoConvert | ToolId::VideoToGif | ToolId::DavinciResolve | ToolId::VideoSticker => is_video_file(path),
         ToolId::ImagesToPdf | ToolId::ImageConvert | ToolId::ImageResize | ToolId::ImageCompress
         | ToolId::ImageGrayscale | ToolId::RemoveBackground | ToolId::ExtractExif
         | ToolId::ImageOcr | ToolId::LongPngToPdf => is_image_file(path),
@@ -64,8 +107,9 @@ pub(in crate::app) fn accepted_input_description(tool: ToolId) -> &'static str {
         | ToolId::PdfReorder | ToolId::PdfToImages | ToolId::PdfWatermark | ToolId::PdfToDoc => "PDF files",
         ToolId::DocToPdf => "DOC, DOCX, ODT, or RTF files",
         ToolId::DataConvert => "CSV, JSON, or XLSX files",
+        ToolId::AudioConvert => "audio files",
         ToolId::ExtractAudio => "audio or video files",
-        ToolId::VideoConvert | ToolId::VideoToGif => "video files",
+        ToolId::VideoConvert | ToolId::VideoToGif | ToolId::DavinciResolve | ToolId::VideoSticker => "video files",
         _ => "image files",
     }
 }
@@ -75,6 +119,7 @@ pub(super) fn file_glyph(path: &PathBuf) -> &'static str {
         "pdf" => "󰈙",
         "png" | "jpg" | "jpeg" | "webp" | "tif" | "tiff" | "heic" | "avif" | "gif" | "bmp" => "󰋩",
         "mp4" | "mov" | "mkv" | "webm" | "avi" | "m4v" | "mpeg" | "mpg" | "3gp" | "ogv" | "flv" | "mts" | "m2ts" => "▶",
+        "mp3" | "wav" | "flac" | "m4a" | "ogg" | "aac" | "opus" | "aif" | "aiff" | "wma" | "amr" | "ac3" => "♫",
         "csv" | "json" | "xlsx" => "󰘦",
         _ => "󰈔",
     }

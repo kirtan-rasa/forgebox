@@ -6,9 +6,17 @@ use eframe::egui::{self, RichText};
 pub(super) fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
     match app.selected_tool {
         ToolId::ImagesToPdf => {
-            ui.label(RichText::new("One PDF, with a separate page for each image.").size(12.0));
-            ui.label(RichText::new("Reorder pages by dragging files in the first step.").size(11.0).color(MUTED));
-            ui.add_space(12.0);
+            ui.label(RichText::new("Choose how selected images should be exported.").size(12.0));
+            ui.add_space(8.0);
+            ui.checkbox(&mut app.combine_images_pdf, "Combine all images into one PDF");
+            ui.label(RichText::new(if app.combine_images_pdf {
+                "All images become separate pages in one PDF, in the selected order."
+            } else {
+                "Each image is saved as its own PDF file."
+            }).size(11.0).color(MUTED));
+            ui.add_space(8.0);
+            ui.label(RichText::new("Reorder images by dragging files in the first step.").size(11.0).color(MUTED));
+            ui.add_space(8.0);
             ui.checkbox(&mut app.compress_pdf, "Compress images inside the PDF");
             if app.compress_pdf {
                 ui.label(RichText::new(format!("Image quality: {}%", app.quality)).size(12.0));
@@ -88,9 +96,32 @@ pub(super) fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
             format_combo(ui, &mut app.target_format, &["csv", "json", "xlsx"]);
             ui.label(RichText::new("CSV → JSON treats all values as text. JSON input for CSV must be an array of objects.").size(11.0).color(MUTED));
         }
+        ToolId::AudioConvert => {
+            ui.label(RichText::new("Output format").size(12.0));
+            format_combo(ui, &mut app.target_format, &["mp3", "wav", "flac", "aac", "m4a", "ogg", "opus"]);
+            let lossless = matches!(app.target_format.as_str(), "wav" | "flac");
+            ui.add_space(8.0);
+            ui.add_enabled_ui(!lossless, |ui| {
+                ui.label(RichText::new("Audio bitrate").size(12.0));
+                egui::ComboBox::from_id_salt("audio-convert-bitrate")
+                    .selected_text(format!("{} kb/s", app.audio_bitrate))
+                    .width(ui.available_width().min(220.0))
+                    .show_ui(ui, |ui| {
+                        for bitrate in ["96", "128", "160", "192", "256", "320"] {
+                            ui.selectable_value(&mut app.audio_bitrate, bitrate.to_owned(), format!("{bitrate} kb/s"));
+                        }
+                    });
+            });
+            ui.label(RichText::new(if lossless {
+                "WAV uses uncompressed 16-bit PCM; FLAC uses lossless compression. Neither uses a bitrate setting."
+            } else {
+                "Bitrate applies to MP3, AAC, M4A, OGG, and Opus. Higher values usually produce larger files."
+            }).size(11.0).color(MUTED));
+            ui.label(RichText::new("The first audio stream is converted and source metadata is copied when supported. Original files are kept unchanged.").size(11.0).color(MUTED));
+        }
         ToolId::ExtractAudio => {
             ui.label(RichText::new("Audio format").size(12.0));
-            format_combo(ui, &mut app.target_format, &["mp3", "wav", "aac", "ogg", "flac", "m4a"]);
+            format_combo(ui, &mut app.target_format, &["mp3", "wav", "aac", "ogg", "flac", "m4a", "opus"]);
         }
         ToolId::VideoConvert => {
             ui.label(RichText::new("Output format").size(12.0));
@@ -122,6 +153,34 @@ pub(super) fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
             ui.label(RichText::new("Default: fast mode and up to two threads to keep the system responsive.").size(11.0).color(MUTED));
             ui.label(RichText::new("Requires FFmpeg with H.264/AAC for MP4/MOV/MKV or VP9/Opus for WebM.").size(11.0).color(MUTED));
         }
+        ToolId::DavinciResolve => {
+            ui.label(RichText::new("DaVinci Resolve Linux export profile").size(12.0));
+            egui::ComboBox::from_id_salt("davinci-resolve-profile")
+                .selected_text(match app.resolve_profile.as_str() {
+                    "hq" => "DNxHR HQ · 8-bit 4:2:2",
+                    "hqx" => "DNxHR HQX · 10-bit 4:2:2",
+                    "sq" => "DNxHR SQ · smaller 8-bit file",
+                    "lb" => "DNxHR LB · low-bitrate editing copy",
+                    "444" => "DNxHR 444 · 10-bit 4:4:4",
+                    _ => "Automatic · recommended",
+                })
+                .width(ui.available_width().min(380.0))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut app.resolve_profile, "auto".to_owned(), "Automatic · recommended");
+                    ui.selectable_value(&mut app.resolve_profile, "hq".to_owned(), "DNxHR HQ · 8-bit 4:2:2");
+                    ui.selectable_value(&mut app.resolve_profile, "hqx".to_owned(), "DNxHR HQX · 10-bit 4:2:2");
+                    ui.selectable_value(&mut app.resolve_profile, "sq".to_owned(), "DNxHR SQ · smaller 8-bit file");
+                    ui.selectable_value(&mut app.resolve_profile, "lb".to_owned(), "DNxHR LB · low-bitrate editing copy");
+                    ui.selectable_value(&mut app.resolve_profile, "444".to_owned(), "DNxHR 444 · 10-bit 4:4:4");
+                });
+            ui.add_space(8.0);
+            ui.label(RichText::new("Output: QuickTime MOV · DNxHR video · Linear PCM audio at 48 kHz / 24-bit. Original resolution and timestamps are retained; source color tags are copied when available.").size(11.5).color(MUTED));
+            ui.add_space(4.0);
+            ui.label(RichText::new("Automatic selects HQ for 8-bit 4:2:0/4:2:2, HQX for 10-bit 4:2:0/4:2:2, and DNxHR 444 for 4:4:4/RGB sources. It does not turn 8-bit footage into real 10-bit footage.").size(11.0).color(MUTED));
+            ui.add_space(4.0);
+            ui.label(RichText::new("Subtitle streams are not embedded in the MOV. ForgeBox reports discarded tracks and checks the encoded file with FFprobe.").size(11.0).color(MUTED));
+        }
+        ToolId::VideoSticker => app.video_sticker.render(ui),
         ToolId::VideoToGif => {
             ui.horizontal_wrapped(|ui| {
                 labeled_text(ui, "Width", &mut app.width, "480");

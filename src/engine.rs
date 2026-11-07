@@ -21,11 +21,11 @@ use self::common::{
 };
 use self::data::{csv_to_json, data_convert, encode_file_url_path, pdf_to_docx, soffice_convert};
 use self::images::{images_to_pdf, long_png_to_pdf};
-use self::media::{convert_video, extract_audio};
+use self::media::{convert_audio, convert_davinci_resolve, convert_video, convert_video_sticker, extract_audio};
 use self::pdf::{parse_pdf_page_order, parse_pdf_page_range, pdf_page_count};
 pub use self::job::{
     AudioFormat, DataFormat, ImageFormat, Job, JobOptions, PdfCompressionProfile,
-    PdfImageFormat, PdfRotation, VideoFormat, VideoPreset,
+    PdfImageFormat, PdfRotation, ResolveProfile, VideoFormat, VideoPreset, VideoStickerFit,
 };
 pub use self::control::ExecutionControl;
 
@@ -136,8 +136,8 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
     use crate::catalog::ToolId as Tool;
 
     match (&job.tool, &job.options) {
-        (Tool::ImagesToPdf, Options::ImagesToPdf { compress, quality }) => {
-            images_to_pdf(&job, *compress, *quality)
+        (Tool::ImagesToPdf, Options::ImagesToPdf { combine, compress, quality }) => {
+            images_to_pdf(&job, *combine, *compress, *quality)
         }
         (Tool::ImageConvert, Options::ImageConvert { format }) => process_each(&job, |input, out| {
             let mut args = vec![os(input), os("-auto-orient")];
@@ -325,15 +325,24 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
         (Tool::DocToPdf, Options::None) => process_each_convert(&job, "pdf"),
         (Tool::PdfToDoc, Options::None) => process_each(&job, pdf_to_docx),
         (Tool::DataConvert, Options::DataConvert { format }) => data_convert(&job, format.as_str()),
+        (Tool::AudioConvert, Options::AudioConvert { format, bitrate }) => process_each(&job, |input, out| {
+            convert_audio(input, out, format.as_str(), *bitrate)
+        }),
         (Tool::ExtractAudio, Options::ExtractAudio { format }) => process_each(&job, |input, out| {
             extract_audio(input, out, format.as_str())
         }),
         (Tool::VideoConvert, Options::VideoConvert { format, preset, quality }) => process_each(&job, |input, out| {
             convert_video(input, out, format.as_str(), preset.as_str(), &quality.to_string())
         }),
+        (Tool::DavinciResolve, Options::DavinciResolve { profile }) => process_each(&job, |input, out| {
+            convert_davinci_resolve(input, out, *profile)
+        }),
         (Tool::VideoToGif, Options::VideoToGif { width, fps }) => process_each(&job, |input, out| {
             let filter = format!("fps={fps},scale={width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer");
             run_ok("ffmpeg", vec![os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"), os("-i"), os(input), os("-filter_complex"), os(&filter), os("-threads"), os("2"), os("-loop"), os("0"), os(out)]).map(|_| ())
+        }),
+        (Tool::VideoSticker, Options::VideoSticker { start_ms, end_ms, fit, crop_left, crop_top, zoom_milli }) => process_each(&job, |input, out| {
+            convert_video_sticker(input, out, *start_ms, *end_ms, *fit, *crop_left, *crop_top, *zoom_milli)
         }),
         _ => Err(format!("The settings do not match the selected tool ({:?}).", job.tool)),
     }
@@ -588,7 +597,7 @@ mod execution_warning_tests {
 
 #[cfg(test)]
 mod video_tests {
-    use super::{convert_video, extract_audio};
+    use super::{convert_audio, convert_video, extract_audio};
     use std::path::Path;
 
     #[test]
@@ -611,6 +620,14 @@ mod video_tests {
             "wma",
         ).expect_err("WMA is not a supported audio output target");
         assert!(error.contains("is not supported"));
+    }
+
+    #[test]
+    fn audio_converter_rejects_unsupported_output_formats() {
+        let error = convert_audio(
+            Path::new("input.wav"), Path::new("output.wma"), "wma", 192,
+        ).expect_err("WMA is not a supported audio output format");
+        assert!(error.contains("MP3, WAV, AAC, OGG, FLAC, M4A, or Opus"));
     }
 }
 
