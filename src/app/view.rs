@@ -20,6 +20,7 @@ impl eframe::App for ForgeApp {
         self.poll_queue_events();
         self.poll_dialogs();
         self.poll_thumbnails(ctx);
+        self.video_sticker.poll(ctx);
         self.queue_thumbnails();
         let dropped = ctx.input(|input| input.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>());
         if !dropped.is_empty() && !self.running {

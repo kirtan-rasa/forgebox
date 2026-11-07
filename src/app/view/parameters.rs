@@ -172,6 +172,7 @@ pub(super) fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
             ui.add_space(4.0);
             ui.label(RichText::new("Subtitle streams are not embedded in the MOV. ForgeBox reports discarded tracks and checks the encoded file with FFprobe.").size(11.0).color(MUTED));
         }
+        ToolId::VideoSticker => app.video_sticker.render(ui),
         ToolId::VideoToGif => {
             ui.horizontal_wrapped(|ui| {
                 labeled_text(ui, "Width", &mut app.width, "480");

@@ -8,6 +8,7 @@
 - Open the actual output directory through the freedesktop FileManager1 D-Bus interface, with direct file-manager fallbacks instead of default file-opening handlers.
 
 ### Added
+- Add a Telegram video sticker editor with trim handles, movable square framing, Crop/Fit modes, and VP9 WebM export under the 256 KB limit.
 - Add an audio converter for MP3, WAV, FLAC, AAC, M4A, OGG, and Opus with selectable lossy-output bitrates.
 - Add a DaVinci Resolve Linux export tool that creates DNxHR MOV files with 24-bit Linear PCM audio.
 - Automatically select DNxHR HQ, HQX, or 444 from the source pixel format and bit depth.

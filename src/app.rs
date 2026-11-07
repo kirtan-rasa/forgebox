@@ -12,6 +12,7 @@ use std::thread;
 
 mod open_folder;
 mod theme;
+mod video_sticker;
 mod view;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +119,7 @@ struct ForgeApp {
     dialog_rx: Receiver<DialogResult>,
     thumbnail_tx: Sender<(PathBuf, Result<egui::ColorImage, String>)>,
     thumbnail_rx: Receiver<(PathBuf, Result<egui::ColorImage, String>)>,
+    video_sticker: video_sticker::VideoStickerEditor,
 }
 
 impl ForgeApp {
@@ -186,11 +188,13 @@ impl ForgeApp {
             dialog_rx,
             thumbnail_tx,
             thumbnail_rx,
+            video_sticker: video_sticker::VideoStickerEditor::default(),
         }
     }
 
     fn select_tool(&mut self, id: ToolId) {
         self.selected_tool = id;
+        self.video_sticker.set_input(None);
         self.secondary_file = None;
         self.files.clear();
         self.selection_notice = None;
@@ -210,6 +214,7 @@ impl ForgeApp {
             ToolId::DavinciResolve => self.resolve_profile = "auto".into(),
             ToolId::DataConvert => self.target_format = "json".into(),
             ToolId::VideoToGif => { self.width = "480".into(); self.fps = "12".into(); },
+            ToolId::VideoSticker => {},
             ToolId::ImageResize => { self.width = "1600".into(); self.height = "1200".into(); },
             ToolId::ImageCompress => self.quality = "82".into(),
             ToolId::PdfRotate => self.rotation = "90".into(),
@@ -223,7 +228,7 @@ impl ForgeApp {
     fn is_single_file_tool(&self) -> bool {
         matches!(self.selected_tool,
             ToolId::PdfSplit | ToolId::PdfCompress | ToolId::PdfRotate | ToolId::PdfReorder |
-            ToolId::PdfToImages | ToolId::PdfWatermark | ToolId::DataConvert | ToolId::LongPngToPdf
+            ToolId::PdfToImages | ToolId::PdfWatermark | ToolId::DataConvert | ToolId::LongPngToPdf | ToolId::VideoSticker
         )
     }
 
@@ -290,6 +295,9 @@ impl ForgeApp {
             }
         }
 
+        if self.selected_tool == ToolId::VideoSticker {
+            self.video_sticker.set_input(self.files.first().cloned());
+        }
         if !notices.is_empty() {
             self.selection_notice = Some(notices.join(" "));
         }
@@ -303,7 +311,7 @@ impl ForgeApp {
             ToolId::DocToPdf => { dialog = dialog.add_filter("Documents", &["doc", "docx", "odt", "rtf"]); }
             ToolId::ImageOcr | ToolId::ExtractExif | ToolId::ImagesToPdf | ToolId::ImageConvert | ToolId::ImageResize | ToolId::ImageCompress | ToolId::ImageGrayscale | ToolId::RemoveBackground | ToolId::LongPngToPdf => { dialog = dialog.add_filter("Images", &["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "heic", "avif", "gif"]); }
             ToolId::DataConvert => { dialog = dialog.add_filter("Spreadsheets and data", &["csv", "json", "xlsx"]); }
-            ToolId::VideoConvert | ToolId::VideoToGif | ToolId::DavinciResolve => { dialog = dialog.add_filter("Videos", &["mp4", "mkv", "mov", "webm", "avi", "m4v", "mpeg", "mpg", "3gp", "ogv", "flv", "mts", "m2ts"]); }
+            ToolId::VideoConvert | ToolId::VideoToGif | ToolId::DavinciResolve | ToolId::VideoSticker => { dialog = dialog.add_filter("Videos", &["mp4", "mkv", "mov", "webm", "avi", "m4v", "mpeg", "mpg", "3gp", "ogv", "flv", "mts", "m2ts"]); }
             ToolId::AudioConvert => { dialog = dialog.add_filter("Audio files", &["mp3", "wav", "flac", "m4a", "ogg", "aac", "opus", "aif", "aiff", "wma", "amr", "ac3"]); }
             ToolId::ExtractAudio => { dialog = dialog.add_filter("Video and audio", &["mp4", "mkv", "mov", "webm", "avi", "m4v", "mpeg", "mpg", "3gp", "ogv", "flv", "mp3", "wav", "flac", "m4a", "ogg", "aac", "opus", "aif", "aiff", "wma", "amr", "ac3", "mts", "m2ts"]); }
             _ => {}
@@ -489,6 +497,7 @@ impl ForgeApp {
                 width: positive_u32(&self.width, 480).clamp(64, 1280) as u16,
                 fps: positive_u32(&self.fps, 12).clamp(1, 30) as u8,
             },
+            ToolId::VideoSticker => self.video_sticker.job_options()?,
             ToolId::DavinciResolve => JobOptions::DavinciResolve {
                 profile: ResolveProfile::parse(&self.resolve_profile)?,
             },

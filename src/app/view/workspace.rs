@@ -67,7 +67,8 @@ impl ForgeApp {
 
             // One connected wizard bar. Tools without options expose only Files and Save.
             let visible_steps = self.wizard_step_sequence();
-            let first_label = if self.selected_tool == ToolId::GenerateQr { "Content" } else { "Files" };
+            let first_label = if self.selected_tool == ToolId::GenerateQr { "Content" } else if self.selected_tool == ToolId::VideoSticker { "Video" } else { "Files" };
+            let options_label = if self.selected_tool == ToolId::VideoSticker { "Edit" } else { "Options" };
             egui::Frame::none()
                 .fill(PANEL)
                 .stroke(Stroke::new(1.0_f32, Color32::from_rgb(24, 76, 106)))
@@ -127,7 +128,7 @@ impl ForgeApp {
                             for (visible_index, step_id) in visible_steps.iter().copied().enumerate() {
                                 let label = match step_id {
                                     0 => first_label,
-                                    1 => "Options",
+                                    1 => options_label,
                                     _ => "Save",
                                 };
                                 let active = self.wizard_step == step_id;
@@ -598,7 +599,7 @@ impl ForgeApp {
                             if let Some((from, insertion_index)) = reorder_request {
                                 if !self.running { reorder_item(&mut self.files, from, insertion_index); }
                             }
-                            if let Some(index) = remove_index { if index < self.files.len() && !self.running { self.files.remove(index); } }
+                            if let Some(index) = remove_index { if index < self.files.len() && !self.running { self.files.remove(index); if self.selected_tool == ToolId::VideoSticker { self.video_sticker.set_input(self.files.first().cloned()); } } }
                             ui.add_space(5.0);
                             ui.label(RichText::new(format!("Files selected: {}", self.files.len())).size(12.0).color(MUTED));
                             if self.selected_tool == ToolId::PdfWatermark {
@@ -613,7 +614,11 @@ impl ForgeApp {
                         }
                     }
                     1 => {
-                        section_header(ui, "02", "Configure task", "Only options relevant to the selected tool");
+                        if self.selected_tool == ToolId::VideoSticker {
+                            section_header(ui, "02", "Edit video sticker", "Trim the clip and position the square frame");
+                        } else {
+                            section_header(ui, "02", "Configure task", "Only options relevant to the selected tool");
+                        }
                         ui.add_space(8.0);
                         ui.add_enabled_ui(!self.running, |ui| parameter_ui(ui, self));
                         ui.add_space(8.0);
