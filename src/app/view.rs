@@ -10,7 +10,7 @@ mod thumbnails;
 mod widgets;
 mod workspace;
 
-pub(super) use self::files::{accepted_input_description, default_output_dir, is_supported_input_file};
+pub(super) use self::files::{accepted_input_description, default_output_dir, is_supported_input_file, sort_image_paths_naturally};
 pub(super) use self::icons::load_nerd_font;
 pub(super) use self::thumbnails::load_thumbnail;
 
