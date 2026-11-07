@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 
 
-pub(super) fn sort_image_paths_naturally(paths: &mut [PathBuf]) {
+pub(in crate::app) fn sort_image_paths_naturally(paths: &mut [PathBuf]) {
     paths.sort_by(|left, right| {
         let left_name = left.file_name().unwrap_or_default().to_string_lossy();
         let right_name = right.file_name().unwrap_or_default().to_string_lossy();
