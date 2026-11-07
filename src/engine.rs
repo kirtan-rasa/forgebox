@@ -332,7 +332,7 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
             convert_video(input, out, format.as_str(), preset.as_str(), &quality.to_string())
         }),
         (Tool::DavinciResolve, Options::DavinciResolve { profile }) => process_each(&job, |input, out| {
-            convert_davinci_resolve(input, out, profile)
+            convert_davinci_resolve(input, out, *profile)
         }),
         (Tool::VideoToGif, Options::VideoToGif { width, fps }) => process_each(&job, |input, out| {
             let filter = format!("fps={fps},scale={width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer");
