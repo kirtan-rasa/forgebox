@@ -21,11 +21,11 @@ use self::common::{
 };
 use self::data::{csv_to_json, data_convert, encode_file_url_path, pdf_to_docx, soffice_convert};
 use self::images::{images_to_pdf, long_png_to_pdf};
-use self::media::{convert_video, extract_audio};
+use self::media::{convert_davinci_resolve, convert_video, extract_audio};
 use self::pdf::{parse_pdf_page_order, parse_pdf_page_range, pdf_page_count};
 pub use self::job::{
     AudioFormat, DataFormat, ImageFormat, Job, JobOptions, PdfCompressionProfile,
-    PdfImageFormat, PdfRotation, VideoFormat, VideoPreset,
+    PdfImageFormat, PdfRotation, ResolveProfile, VideoFormat, VideoPreset,
 };
 pub use self::control::ExecutionControl;
 
@@ -330,6 +330,9 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
         }),
         (Tool::VideoConvert, Options::VideoConvert { format, preset, quality }) => process_each(&job, |input, out| {
             convert_video(input, out, format.as_str(), preset.as_str(), &quality.to_string())
+        }),
+        (Tool::DavinciResolve, Options::DavinciResolve { profile }) => process_each(&job, |input, out| {
+            convert_davinci_resolve(input, out, profile)
         }),
         (Tool::VideoToGif, Options::VideoToGif { width, fps }) => process_each(&job, |input, out| {
             let filter = format!("fps={fps},scale={width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer");

@@ -122,6 +122,33 @@ pub(super) fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
             ui.label(RichText::new("Default: fast mode and up to two threads to keep the system responsive.").size(11.0).color(MUTED));
             ui.label(RichText::new("Requires FFmpeg with H.264/AAC for MP4/MOV/MKV or VP9/Opus for WebM.").size(11.0).color(MUTED));
         }
+        ToolId::DavinciResolve => {
+            ui.label(RichText::new("DaVinci Resolve Linux export profile").size(12.0));
+            egui::ComboBox::from_id_salt("davinci-resolve-profile")
+                .selected_text(match app.resolve_profile.as_str() {
+                    "hq" => "DNxHR HQ · 8-bit 4:2:2",
+                    "hqx" => "DNxHR HQX · 10-bit 4:2:2",
+                    "sq" => "DNxHR SQ · smaller 8-bit file",
+                    "lb" => "DNxHR LB · low-bitrate editing copy",
+                    "444" => "DNxHR 444 · 10-bit 4:4:4",
+                    _ => "Automatic · recommended",
+                })
+                .width(ui.available_width().min(380.0))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut app.resolve_profile, "auto".to_owned(), "Automatic · recommended");
+                    ui.selectable_value(&mut app.resolve_profile, "hq".to_owned(), "DNxHR HQ · 8-bit 4:2:2");
+                    ui.selectable_value(&mut app.resolve_profile, "hqx".to_owned(), "DNxHR HQX · 10-bit 4:2:2");
+                    ui.selectable_value(&mut app.resolve_profile, "sq".to_owned(), "DNxHR SQ · smaller 8-bit file");
+                    ui.selectable_value(&mut app.resolve_profile, "lb".to_owned(), "DNxHR LB · low-bitrate editing copy");
+                    ui.selectable_value(&mut app.resolve_profile, "444".to_owned(), "DNxHR 444 · 10-bit 4:4:4");
+                });
+            ui.add_space(8.0);
+            ui.label(RichText::new("Output: QuickTime MOV · DNxHR video · Linear PCM audio at 48 kHz / 24-bit. Original resolution and timestamps are retained; source color tags are copied when available.").size(11.5).color(MUTED));
+            ui.add_space(4.0);
+            ui.label(RichText::new("Automatic selects HQ for 8-bit 4:2:2/4:2:0, HQX for 10-bit material, and DNxHR 444 for 4:4:4/RGB sources. It does not turn 8-bit footage into real 10-bit footage.").size(11.0).color(MUTED));
+            ui.add_space(4.0);
+            ui.label(RichText::new("Subtitle streams are not embedded in the MOV. ForgeBox reports discarded tracks and checks the encoded file with FFprobe.").size(11.0).color(MUTED));
+        }
         ToolId::VideoToGif => {
             ui.horizontal_wrapped(|ui| {
                 labeled_text(ui, "Width", &mut app.width, "480");

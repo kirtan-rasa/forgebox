@@ -183,6 +183,41 @@ impl VideoPreset {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResolveProfile {
+    Auto,
+    Hq,
+    Hqx,
+    Sq,
+    Lb,
+    Dnxhr444,
+}
+
+impl ResolveProfile {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Hq => "hq",
+            Self::Hqx => "hqx",
+            Self::Sq => "sq",
+            Self::Lb => "lb",
+            Self::Dnxhr444 => "444",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "hq" => Ok(Self::Hq),
+            "hqx" => Ok(Self::Hqx),
+            "sq" => Ok(Self::Sq),
+            "lb" => Ok(Self::Lb),
+            "444" => Ok(Self::Dnxhr444),
+            _ => Err(format!("Unsupported DaVinci Resolve DNxHR profile: {value:?}.")),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JobOptions {
     None,
@@ -201,6 +236,7 @@ pub enum JobOptions {
     DataConvert { format: DataFormat },
     ExtractAudio { format: AudioFormat },
     VideoConvert { format: VideoFormat, preset: VideoPreset, quality: u8 },
+    DavinciResolve { profile: ResolveProfile },
     VideoToGif { width: u16, fps: u8 },
 }
 
@@ -223,6 +259,7 @@ impl JobOptions {
                 | (ToolId::DataConvert, Self::DataConvert { .. })
                 | (ToolId::ExtractAudio, Self::ExtractAudio { .. })
                 | (ToolId::VideoConvert, Self::VideoConvert { .. })
+                | (ToolId::DavinciResolve, Self::DavinciResolve { .. })
                 | (ToolId::VideoToGif, Self::VideoToGif { .. })
                 | (ToolId::ImageGrayscale, Self::None)
                 | (ToolId::RemoveBackground, Self::None)
@@ -274,7 +311,7 @@ impl Job {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImageFormat, JobOptions, PdfRotation, VideoFormat};
+    use super::{ImageFormat, JobOptions, PdfRotation, ResolveProfile, VideoFormat};
     use crate::catalog::ToolId;
 
     #[test]
@@ -311,5 +348,8 @@ mod tests {
         assert_eq!(VideoFormat::parse("WEBM").unwrap().as_str(), "webm");
         assert_eq!(PdfRotation::parse("270").unwrap().degrees(), 270);
         assert!(ImageFormat::parse("bmp").is_err());
+        assert_eq!(ResolveProfile::parse("AUTO").unwrap(), ResolveProfile::Auto);
+        assert_eq!(ResolveProfile::parse("444").unwrap().as_str(), "444");
+        assert!(ResolveProfile::parse("dnxhd").is_err());
     }
 }

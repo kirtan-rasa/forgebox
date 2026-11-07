@@ -2,7 +2,7 @@ use crate::catalog::{info, Category, ToolId};
 use crate::engine::{
     execute_with_control, take_execution_warnings, AudioFormat, DataFormat, ExecutionControl,
     ImageFormat, Job, JobOptions, PdfCompressionProfile, PdfImageFormat, PdfRotation,
-    VideoFormat, VideoPreset,
+    VideoFormat, VideoPreset, ResolveProfile,
 };
 use eframe::egui::{self, Vec2};
 use std::collections::{HashMap, HashSet};
@@ -70,6 +70,7 @@ struct ForgeApp {
     pages: String,
     fps: String,
     video_preset: String,
+    resolve_profile: String,
     language: String,
     dpi: String,
     running: bool,
@@ -134,6 +135,7 @@ impl ForgeApp {
             pages: "1,last".into(),
             fps: "12".into(),
             video_preset: "fast".into(),
+            resolve_profile: "auto".into(),
             language: "eng".into(),
             dpi: "150".into(),
             running: false,
@@ -188,6 +190,7 @@ impl ForgeApp {
             ToolId::PdfToImages => { self.target_format = "png".into(); self.dpi = "150".into(); },
             ToolId::ExtractAudio => self.target_format = "mp3".into(),
             ToolId::VideoConvert => { self.target_format = "mp4".into(); self.quality = "23".into(); self.video_preset = "fast".into(); },
+            ToolId::DavinciResolve => self.resolve_profile = "auto".into(),
             ToolId::DataConvert => self.target_format = "json".into(),
             ToolId::VideoToGif => { self.width = "480".into(); self.fps = "12".into(); },
             ToolId::ImageResize => { self.width = "1600".into(); self.height = "1200".into(); },
@@ -283,7 +286,7 @@ impl ForgeApp {
             ToolId::DocToPdf => { dialog = dialog.add_filter("Documents", &["doc", "docx", "odt", "rtf"]); }
             ToolId::ImageOcr | ToolId::ExtractExif | ToolId::ImagesToPdf | ToolId::ImageConvert | ToolId::ImageResize | ToolId::ImageCompress | ToolId::ImageGrayscale | ToolId::RemoveBackground | ToolId::LongPngToPdf => { dialog = dialog.add_filter("Images", &["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "heic", "avif", "gif"]); }
             ToolId::DataConvert => { dialog = dialog.add_filter("Spreadsheets and data", &["csv", "json", "xlsx"]); }
-            ToolId::VideoConvert | ToolId::VideoToGif => { dialog = dialog.add_filter("Videos", &["mp4", "mkv", "mov", "webm", "avi", "m4v", "mpeg", "mpg", "3gp", "ogv", "flv", "mts", "m2ts"]); }
+            ToolId::VideoConvert | ToolId::VideoToGif | ToolId::DavinciResolve => { dialog = dialog.add_filter("Videos", &["mp4", "mkv", "mov", "webm", "avi", "m4v", "mpeg", "mpg", "3gp", "ogv", "flv", "mts", "m2ts"]); }
             ToolId::ExtractAudio => { dialog = dialog.add_filter("Video and audio", &["mp4", "mkv", "mov", "webm", "avi", "m4v", "mpeg", "mpg", "3gp", "ogv", "flv", "mp3", "wav", "flac", "m4a", "ogg", "aac", "mts", "m2ts"]); }
             _ => {}
         }
@@ -463,6 +466,9 @@ impl ForgeApp {
             ToolId::VideoToGif => JobOptions::VideoToGif {
                 width: positive_u32(&self.width, 480).clamp(64, 1280) as u16,
                 fps: positive_u32(&self.fps, 12).clamp(1, 30) as u8,
+            },
+            ToolId::DavinciResolve => JobOptions::DavinciResolve {
+                profile: ResolveProfile::parse(&self.resolve_profile)?,
             },
             ToolId::ImageGrayscale
             | ToolId::RemoveBackground
