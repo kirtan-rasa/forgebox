@@ -277,7 +277,7 @@ impl ForgeApp {
 
         let requested = paths.len();
         paths.retain(|path| path.is_file() && view::is_supported_input_file(self.selected_tool, path));
-           let skipped = requested.saturating_sub(paths.len());
+        let skipped = requested.saturating_sub(paths.len());
         let mut notices = Vec::new();
         if skipped > 0 {
             notices.push(format!(
@@ -294,11 +294,12 @@ impl ForgeApp {
                 self.files.clear();
                 self.files.push(path);
             }
-        } else if self.selected_tool == ToolId::ImagesToPdf && !self.images_order_manually_edited {
-            for path in paths {
-                if !self.files.contains(&path) { self.files.push(path); }
-            }
-            view::sort_image_paths_naturally(&mut self.files);
+        } else if self.selected_tool == ToolId::ImagesToPdf {
+            view::append_image_paths(
+                &mut self.files,
+                paths,
+                self.images_order_manually_edited,
+            );
         } else {
             for path in paths {
                 if !self.files.contains(&path) { self.files.push(path); }

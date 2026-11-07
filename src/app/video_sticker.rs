@@ -1156,3 +1156,36 @@ mod tests {
         assert!(fit.contains("color=black@0"));
     }
 }
+
+
+#[cfg(all(test, unix))]
+mod preview_cancellation_tests {
+    use super::run_preview_command;
+    use std::process::Command;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn cancelling_a_preview_terminates_its_process_group_promptly() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = cancelled.clone();
+        let worker = thread::spawn(move || {
+            let mut command = Command::new("sh");
+            command.args(["-c", "sleep 10"]);
+            run_preview_command(command, &worker_cancelled)
+        });
+
+        thread::sleep(Duration::from_millis(150));
+        let started = Instant::now();
+        cancelled.store(true, Ordering::Release);
+        let result = worker.join().expect("preview worker should not panic");
+
+        assert!(result.unwrap_err().contains("cancelled"));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "preview cancellation should terminate the child process group promptly"
+        );
+    }
+}
