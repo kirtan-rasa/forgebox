@@ -9,7 +9,7 @@ ForgeBox releases provide four Linux distribution formats:
 | Pacman | Arch Linux | `sudo pacman -U ./forgebox-*.pkg.tar.zst` |
 | AppImage | Compatible x86_64 Linux distributions | `chmod +x ./forgebox_*.AppImage && ./forgebox_*.AppImage` |
 
-The Arch release includes a native Pacman package, plus its `PKGBUILD` and `.SRCINFO` for rebuilding. Package names are kept consistent as `forgebox`.
+The release includes the installable Arch Pacman package. Its `PKGBUILD` and `.SRCINFO` are used and validated inside CI, but are not attached to public releases.
 
 RPM, DEB, and Pacman packages declare the native libraries and common conversion engines used by ForgeBox. Install them through the distribution's package manager so it can resolve dependencies. LibreOffice and FFmpeg are required runtime dependencies, alongside the image, PDF, OCR, and metadata utilities. The RPM and DEB packages require Tesseract and the English language data used by default OCR. Arch packages include `tesseract`, `tesseract-data-eng`, and `pdftk` for PDF watermarking. Russian OCR data is optional and can be installed from the post-install prompt.
 
@@ -35,7 +35,7 @@ AppImage still relies on the host's Linux kernel and glibc baseline. It is not a
 
 ## RPM signing
 
-Tagged GitHub releases are configured to publish **signed RPMs**. Manual workflow runs and branch builds produce unsigned test RPMs.
+Tagged GitHub releases publish **signed RPMs**. Manual workflow runs and branch builds produce unsigned test RPMs.
 
 The repository needs one GitHub Actions secret:
 
@@ -63,18 +63,21 @@ chmod 600 forgebox-rpm-signing-private.asc
 
 Open GitHub → **Settings → Secrets and variables → Actions → New repository secret**. Use the name `RPM_SIGNING_PRIVATE_KEY` and paste the complete contents of that file as its value. Keep a secure offline backup of the private key. Do not commit the exported file.
 
-The release workflow exports the corresponding public key as `forgebox-rpm-signing-key.asc` and verifies the RPM signature before publishing. Users can import the public key and then verify/install the package:
+The release workflow exports the corresponding public key as `forgebox-rpm-signing-key.asc` and verifies the RPM signature before publishing. The public key is included in each tagged release. Users can inspect its fingerprint, import the key, and then verify/install the package:
 
 ```bash
+gpg --show-keys --with-fingerprint forgebox-rpm-signing-key.asc
 sudo rpm --import forgebox-rpm-signing-key.asc
 rpmkeys --checksig --verbose ./forgebox-*.rpm
 sudo dnf install ./forgebox-*.rpm
 ```
 
-The public-key fingerprint is also published in `forgebox-rpm-signing-key-id.txt`. Users should obtain the public key from the official ForgeBox release and compare the fingerprint before trusting it.
+The private key is never published. The small text file containing only the key ID is not distributed separately; the fingerprint can be read directly from the public key.
 
 ## Release workflow
 
-The Linux workflow runs tests, builds RPM, DEB and AppImage outputs, builds a native Arch package with `makepkg`, and publishes SHA-256 checksums with tagged GitHub releases.
+The Linux workflow runs tests, builds RPM, DEB, AppImage, and a native Arch package, then publishes only the four installable packages and the public RPM signing key. Intermediate outputs such as the debug Arch package, `PKGBUILD`, `.SRCINFO`, and temporary source archives remain in the CI artifacts rather than the public release.
+
+GitHub exposes a SHA-256 digest for each release asset. The one-command installer reads that digest from the release API and verifies the downloaded package before installation.
 
 The current workflow does not publish to a signed APT or Pacman repository. DEB and Arch users install the downloaded release artifacts directly. AUR/Flathub-style repository publication can be added separately after the first package builds are verified.
