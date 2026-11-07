@@ -11,9 +11,9 @@ ForgeBox releases provide four Linux distribution formats:
 
 The Arch release includes a native Pacman package, plus its `PKGBUILD` and `.SRCINFO` for rebuilding. Package names are kept consistent as `forgebox`.
 
-RPM, DEB, and Pacman packages declare the native libraries and common conversion engines used by ForgeBox. Install them through the distribution's package manager so it can resolve dependencies. The RPM and DEB packages require Tesseract and the English language data used by default OCR. Arch packages include `tesseract`, `tesseract-data-eng`, and `pdftk` for PDF watermarking.
+RPM, DEB, and Pacman packages declare the native libraries and common conversion engines used by ForgeBox. Install them through the distribution's package manager so it can resolve dependencies. LibreOffice and FFmpeg are required runtime dependencies, alongside the image, PDF, OCR, and metadata utilities. The RPM and DEB packages require Tesseract and the English language data used by default OCR. Arch packages include `tesseract`, `tesseract-data-eng`, and `pdftk` for PDF watermarking. Russian OCR data is optional and can be installed from the post-install prompt.
 
-FFmpeg is optional because it is only used by the audio and video tools. RPM packages recommend it, and the Arch package lists it as an optional dependency. On Arch, install it with `sudo pacman -S ffmpeg` when you need those media tools.
+On Fedora, the full FFmpeg build must be available from RPM Fusion Free because ForgeBox uses the `libx264` encoder for MP4/MOV/MKV output. Fedora's `ffmpeg-free` package does not include `libx264`; the quick installer enables RPM Fusion Free automatically. For manual RPM installation, see [Fedora runtime dependencies](FEDORA-RUNTIME-DEPENDENCIES.md).
 
 The AppImage is different: it does not install host conversion engines or language data. Install the utilities required by the features you use.
 
@@ -24,10 +24,10 @@ AppImage bundles ForgeBox, its icon and desktop entry, and the shared libraries 
 - ImageMagick for image conversion and image normalization; img2pdf for assembling image pages into PDFs.
 - Poppler utilities for PDF merge, split and rendering.
 - Ghostscript and qpdf for PDF compression and page operations.
-- LibreOffice for document and spreadsheet conversion.
+- LibreOffice for document and spreadsheet conversion (required for the full feature set).
 - Tesseract and language data for OCR.
 - ExifTool for EXIF extraction.
-- FFmpeg for video, audio and GIF features (optional).
+- FFmpeg for video, audio and GIF features (required for the media tools).
 - `pdftk` for PDF watermarking.
 - `rembg` and its Python model environment for background removal. Fedora RPM users can run `/usr/share/doc/forgebox/install-rembg-fedora.sh` to set up the optional CPU backend in an isolated Python 3.13 environment.
 

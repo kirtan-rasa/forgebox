@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <strong>Beta · Linux packages available</strong>
+  <strong>Stable · Linux packages available</strong>
 </p>
 
 ---
@@ -40,7 +40,7 @@ ForgeBox brings common image, PDF, document, spreadsheet, and media tools into o
 - File dialogs and thumbnail generation run outside the UI thread.
 - Conversion runs locally. ForgeBox does not upload selected files to a remote conversion service.
 
-Background removal uses the optional `rembg` CPU backend; its model may be downloaded separately on first use. Fedora RPM users can set it up with `bash /usr/share/doc/forgebox/install-rembg-fedora.sh`. The helper uses a dedicated Python 3.13 environment rather than the system Python.
+Background removal uses the optional `rembg` CPU backend; its model may be downloaded separately on first use. The quick installer can set it up after installation in a dedicated Python virtual environment. Russian OCR language data is also offered as an optional post-install component. LibreOffice and FFmpeg are required for document, spreadsheet, audio, and video tools. Fedora users need the full FFmpeg package from RPM Fusion Free for the H.264 encoder used by video conversion; the quick installer configures this automatically.
 
 ## Download
 
@@ -52,7 +52,7 @@ On supported x86_64 Linux systems, run:
 curl -f https://kirtan-rasa.github.io/forgebox/install.sh | sh
 ```
 
-The installer selects the newest published release with a package matching your distribution, verifies the package's SHA-256 digest, and installs it through the native package manager. It supports Fedora versions with a matching RPM build, Debian/Ubuntu-based systems, and Arch-based systems. A POSIX-compatible sh, curl, and sha256sum are required; Python 3 is installed automatically if it is missing. The package manager runs in automatic-confirmation mode, while sudo may still ask for your password.
+The installer selects the newest published release with a package matching your distribution, verifies the package's SHA-256 digest, and installs it through the native package manager. It supports Fedora versions with a matching RPM build, Debian/Ubuntu-based systems, and Arch-based systems. A POSIX-compatible sh, curl, and sha256sum are required; Python 3 is installed automatically if it is missing. The package manager runs in automatic-confirmation mode, while sudo may still ask for your password. On Fedora, the installer enables RPM Fusion Free and installs the full FFmpeg build required by ForgeBox's video converter.
 
 On Arch Linux, keep the system fully updated before installing. The installer does not trigger a system-wide upgrade.
 
@@ -87,7 +87,7 @@ ForgeBox uses external tools only for the features that need them.
 | FFmpeg | Video conversion, audio extraction, and GIF creation |
 | `rembg` | Background removal |
 
-QR generation is built into ForgeBox and does not require a separate QR command-line tool. HEIC/HEIF support depends on the ImageMagick build and its format delegates. FFmpeg features depend on the codecs available in the installed FFmpeg build.
+QR generation is built into ForgeBox and does not require a separate QR command-line tool. HEIC/HEIF support depends on the ImageMagick build and its format delegates. Video format support still depends on the codecs available in the installed FFmpeg build.
 
 ## Build from source
 
