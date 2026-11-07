@@ -1,6 +1,6 @@
 use super::{
-    display_io, first_file, os, output_for_input, require_files, run_magick_owned, run_ok,
-    sort_numbered_paths, temp_dir, unique_path, Job,
+    display_io, first_file, os, reserve_output_for_input, reserve_unique_path, require_files,
+    run_magick_owned, run_ok, sort_numbered_paths, temp_dir, Job,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -52,7 +52,8 @@ pub(super) fn images_to_pdf(job: &Job, combine: bool, compress: bool, quality: u
             pdf_pages = normalized;
         }
         if combine {
-            let out = unique_path(&job.output_dir, "images", "pdf");
+            let reservation = reserve_unique_path(&job.output_dir, "images", "pdf")?;
+            let out = reservation.path().to_path_buf();
             let mut args = vec![os("--output"), os(&out)];
             args.extend(pdf_pages.iter().map(|page| os(page)));
             if let Err(error) = run_ok("img2pdf", args) {
@@ -67,7 +68,8 @@ pub(super) fn images_to_pdf(job: &Job, combine: bool, compress: bool, quality: u
                     for output in &outputs { let _ = fs::remove_file(output); }
                     return Err(error);
                 }
-                let out = output_for_input(job, input, "converted", "pdf");
+                let reservation = reserve_output_for_input(job, input, "converted", "pdf")?;
+                let out = reservation.path().to_path_buf();
                 let args = vec![os("--output"), os(&out), os(page)];
                 if let Err(error) = run_ok("img2pdf", args) {
                     let _ = fs::remove_file(&out);
@@ -95,7 +97,8 @@ pub(super) fn long_png_to_pdf(job: &Job) -> Result<Vec<PathBuf>, String> {
         let mut pages = fs::read_dir(&temp).map_err(display_io)?.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.extension().and_then(|s| s.to_str()).map(|ext| ext.eq_ignore_ascii_case("png")).unwrap_or(false)).collect::<Vec<_>>();
         sort_numbered_paths(&mut pages);
         if pages.is_empty() { return Err("Could not create pages from the image.".into()); }
-        let out = output_for_input(job, input, "paginated", "pdf");
+        let reservation = reserve_output_for_input(job, input, "paginated", "pdf")?;
+        let out = reservation.path().to_path_buf();
         let mut args = vec![os("--output"), os(&out)];
         args.extend(pages.iter().map(|page| os(page)));
         if let Err(error) = run_ok("img2pdf", args) {

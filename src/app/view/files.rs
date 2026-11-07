@@ -11,6 +11,23 @@ pub(in crate::app) fn sort_image_paths_naturally(paths: &mut [PathBuf]) {
     });
 }
 
+pub(in crate::app) fn append_image_paths(
+    existing: &mut Vec<PathBuf>,
+    incoming: Vec<PathBuf>,
+    manually_reordered: bool,
+) {
+    let mut incoming = incoming;
+    sort_image_paths_naturally(&mut incoming);
+    for path in incoming {
+        if !existing.contains(&path) {
+            existing.push(path);
+        }
+    }
+    if !manually_reordered {
+        sort_image_paths_naturally(existing);
+    }
+}
+
 fn natural_name_cmp(left: &str, right: &str) -> Ordering {
     let left = left.to_lowercase();
     let right = right.to_lowercase();
@@ -142,4 +159,104 @@ pub(in crate::app) fn default_output_dir() -> PathBuf {
     }
 
     std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir())
+}
+
+
+#[cfg(test)]
+mod natural_sort_tests {
+    use super::{append_image_paths, sort_image_paths_naturally};
+    use std::path::PathBuf;
+
+    #[test]
+    fn numbered_image_names_sort_numerically() {
+        let mut paths = vec![
+            PathBuf::from("/pages/PDF10.png"),
+            PathBuf::from("/pages/PDF2.png"),
+            PathBuf::from("/pages/PDF1.png"),
+        ];
+        sort_image_paths_naturally(&mut paths);
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/pages/PDF1.png"),
+                PathBuf::from("/pages/PDF2.png"),
+                PathBuf::from("/pages/PDF10.png"),
+            ]
+        );
+    }
+
+    #[test]
+    fn natural_sort_is_case_insensitive_and_stable_for_zero_padded_numbers() {
+        let mut paths = vec![
+            PathBuf::from("/pages/page10.png"),
+            PathBuf::from("/pages/Page002.png"),
+            PathBuf::from("/pages/page2.png"),
+            PathBuf::from("/pages/PAGE1.png"),
+        ];
+        sort_image_paths_naturally(&mut paths);
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/pages/PAGE1.png"),
+                PathBuf::from("/pages/page2.png"),
+                PathBuf::from("/pages/Page002.png"),
+                PathBuf::from("/pages/page10.png"),
+            ]
+        );
+    }
+}
+
+
+#[cfg(test)]
+mod incremental_image_import_tests {
+    use super::append_image_paths;
+    use std::path::PathBuf;
+
+    #[test]
+    fn separate_import_batches_keep_the_combined_list_naturally_sorted() {
+        let mut paths = Vec::new();
+        append_image_paths(
+            &mut paths,
+            vec![PathBuf::from("/pages/PDF3.png"), PathBuf::from("/pages/PDF4.png")],
+            false,
+        );
+        append_image_paths(
+            &mut paths,
+            vec![PathBuf::from("/pages/PDF1.png"), PathBuf::from("/pages/PDF2.png")],
+            false,
+        );
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/pages/PDF1.png"),
+                PathBuf::from("/pages/PDF2.png"),
+                PathBuf::from("/pages/PDF3.png"),
+                PathBuf::from("/pages/PDF4.png"),
+            ]
+        );
+    }
+
+    #[test]
+    fn importing_another_batch_does_not_override_a_manual_page_order() {
+        let mut paths = vec![
+            PathBuf::from("/pages/PDF3.png"),
+            PathBuf::from("/pages/PDF1.png"),
+            PathBuf::from("/pages/PDF2.png"),
+        ];
+        append_image_paths(
+            &mut paths,
+            vec![PathBuf::from("/pages/PDF5.png"), PathBuf::from("/pages/PDF4.png")],
+            true,
+        );
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/pages/PDF3.png"),
+                PathBuf::from("/pages/PDF1.png"),
+                PathBuf::from("/pages/PDF2.png"),
+                PathBuf::from("/pages/PDF4.png"),
+                PathBuf::from("/pages/PDF5.png"),
+            ]
+        );
+    }
 }

@@ -31,6 +31,8 @@ jobs:
         run: |
           grep -Fq 'api.github.com/repos/kirtan-rasa/forgebox/releases' site/install.sh
           grep -Fq 'sha256:' site/install.sh
+          grep -Fq 'release.get("prerelease")' site/install.sh
+          grep -Fq '< (3, 14)' site/install.sh
 
   deploy:
     name: Deploy to GitHub Pages

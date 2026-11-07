@@ -15,9 +15,9 @@ use self::command::{
     run_capture, run_magick_owned, run_ok, run_qpdf,
 };
 use self::common::{
-    display_io, files_with_prefix, first_file, normalized_ext, os, output_for_input, positive,
-    process_each, process_each_capture, process_each_convert, require_files,
-    sort_numbered_paths, temp_dir, unique_path, unique_pattern, unique_prefix,
+    display_io, files_with_prefix, first_file, normalized_ext, os, reserve_output_for_input,
+    reserve_unique_path, positive, process_each, process_each_capture, process_each_convert,
+    require_files, sort_numbered_paths, temp_dir, reserve_unique_prefix,
 };
 use self::data::{csv_to_json, data_convert, encode_file_url_path, pdf_to_docx, soffice_convert};
 use self::images::{images_to_pdf, long_png_to_pdf};
@@ -206,7 +206,8 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
             if text.trim().is_empty() {
                 return Err("Enter text or a URL for the QR code.".into());
             }
-            let out = unique_path(&job.output_dir, "qr-code", "png");
+            let reservation = reserve_unique_path(&job.output_dir, "qr-code", "png")?;
+            let out = reservation.path().to_path_buf();
             let code = QrCode::new(text.as_bytes())
                 .map_err(|error| format!("Could not generate the QR code: {error}"))?;
             let qr_image = code
@@ -222,7 +223,8 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
         (Tool::LongPngToPdf, Options::None) => long_png_to_pdf(&job),
         (Tool::PdfMerge, Options::None) => {
             require_files(&job, 2, "Select at least two PDF files to merge.")?;
-            let out = unique_path(&job.output_dir, "merged", "pdf");
+            let reservation = reserve_unique_path(&job.output_dir, "merged", "pdf")?;
+            let out = reservation.path().to_path_buf();
             let mut args: Vec<OsString> = job.files.iter().map(|path| os(path)).collect();
             args.push(os(&out));
             if let Err(error) = run_ok("pdfunite", args) {
@@ -235,7 +237,9 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
             let input = first_file(&job)?;
             let page_count = pdf_page_count(input)?;
             let (first, end) = parse_pdf_page_range(range, page_count)?;
-            let pattern = unique_pattern(&job.output_dir, &input.file_stem().and_then(|value| value.to_str()).unwrap_or("document"));
+            let prefix_reservation = reserve_unique_prefix(&job.output_dir, &format!("{}-split", input.file_stem().and_then(|value| value.to_str()).unwrap_or("document")))?;
+            let prefix = prefix_reservation.path().to_path_buf();
+            let pattern = job.output_dir.join(format!("{}-%d.pdf", prefix.file_name().and_then(|value| value.to_str()).unwrap_or("split")));
             let pattern_prefix = pattern.file_name().and_then(|value| value.to_str()).unwrap_or("split-%d.pdf")
                 .split("%d").next().unwrap_or("split-").to_string();
             if let Err(error) = run_ok("pdfseparate", vec![os("-f"), os(&first.to_string()), os("-l"), os(&end.to_string()), os(input), os(&pattern)]) {
@@ -254,7 +258,8 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
         }
         (Tool::PdfCompress, Options::PdfCompress { profile }) => {
             let input = first_file(&job)?;
-            let out = output_for_input(&job, input, "compressed", "pdf");
+            let reservation = reserve_output_for_input(&job, input, "compressed", "pdf")?;
+            let out = reservation.path().to_path_buf();
             let mut output_argument = OsString::from("-sOutputFile=");
             // Preserve non-UTF-8 Linux path bytes instead of round-tripping
             // through Path::display(), which is intentionally lossy.
@@ -270,7 +275,8 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
         }
         (Tool::PdfRotate, Options::PdfRotate { rotation }) => {
             let input = first_file(&job)?;
-            let out = output_for_input(&job, input, "rotated", "pdf");
+            let reservation = reserve_output_for_input(&job, input, "rotated", "pdf")?;
+            let out = reservation.path().to_path_buf();
             if let Err(error) = run_qpdf(vec![os(input), os(format!("--rotate=+{}:1-z", rotation.degrees())), os(&out)]) {
                 let _ = fs::remove_file(&out);
                 return Err(error);
@@ -285,7 +291,8 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
             let page_count = pdf_page_count(input)?;
             let pages = parse_pdf_page_order(order, page_count)?;
             let normalized_order = pages.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
-            let out = output_for_input(&job, input, "reordered", "pdf");
+            let reservation = reserve_output_for_input(&job, input, "reordered", "pdf")?;
+            let out = reservation.path().to_path_buf();
             if let Err(error) = run_qpdf(vec![os(input), os("--pages"), os("."), os(&normalized_order), os("--"), os(&out)]) {
                 let _ = fs::remove_file(&out);
                 return Err(error);
@@ -295,7 +302,8 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
         (Tool::PdfToImages, Options::PdfToImages { format, dpi }) => {
             let input = first_file(&job)?;
             let dpi = dpi.to_string();
-            let prefix = unique_prefix(&job.output_dir, &format!("{}-page", input.file_stem().and_then(|value| value.to_str()).unwrap_or("pdf")));
+            let prefix_reservation = reserve_unique_prefix(&job.output_dir, &format!("{}-page", input.file_stem().and_then(|value| value.to_str()).unwrap_or("pdf")))?;
+            let prefix = prefix_reservation.path().to_path_buf();
             let format_arg = if matches!(format, PdfImageFormat::Jpeg) { "-jpeg" } else { "-png" };
             let prefix_name = prefix.file_name().and_then(|value| value.to_str()).unwrap_or("pdf-page").to_string();
             if let Err(error) = run_ok("pdftoppm", vec![os(format_arg), os("-r"), os(&dpi), os(input), os(&prefix)]) {
@@ -315,7 +323,8 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
         }
         (Tool::PdfWatermark, Options::PdfWatermark { watermark_file }) => {
             let input = first_file(&job)?;
-            let out = output_for_input(&job, input, "watermarked", "pdf");
+            let reservation = reserve_output_for_input(&job, input, "watermarked", "pdf")?;
+            let out = reservation.path().to_path_buf();
             if let Err(error) = run_ok("pdftk", vec![os(input), os("stamp"), os(watermark_file), os("output"), os(&out)]) {
                 let _ = fs::remove_file(&out);
                 return Err(error);

@@ -122,7 +122,6 @@ pub(super) fn convert_audio(
     })
 }
 
-static STICKER_TEMP_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 const TELEGRAM_STICKER_MAX_BYTES: u64 = 256 * 1024;
 
 #[derive(Clone, Copy, Debug)]
@@ -292,12 +291,7 @@ pub(super) fn convert_video_sticker(
     let info = sticker_video_info(input)?;
     let filter = sticker_video_filter(info, fit, crop_left, crop_top, zoom_milli)?;
 
-    let sequence = STICKER_TEMP_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let work_dir = std::env::temp_dir().join(format!(
-        "forgebox-sticker-{}-{sequence}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&work_dir)
+    let work_dir = super::temp_dir("sticker")
         .map_err(|error| format!("Could not prepare temporary sticker-encoding files: {error}"))?;
     let passlog = work_dir.join("vp9-pass");
 

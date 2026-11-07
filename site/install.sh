@@ -92,8 +92,8 @@ install_rembg_backend() {
     esac
 
     PYTHON_BIN=$(command -v python3) || return 1
-    if ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] < (4, 0) else 1)' 2>/dev/null; then
-        printf 'rembg requires Python >=3.11 and <4.0. The installed python3 does not meet that requirement.\n' >&2
+    if ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] < (3, 14) else 1)' 2>/dev/null; then
+        printf 'rembg requires Python >=3.11 and <3.14. The installed python3 does not meet that requirement.\n' >&2
         return 1
     fi
 
@@ -102,7 +102,7 @@ install_rembg_backend() {
     mkdir -p "$DATA_HOME/forgebox" || return 1
 
     if [ -e "$VENV_DIR" ]; then
-        if [ ! -x "$VENV_DIR/bin/python" ] || ! "$VENV_DIR/bin/python" -c 'import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] < (4, 0) else 1)' 2>/dev/null; then
+        if [ ! -x "$VENV_DIR/bin/python" ] || ! "$VENV_DIR/bin/python" -c 'import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] < (3, 14) else 1)' 2>/dev/null; then
             printf 'An existing ForgeBox rembg environment uses an incompatible Python.\n' >&2
             printf 'Remove it manually and run the installer again: %s\n' "$VENV_DIR" >&2
             return 1
@@ -255,7 +255,7 @@ releases = [release for release in releases if isinstance(release, dict)]
 releases.sort(key=lambda release: release.get("published_at") or "", reverse=True)
 
 for release in releases:
-    if release.get("draft"):
+    if release.get("draft") or release.get("prerelease"):
         continue
 
     for asset in release.get("assets", []):
