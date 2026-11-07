@@ -122,6 +122,218 @@ pub(super) fn convert_audio(
     })
 }
 
+static STICKER_TEMP_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+const TELEGRAM_STICKER_MAX_BYTES: u64 = 256 * 1024;
+
+#[derive(Clone, Copy, Debug)]
+struct StickerVideoInfo {
+    width: u32,
+    height: u32,
+}
+
+fn sticker_video_info(input: &Path) -> Result<StickerVideoInfo, String> {
+    let output = run_ok("ffprobe", vec![
+        os("-v"), os("error"),
+        os("-select_streams"), os("v:0"),
+        os("-show_entries"), os("stream=width,height"),
+        os("-of"), os("json"),
+        os(input),
+    ]).map_err(|error| format!("Could not inspect the source video: {error}"))?;
+    let json: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("FFprobe returned invalid source-video data: {error}"))?;
+    let stream = json.get("streams")
+        .and_then(Value::as_array)
+        .and_then(|streams| streams.first())
+        .ok_or_else(|| "No video stream was found in the selected file.".to_string())?;
+    let width = stream.get("width").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let height = stream.get("height").and_then(Value::as_u64).unwrap_or(0) as u32;
+    if width < 2 || height < 2 {
+        return Err("The selected video has invalid dimensions.".into());
+    }
+    Ok(StickerVideoInfo { width, height })
+}
+
+fn sticker_video_filter(
+    info: StickerVideoInfo,
+    fit: super::VideoStickerFit,
+    crop_left: u16,
+    crop_top: u16,
+    zoom_milli: u16,
+) -> Result<String, String> {
+    use super::VideoStickerFit;
+
+    match fit {
+        VideoStickerFit::Fit => Ok(
+            "scale=512:512:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=black@0,setsar=1,fps=30,format=yuva420p"
+                .into(),
+        ),
+        VideoStickerFit::Crop => {
+            let min_side = info.width.min(info.height) & !1;
+            if min_side < 2 {
+                return Err("The source video is too small to create a square sticker.".into());
+            }
+            let zoom = u32::from(zoom_milli.clamp(1_000, 4_000));
+            let crop_side = ((u64::from(min_side) * 1_000 / u64::from(zoom)) as u32 & !1).max(2);
+            let available_x = info.width.saturating_sub(crop_side);
+            let available_y = info.height.saturating_sub(crop_side);
+            let x = (available_x * u32::from(crop_left.min(1_000)) / 1_000) & !1;
+            let y = (available_y * u32::from(crop_top.min(1_000)) / 1_000) & !1;
+            Ok(format!(
+                "crop={crop_side}:{crop_side}:{x}:{y},scale=512:512:flags=lanczos,setsar=1,fps=30,format=yuva420p"
+            ))
+        }
+    }
+}
+
+fn encode_sticker_pass(
+    input: &Path,
+    output: &Path,
+    start_ms: u32,
+    duration_ms: u32,
+    filter: &str,
+    bitrate_kbps: u32,
+    pass: u8,
+    passlog: &Path,
+) -> Result<(), String> {
+    let seek = format!("{:.3}", start_ms as f64 / 1_000.0);
+    let duration = format!("{:.3}", duration_ms as f64 / 1_000.0);
+    let mut args = vec![
+        os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"),
+        os("-i"), os(input),
+        os("-ss"), os(&seek),
+        os("-t"), os(&duration),
+        os("-map"), os("0:v:0"),
+        os("-vf"), os(filter),
+        os("-an"), os("-sn"), os("-dn"),
+        os("-c:v"), os("libvpx-vp9"),
+        os("-pix_fmt"), os("yuva420p"),
+        os("-metadata:s:v:0"), os("alpha_mode=1"),
+        os("-auto-alt-ref"), os("0"),
+        os("-deadline"), os("good"),
+        os("-cpu-used"), os("4"),
+        os("-threads"), os("2"),
+        os("-b:v"), os(&format!("{bitrate_kbps}k")),
+        os("-pass"), os(pass.to_string()),
+        os("-passlogfile"), os(passlog),
+    ];
+
+    if pass == 1 {
+        args.extend([os("-f"), os("null"), os("-")]);
+    } else {
+        args.push(os(output));
+    }
+    run_ok("ffmpeg", args).map(|_| ()).map_err(|error| {
+        if error.contains("Unknown encoder") || error.contains("Encoder not found") {
+            "This FFmpeg build does not include the libvpx-vp9 encoder required for Telegram video stickers.".into()
+        } else {
+            format!("VP9 sticker encoding failed: {error}")
+        }
+    })
+}
+
+fn validate_sticker_output(path: &Path) -> Result<(), String> {
+    let size = std::fs::metadata(path)
+        .map_err(|error| format!("Could not read the exported sticker: {error}"))?
+        .len();
+    if size > TELEGRAM_STICKER_MAX_BYTES {
+        return Err(format!(
+            "The exported sticker is {} KB, above Telegram's 256 KB limit. Try a shorter or less detailed clip.",
+            size.div_ceil(1_024)
+        ));
+    }
+
+    let output = run_ok("ffprobe", vec![
+        os("-v"), os("error"),
+        os("-show_entries"), os("stream=codec_type,codec_name,width,height:format=duration"),
+        os("-of"), os("json"),
+        os(path),
+    ]).map_err(|error| format!("Could not verify the exported WebM sticker: {error}"))?;
+    let json: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("FFprobe returned invalid sticker data: {error}"))?;
+    let streams = json.get("streams").and_then(Value::as_array)
+        .ok_or_else(|| "The exported WebM does not contain a readable video stream.".to_string())?;
+    if streams.len() != 1
+        || streams.first().and_then(|stream| stream.get("codec_type")).and_then(Value::as_str) != Some("video")
+        || streams.first().and_then(|stream| stream.get("codec_name")).and_then(Value::as_str) != Some("vp9")
+    {
+        return Err("The exported sticker must contain one VP9 video stream and no audio.".into());
+    }
+    let stream = &streams[0];
+    let width = stream.get("width").and_then(Value::as_u64).unwrap_or(0);
+    let height = stream.get("height").and_then(Value::as_u64).unwrap_or(0);
+    if width != 512 || height != 512 {
+        return Err(format!("The exported sticker has unexpected dimensions: {width}×{height}; expected 512×512."));
+    }
+    let duration = json.get("format")
+        .and_then(|format| format.get("duration"))
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    if duration <= 0.0 || duration > 3.01 {
+        return Err(format!("The exported sticker duration is {duration:.2} seconds; Telegram allows at most 3 seconds."));
+    }
+    Ok(())
+}
+
+pub(super) fn convert_video_sticker(
+    input: &Path,
+    output: &Path,
+    start_ms: u32,
+    end_ms: u32,
+    fit: super::VideoStickerFit,
+    crop_left: u16,
+    crop_top: u16,
+    zoom_milli: u16,
+) -> Result<(), String> {
+    let duration_ms = end_ms.saturating_sub(start_ms);
+    if duration_ms == 0 || duration_ms > 3_000 {
+        return Err("Choose a video segment between 1 ms and 3 seconds.".into());
+    }
+    let info = sticker_video_info(input)?;
+    let filter = sticker_video_filter(info, fit, crop_left, crop_top, zoom_milli)?;
+
+    let sequence = STICKER_TEMP_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let work_dir = std::env::temp_dir().join(format!(
+        "forgebox-sticker-{}-{sequence}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&work_dir)
+        .map_err(|error| format!("Could not prepare temporary sticker-encoding files: {error}"))?;
+    let passlog = work_dir.join("vp9-pass");
+
+    // Leave room for WebM container overhead and metadata, then lower the
+    // bitrate and repeat the two-pass encode if a complex scene exceeds 256 KiB.
+    let target_payload = TELEGRAM_STICKER_MAX_BYTES.saturating_sub(8 * 1_024);
+    let mut bitrate = ((target_payload * 8 * 1_000 / u64::from(duration_ms)) * 85 / 100)
+        .clamp(64_000, 1_800_000) as u32 / 1_000;
+    let result = (|| {
+        for attempt in 0..5 {
+            let _ = std::fs::remove_file(output);
+            encode_sticker_pass(input, output, start_ms, duration_ms, &filter, bitrate, 1, &passlog)?;
+            encode_sticker_pass(input, output, start_ms, duration_ms, &filter, bitrate, 2, &passlog)?;
+            let size = std::fs::metadata(output)
+                .map_err(|error| format!("Could not inspect the encoded sticker size: {error}"))?
+                .len();
+            if size <= TELEGRAM_STICKER_MAX_BYTES {
+                validate_sticker_output(output)?;
+                return Ok(());
+            }
+            if attempt == 4 {
+                break;
+            }
+            let reduced = (f64::from(bitrate) * TELEGRAM_STICKER_MAX_BYTES as f64 / size as f64 * 0.88) as u32;
+            bitrate = reduced.max(64);
+            report_status(format!(
+                "Reducing sticker bitrate to {bitrate} kb/s to meet Telegram's 256 KB limit…"
+            ));
+        }
+        Err("Could not bring this video below Telegram's 256 KB sticker limit. Choose a shorter segment or a less detailed scene.".into())
+    })();
+
+    let _ = std::fs::remove_dir_all(work_dir);
+    result
+}
+
 pub(super) fn extract_audio(input: &Path, output: &Path, target_format: &str) -> Result<(), String> {
     let format = normalized_ext(target_format);
     let mut args = vec![os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"), os("-i"), os(input), os("-map"), os("0:a:0"), os("-vn")];

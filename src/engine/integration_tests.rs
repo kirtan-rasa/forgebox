@@ -452,6 +452,52 @@ fn audio_and_video_tools_extract_convert_and_generate_gif() {
     )).expect("convert video to WebM");
     outputs(&video, 1);
 
+    let sticker = execute(job(
+        ToolId::VideoSticker,
+        vec![source.clone()],
+        ws.path("sticker"),
+        JobOptions::VideoSticker {
+            start_ms: 100,
+            end_ms: 900,
+            fit: super::VideoStickerFit::Crop,
+            crop_left: 500,
+            crop_top: 500,
+            zoom_milli: 1_000,
+        },
+    )).expect("create Telegram video sticker");
+    outputs(&sticker, 1);
+    assert_eq!(sticker[0].extension().and_then(|ext| ext.to_str()), Some("webm"));
+    assert!(fs::metadata(&sticker[0]).unwrap().len() <= 256 * 1024);
+    let sticker_probe = Command::new("ffprobe")
+        .args(["-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height:format=duration", "-of", "json"])
+        .arg(&sticker[0])
+        .output().expect("probe video sticker");
+    assert!(sticker_probe.status.success());
+    let sticker_info: serde_json::Value = serde_json::from_slice(&sticker_probe.stdout).unwrap();
+    let sticker_streams = sticker_info["streams"].as_array().unwrap();
+    assert_eq!(sticker_streams.len(), 1);
+    assert_eq!(sticker_streams[0]["codec_name"], "vp9");
+    assert_eq!(sticker_streams[0]["width"], 512);
+    assert_eq!(sticker_streams[0]["height"], 512);
+    let sticker_duration: f64 = sticker_info["format"]["duration"].as_str().unwrap().parse().unwrap();
+    assert!(sticker_duration <= 3.0);
+
+    let fitted_sticker = execute(job(
+        ToolId::VideoSticker,
+        vec![source.clone()],
+        ws.path("sticker-fit"),
+        JobOptions::VideoSticker {
+            start_ms: 0,
+            end_ms: 900,
+            fit: super::VideoStickerFit::Fit,
+            crop_left: 500,
+            crop_top: 500,
+            zoom_milli: 1_000,
+        },
+    )).expect("create fit-mode Telegram video sticker");
+    outputs(&fitted_sticker, 1);
+    assert!(fs::metadata(&fitted_sticker[0]).unwrap().len() <= 256 * 1024);
+
     let gif = execute(job(
         ToolId::VideoToGif, vec![source], ws.path("gif"),
         JobOptions::VideoToGif { width: 128, fps: 6 },

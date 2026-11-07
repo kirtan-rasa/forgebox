@@ -51,7 +51,7 @@ pub(in crate::app) fn is_supported_input_file(tool: ToolId, path: &Path) -> bool
         }
         ToolId::AudioConvert => is_audio_file(path),
         ToolId::ExtractAudio => is_video_file(path) || is_audio_file(path),
-        ToolId::VideoConvert | ToolId::VideoToGif | ToolId::DavinciResolve => is_video_file(path),
+        ToolId::VideoConvert | ToolId::VideoToGif | ToolId::DavinciResolve | ToolId::VideoSticker => is_video_file(path),
         ToolId::ImagesToPdf | ToolId::ImageConvert | ToolId::ImageResize | ToolId::ImageCompress
         | ToolId::ImageGrayscale | ToolId::RemoveBackground | ToolId::ExtractExif
         | ToolId::ImageOcr | ToolId::LongPngToPdf => is_image_file(path),
@@ -67,7 +67,7 @@ pub(in crate::app) fn accepted_input_description(tool: ToolId) -> &'static str {
         ToolId::DataConvert => "CSV, JSON, or XLSX files",
         ToolId::AudioConvert => "audio files",
         ToolId::ExtractAudio => "audio or video files",
-        ToolId::VideoConvert | ToolId::VideoToGif | ToolId::DavinciResolve => "video files",
+        ToolId::VideoConvert | ToolId::VideoToGif | ToolId::DavinciResolve | ToolId::VideoSticker => "video files",
         _ => "image files",
     }
 }

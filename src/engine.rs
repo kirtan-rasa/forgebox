@@ -21,11 +21,11 @@ use self::common::{
 };
 use self::data::{csv_to_json, data_convert, encode_file_url_path, pdf_to_docx, soffice_convert};
 use self::images::{images_to_pdf, long_png_to_pdf};
-use self::media::{convert_audio, convert_davinci_resolve, convert_video, extract_audio};
+use self::media::{convert_audio, convert_davinci_resolve, convert_video, convert_video_sticker, extract_audio};
 use self::pdf::{parse_pdf_page_order, parse_pdf_page_range, pdf_page_count};
 pub use self::job::{
     AudioFormat, DataFormat, ImageFormat, Job, JobOptions, PdfCompressionProfile,
-    PdfImageFormat, PdfRotation, ResolveProfile, VideoFormat, VideoPreset,
+    PdfImageFormat, PdfRotation, ResolveProfile, VideoFormat, VideoPreset, VideoStickerFit,
 };
 pub use self::control::ExecutionControl;
 
@@ -340,6 +340,9 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
         (Tool::VideoToGif, Options::VideoToGif { width, fps }) => process_each(&job, |input, out| {
             let filter = format!("fps={fps},scale={width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer");
             run_ok("ffmpeg", vec![os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"), os("-i"), os(input), os("-filter_complex"), os(&filter), os("-threads"), os("2"), os("-loop"), os("0"), os(out)]).map(|_| ())
+        }),
+        (Tool::VideoSticker, Options::VideoSticker { start_ms, end_ms, fit, crop_left, crop_top, zoom_milli }) => process_each(&job, |input, out| {
+            convert_video_sticker(input, out, *start_ms, *end_ms, *fit, *crop_left, *crop_top, *zoom_milli)
         }),
         _ => Err(format!("The settings do not match the selected tool ({:?}).", job.tool)),
     }

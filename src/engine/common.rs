@@ -29,6 +29,7 @@ fn output_details(job: &Job, input: &Path) -> (&'static str, String) {
         (Tool::VideoConvert, Options::VideoConvert { format, .. }) => ("converted", format.as_str().to_owned()),
         (Tool::DavinciResolve, Options::DavinciResolve { .. }) => ("davinci-resolve", "mov".into()),
         (Tool::VideoToGif, Options::VideoToGif { .. }) => ("animation", "gif".into()),
+        (Tool::VideoSticker, Options::VideoSticker { .. }) => ("sticker", "webm".into()),
         _ => ("output", source_extension()),
     }
 }

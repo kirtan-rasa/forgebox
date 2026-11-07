@@ -219,6 +219,12 @@ impl ResolveProfile {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoStickerFit {
+    Crop,
+    Fit,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JobOptions {
     None,
@@ -240,6 +246,7 @@ pub enum JobOptions {
     VideoConvert { format: VideoFormat, preset: VideoPreset, quality: u8 },
     DavinciResolve { profile: ResolveProfile },
     VideoToGif { width: u16, fps: u8 },
+    VideoSticker { start_ms: u32, end_ms: u32, fit: VideoStickerFit, crop_left: u16, crop_top: u16, zoom_milli: u16 },
 }
 
 impl JobOptions {
@@ -264,6 +271,7 @@ impl JobOptions {
                 | (ToolId::VideoConvert, Self::VideoConvert { .. })
                 | (ToolId::DavinciResolve, Self::DavinciResolve { .. })
                 | (ToolId::VideoToGif, Self::VideoToGif { .. })
+                | (ToolId::VideoSticker, Self::VideoSticker { .. })
                 | (ToolId::ImageGrayscale, Self::None)
                 | (ToolId::RemoveBackground, Self::None)
                 | (ToolId::ExtractExif, Self::None)
@@ -290,6 +298,19 @@ impl Job {
     pub fn new(tool: ToolId, files: Vec<PathBuf>, output_dir: PathBuf, options: JobOptions) -> Result<Self, String> {
         if !options.matches_tool(tool) {
             return Err(format!("The settings do not match the selected tool ({tool:?})."));
+        }
+
+        if let JobOptions::VideoSticker { start_ms, end_ms, crop_left, crop_top, zoom_milli, .. } = &options {
+            let duration_ms = end_ms.saturating_sub(*start_ms);
+            if duration_ms == 0 || duration_ms > 3_000 {
+                return Err("A Telegram video sticker must be between 1 ms and 3 seconds long.".into());
+            }
+            if *crop_left > 1_000 || *crop_top > 1_000 {
+                return Err("Video sticker crop position must be between 0 and 1000.".into());
+            }
+            if !(1_000..=4_000).contains(zoom_milli) {
+                return Err("Video sticker crop zoom must be between 1× and 4×.".into());
+            }
         }
 
         if let JobOptions::AudioConvert { bitrate, .. } = &options {
@@ -320,7 +341,7 @@ impl Job {
 
 #[cfg(test)]
 mod tests {
-    use super::{AudioFormat, ImageFormat, JobOptions, PdfRotation, ResolveProfile, VideoFormat};
+    use super::{AudioFormat, ImageFormat, JobOptions, PdfRotation, ResolveProfile, VideoFormat, VideoStickerFit};
     use crate::catalog::ToolId;
 
     #[test]
@@ -346,6 +367,27 @@ mod tests {
         assert!(make_job(320).is_ok());
         assert!(make_job(63).is_err());
         assert!(make_job(321).is_err());
+    }
+
+    #[test]
+    fn video_sticker_job_enforces_three_second_limit_and_square_crop_bounds() {
+        use super::{Job, JobOptions, VideoStickerFit};
+        use std::path::PathBuf;
+        let make = |start_ms, end_ms, crop_left, zoom_milli| Job::new(
+            ToolId::VideoSticker,
+            vec![PathBuf::from("clip.mp4")],
+            PathBuf::from("/tmp"),
+            JobOptions::VideoSticker {
+                start_ms, end_ms, fit: VideoStickerFit::Crop,
+                crop_left, crop_top: 500, zoom_milli,
+            },
+        );
+        assert!(make(0, 3_000, 500, 1_000).is_ok());
+        assert!(make(500, 3_500, 0, 4_000).is_ok());
+        assert!(make(0, 3_001, 500, 1_000).is_err());
+        assert!(make(0, 0, 500, 1_000).is_err());
+        assert!(make(0, 1_000, 1_001, 1_000).is_err());
+        assert!(make(0, 1_000, 500, 4_001).is_err());
     }
 
     #[test]
