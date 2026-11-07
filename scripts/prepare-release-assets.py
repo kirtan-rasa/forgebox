@@ -76,19 +76,19 @@ def prepare_release_assets(source: Path, destination: Path) -> list[Path]:
 def self_test() -> None:
     """Exercise the allowlist against realistic package and build-output names."""
     expected = {
-        "forgebox-0.4.1-1.fc45.x86_64.rpm",
-        "forgebox_0.4.1_amd64.deb",
-        "forgebox_0.4.1_x86_64.AppImage",
-        "forgebox-0.4.1-1-x86_64.pkg.tar.zst",
+        "forgebox-0.5.0-1.fc45.x86_64.rpm",
+        "forgebox_0.5.0_amd64.deb",
+        "forgebox_0.5.0_x86_64.AppImage",
+        "forgebox-0.5.0-1-x86_64.pkg.tar.zst",
         "forgebox-rpm-signing-key.asc",
     }
     ignored = {
-        "forgebox-debug-0.4.1-1-x86_64.pkg.tar.zst",
+        "forgebox-debug-0.5.0-1-x86_64.pkg.tar.zst",
         "forgebox-rpm-signing-key-id.txt",
         "PKGBUILD",
         ".SRCINFO",
         "default.SRCINFO",
-        "forgebox_0.4.1_x86_64.tar.gz",
+        "forgebox_0.5.0_x86_64.tar.gz",
     }
 
     with tempfile.TemporaryDirectory(prefix="forgebox-release-assets-test-") as temp:

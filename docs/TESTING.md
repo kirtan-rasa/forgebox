@@ -12,7 +12,7 @@ The integration suite covers:
 | Tool | Integration check |
 |---|---|
 | Image Converter | PNG to JPEG and decode the result |
-| Images to PDF | Two images to a two-page PDF, including the compressed-JPEG path |
+| Images to PDF | Two-page combined PDF, separate one-page PDFs, compressed-JPEG path, and output page count |
 | Resize Image | Output dimensions and aspect ratio |
 | Compress Image | Output exists and decodes |
 | Grayscale | RGB channels are equal |
@@ -34,6 +34,8 @@ The integration suite covers:
 | Extract Audio | MP4 audio stream to MP3 |
 | Video Converter | MP4 to WebM |
 | Video to GIF | MP4 to animated GIF |
+| Video to Sticker | Crop and Fit VP9 WebM outputs, 512×512 dimensions, duration and 256 KB size limit |
+| DaVinci Resolve Linux | DNxHR HQ, HQX, YUV 4:4:4 and RGB 4:4:4 with PCM audio verification |
 
 The optional rembg check never downloads a model. Actual background-removal quality and first-run model acquisition require a separate manual test.
 
@@ -42,6 +44,8 @@ The optional rembg check never downloads a model. Actual background-removal qual
 Run the ordinary tests:
 
 ~~~bash
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets
 cargo test --locked
 cargo check --locked
 ~~~
@@ -69,7 +73,8 @@ Automated command-line tests do not replace compositor and visual checks. Before
 - Hyprland on Wayland: drag-and-drop, workspace switching, window focus, and file drops while the window is partially covered.
 - X11: external file drops and native file picker behavior.
 - Narrow window sizes: sidebar collapse/compact layout, wizard labels, horizontal margins, scrolling, and queue monitor.
-- Images to PDF: reorder by drag and by arrow buttons, remove a page during thumbnail loading, and add a large batch.
+- Images to PDF: import numbered files in multiple batches, confirm natural sorting before manual edits, then reorder by drag, remove a page during thumbnail loading, and export both combined and separate PDFs.
+- Video Sticker: switch input videos during metadata/frame previews, close the editor while a preview is running, and verify that FFprobe/FFmpeg preview processes stop.
 - Queue: add several different tools, edit the next task after queuing, stop an active task, close the window during a task, and continue after one task fails.
 - Optional backends: install rembg and verify first-run model acquisition separately; test OCR with each language pack the user intends to support.
 

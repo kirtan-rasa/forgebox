@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixed
+- Create private temporary directories for conversion intermediates and reserve output names across concurrent ForgeBox instances.
+- Stop and join background FFprobe/FFmpeg preview workers when the selected video changes or the editor closes.
+- Keep natural image sorting consistent when files are imported in multiple batches, until the user manually reorders pages.
+- Make the quick installer skip draft and prerelease GitHub releases and align the rembg Python version range.
+
+### Improved
+- Run formatting and Clippy checks in the Linux source CI job; extend image sorting, output reservation, and video-preview lifecycle coverage.
+
 ## 0.5.0
 
 ### Improved
