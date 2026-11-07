@@ -70,8 +70,6 @@ pub(super) fn extract_audio(input: &Path, output: &Path, target_format: &str) ->
 
 #[derive(Clone, Debug)]
 struct VideoProbe {
-    width: u32,
-    height: u32,
     is_interlaced: bool,
     bit_depth: u8,
     is_444: bool,
@@ -93,6 +91,18 @@ fn parse_optional_string(value: &Value, key: &str) -> Option<String> {
     value_string(value, key)
         .filter(|text| !text.is_empty() && *text != "unknown")
         .map(str::to_owned)
+}
+
+fn is_rgb_pixel_format(pixel_format: &str) -> bool {
+    ["rgb", "bgr", "gbr", "argb", "abgr", "0rgb", "0bgr"]
+        .iter()
+        .any(|prefix| pixel_format.starts_with(prefix))
+}
+
+fn pixel_format_has_alpha(pixel_format: &str) -> bool {
+    ["rgba", "bgra", "argb", "abgr", "yuva", "gbrap", "gbra"]
+        .iter()
+        .any(|prefix| pixel_format.starts_with(prefix))
 }
 
 fn inferred_pixel_depth(pixel_format: &str) -> u8 {
@@ -138,15 +148,10 @@ fn probe_video(input: &Path) -> Result<VideoProbe, String> {
         .and_then(|value| value.as_str().and_then(|s| s.parse::<u8>().ok()).or_else(|| value.as_u64().map(|v| v as u8)))
         .unwrap_or(0);
     let bit_depth = raw_depth.max(inferred_pixel_depth(&pixel_format));
-    let is_rgb = pixel_format.starts_with("gbr") || pixel_format.starts_with("rgb");
+    let is_rgb = is_rgb_pixel_format(&pixel_format);
     let is_444 = pixel_format.contains("444") || is_rgb;
-    let has_alpha = pixel_format.contains("yuva")
-        || pixel_format.contains("rgba")
-        || pixel_format.contains("gbrap")
-        || pixel_format.contains("gbra");
+    let has_alpha = pixel_format_has_alpha(&pixel_format);
     Ok(VideoProbe {
-        width,
-        height,
         is_interlaced,
         bit_depth,
         is_444,
@@ -293,17 +298,15 @@ pub(super) fn convert_davinci_resolve(input: &Path, output: &Path, requested_pro
 
 #[cfg(test)]
 mod davinci_tests {
-    use super::{select_resolve_encoding, ResolveProfile, VideoProbe};
+    use super::{is_rgb_pixel_format, pixel_format_has_alpha, select_resolve_encoding, ResolveProfile, VideoProbe};
 
     fn source(pixel_format: &str, bit_depth: u8) -> VideoProbe {
         VideoProbe {
-            width: 320,
-            height: 240,
             is_interlaced: false,
             bit_depth,
-            is_444: pixel_format.contains("444") || pixel_format.starts_with("gbr") || pixel_format.starts_with("rgb"),
-            is_rgb: pixel_format.starts_with("gbr") || pixel_format.starts_with("rgb"),
-            has_alpha: false,
+            is_444: pixel_format.contains("444") || is_rgb_pixel_format(pixel_format),
+            is_rgb: is_rgb_pixel_format(pixel_format),
+            has_alpha: pixel_format_has_alpha(pixel_format),
             has_audio: true,
             has_subtitles: false,
             color_range: None,
@@ -335,5 +338,10 @@ mod davinci_tests {
         let rgb = select_resolve_encoding(ResolveProfile::Auto, &source("gbrp", 8));
         assert_eq!(rgb.profile, "dnxhr_444");
         assert_eq!(rgb.pixel_format, "gbrp10le");
+        let bgr = select_resolve_encoding(ResolveProfile::Auto, &source("bgra", 8));
+        assert_eq!(bgr.profile, "dnxhr_444");
+        assert_eq!(bgr.pixel_format, "gbrp10le");
+        assert!(source("bgra", 8).has_alpha);
+        assert!(source("yuva420p", 8).has_alpha);
     }
 }
