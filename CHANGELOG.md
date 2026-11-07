@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0
+
 ### Improved
 - Run conversions immediately by default; make multi-task queueing an explicit optional mode.
 - Detect the installed FFmpeg frame-sync options, preferring `-fps_mode passthrough` on newer builds and retaining `-vsync 0` for older builds.
@@ -11,6 +13,7 @@
 - Add a Telegram video sticker editor with trim handles, movable square framing, Crop/Fit modes, and VP9 WebM export under the 256 KB limit.
 - Add an audio converter for MP3, WAV, FLAC, AAC, M4A, OGG, and Opus with selectable lossy-output bitrates.
 - Add a DaVinci Resolve Linux export tool that creates DNxHR MOV files with 24-bit Linear PCM audio.
+- Add separate-PDF export for Images to PDF, natural filename sorting, and manual drag-to-reorder.
 - Automatically select DNxHR HQ, HQX, or 444 from the source pixel format and bit depth.
 - Verify exported DNxHR profile, pixel format, and PCM audio with FFprobe.
 - Warn when subtitles, alpha, data streams, attachments, or additional video tracks are not preserved.
