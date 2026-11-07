@@ -17,7 +17,7 @@ use self::command::{
 use self::common::{
     display_io, files_with_prefix, first_file, normalized_ext, os, reserve_output_for_input,
     reserve_unique_path, positive, process_each, process_each_capture, process_each_convert,
-    require_files, sort_numbered_paths, temp_dir, unique_pattern, unique_prefix,
+    require_files, sort_numbered_paths, temp_dir, reserve_unique_prefix,
 };
 use self::data::{csv_to_json, data_convert, encode_file_url_path, pdf_to_docx, soffice_convert};
 use self::images::{images_to_pdf, long_png_to_pdf};
@@ -237,7 +237,9 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
             let input = first_file(&job)?;
             let page_count = pdf_page_count(input)?;
             let (first, end) = parse_pdf_page_range(range, page_count)?;
-            let pattern = unique_pattern(&job.output_dir, &input.file_stem().and_then(|value| value.to_str()).unwrap_or("document"));
+            let prefix_reservation = reserve_unique_prefix(&job.output_dir, &format!("{}-split", input.file_stem().and_then(|value| value.to_str()).unwrap_or("document")))?;
+            let prefix = prefix_reservation.path().to_path_buf();
+            let pattern = job.output_dir.join(format!("{}-%d.pdf", prefix.file_name().and_then(|value| value.to_str()).unwrap_or("split")));
             let pattern_prefix = pattern.file_name().and_then(|value| value.to_str()).unwrap_or("split-%d.pdf")
                 .split("%d").next().unwrap_or("split-").to_string();
             if let Err(error) = run_ok("pdfseparate", vec![os("-f"), os(&first.to_string()), os("-l"), os(&end.to_string()), os(input), os(&pattern)]) {
@@ -300,7 +302,8 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
         (Tool::PdfToImages, Options::PdfToImages { format, dpi }) => {
             let input = first_file(&job)?;
             let dpi = dpi.to_string();
-            let prefix = unique_prefix(&job.output_dir, &format!("{}-page", input.file_stem().and_then(|value| value.to_str()).unwrap_or("pdf")));
+            let prefix_reservation = reserve_unique_prefix(&job.output_dir, &format!("{}-page", input.file_stem().and_then(|value| value.to_str()).unwrap_or("pdf")))?;
+            let prefix = prefix_reservation.path().to_path_buf();
             let format_arg = if matches!(format, PdfImageFormat::Jpeg) { "-jpeg" } else { "-png" };
             let prefix_name = prefix.file_name().and_then(|value| value.to_str()).unwrap_or("pdf-page").to_string();
             if let Err(error) = run_ok("pdftoppm", vec![os(format_arg), os("-r"), os(&dpi), os(input), os(&prefix)]) {

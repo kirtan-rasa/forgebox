@@ -1,5 +1,5 @@
 use super::{
-    check_cancelled, display_io, first_file, normalized_ext, os, output_for_input, report_status,
+    check_cancelled, display_io, first_file, normalized_ext, os, report_status,
     run_ok, temp_dir, Job,
 };
 use csv::{ReaderBuilder, WriterBuilder};

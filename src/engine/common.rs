@@ -210,19 +210,58 @@ fn create_private_dir(path: &Path) -> io::Result<()> {
     }
 }
 
-pub(super) fn unique_prefix(dir: &Path, stem: &str) -> PathBuf {
-    let base = dir.join(stem);
-    if !base.exists() && files_with_prefix(dir, stem).is_empty() { return base; }
-    for index in 2..10_000 {
-        let candidate = dir.join(format!("{stem}-{index}"));
-        if !candidate.exists() && files_with_prefix(dir, candidate.file_name().and_then(|s| s.to_str()).unwrap_or(stem)).is_empty() { return candidate; }
-    }
-    dir.join(format!("{stem}-{}", timestamp()))
+pub(super) struct PrefixReservation {
+    path: PathBuf,
+    lock_path: PathBuf,
 }
 
-pub(super) fn unique_pattern(dir: &Path, stem: &str) -> PathBuf {
-    let name = unique_prefix(dir, &format!("{stem}-split"));
-    dir.join(format!("{}-%d.pdf", name.file_stem().and_then(|s| s.to_str()).unwrap_or("split")))
+impl PrefixReservation {
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for PrefixReservation {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.lock_path);
+    }
+}
+
+pub(super) fn reserve_unique_prefix(
+    dir: &Path,
+    stem: &str,
+) -> Result<PrefixReservation, String> {
+    for index in 1..=10_000 {
+        let candidate = if index == 1 { stem.to_owned() } else { format!("{stem}-{index}") };
+        let path = dir.join(&candidate);
+        if fs::symlink_metadata(&path).is_ok() || !files_with_prefix(dir, &candidate).is_empty() {
+            continue;
+        }
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        format!("prefix:{candidate}").hash(&mut hasher);
+        let lock_path = dir.join(format!(".forgebox-prefix-{:016x}.lock", hasher.finish()));
+
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&lock_path) {
+            Ok(lock) => drop(lock),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("Could not reserve output prefix {candidate}: {error}")),
+        }
+
+        if fs::symlink_metadata(&path).is_ok() || !files_with_prefix(dir, &candidate).is_empty() {
+            let _ = fs::remove_file(&lock_path);
+            continue;
+        }
+        return Ok(PrefixReservation { path, lock_path });
+    }
+    Err(format!("Could not reserve a unique output prefix for {stem} after 10,000 attempts."))
 }
 
 pub(super) fn sort_numbered_paths(paths: &mut [PathBuf]) {
