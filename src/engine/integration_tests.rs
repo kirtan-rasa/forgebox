@@ -483,4 +483,48 @@ fn davinci_resolve_profile_creates_verified_dnxhr_mov_with_pcm_audio() {
     let audio = streams.iter().find(|stream| stream["codec_type"] == "audio").expect("audio stream");
     assert_eq!(audio["codec_name"], "pcm_s24le");
     assert_eq!(audio["sample_rate"], "48000");
+
+    // Exercise the real 10-bit and 4:4:4 encoder paths as well as the common HQ path above.
+    for (fixture_name, pixel_format, expected_profile, expected_pix_fmt) in [
+        ("source-10bit.mkv", "yuv420p10le", "DNxHR HQX", "yuv422p10le"),
+        ("source-444.mkv", "yuv444p10le", "DNxHR 444", "yuv444p10le"),
+    ] {
+        let source = ws.path(fixture_name);
+        fixture_command("ffmpeg", vec![
+            os("-y"), os("-hide_banner"), os("-loglevel"), os("error"),
+            os("-f"), os("lavfi"), os("-i"), os("testsrc=size=320x240:rate=25:duration=1"),
+            os("-vf"), os(&format!("format={pixel_format}")),
+            os("-c:v"), os("ffv1"), os("-level"), os("3"), os(&source),
+        ]);
+
+        let encoded = execute(job(
+            ToolId::DavinciResolve,
+            vec![source],
+            ws.path(if pixel_format == "yuv420p10le" { "resolve-hqx" } else { "resolve-444" }),
+            JobOptions::DavinciResolve { profile: ResolveProfile::Auto },
+        )).unwrap_or_else(|error| panic!("automatic {expected_profile} export failed: {error}"));
+        outputs(&encoded, 1);
+
+        let probe = Command::new("ffprobe")
+            .args([
+                "-v", "error",
+                "-show_entries", "stream=codec_type,codec_name,profile,pix_fmt",
+                "-of", "json",
+            ])
+            .arg(&encoded[0])
+            .output()
+            .expect("probe DNxHR test output");
+        assert!(probe.status.success(), "FFprobe failed: {}", String::from_utf8_lossy(&probe.stderr));
+        let metadata: serde_json::Value = serde_json::from_slice(&probe.stdout).expect("parse DNxHR output metadata");
+        let streams = metadata["streams"].as_array().expect("DNxHR output streams");
+        let video = streams.iter().find(|stream| stream["codec_type"] == "video").expect("DNxHR video stream");
+        assert_eq!(video["codec_name"], "dnxhd");
+        assert!(
+            video["profile"].as_str().map(|profile| profile.eq_ignore_ascii_case(expected_profile)).unwrap_or(false),
+            "expected {expected_profile}, got {}",
+            video["profile"]
+        );
+        assert_eq!(video["pix_fmt"], expected_pix_fmt, "unexpected pixel format for {fixture_name}");
+    }
+
 }

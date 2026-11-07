@@ -251,8 +251,12 @@ pub(super) fn convert_davinci_resolve(input: &Path, output: &Path, requested_pro
     if source.is_444 && encoding.profile != "dnxhr_444" {
         record_execution_warning("The source uses 4:4:4/RGB chroma. The selected profile converts it to 4:2:2; choose DNxHR 444 to retain 4:4:4 sampling.".into());
     }
-    if source.bit_depth > 10 {
-        record_execution_warning(format!("The source appears to be {}-bit. The selected DNxHR profile stores up to 10-bit data, so some source precision will be reduced.", source.bit_depth));
+    let output_bit_depth = if encoding.pixel_format.contains("10le") { 10 } else { 8 };
+    if source.bit_depth > output_bit_depth {
+        record_execution_warning(format!(
+            "The source appears to be {}-bit, but {} stores {}-bit data. Some source precision will be reduced.",
+            source.bit_depth, encoding.label, output_bit_depth
+        ));
     }
     if source.color_transfer.as_deref().map(|value| value == "smpte2084" || value == "arib-std-b67").unwrap_or(false) {
         record_execution_warning("HDR transfer metadata was detected and will be copied. Check the Resolve project's color-management settings before grading.".into());
