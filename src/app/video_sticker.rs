@@ -19,8 +19,17 @@ const CROP_HANDLE_SIZE: f32 = 22.0;
 struct VideoInfo { width: u32, height: u32, duration_ms: u32 }
 
 enum Message {
-    Metadata(PathBuf, Result<VideoInfo, String>),
-    Frame(PathBuf, u32, Result<egui::ColorImage, String>),
+    Metadata {
+        generation: u64,
+        path: PathBuf,
+        result: Result<VideoInfo, String>,
+    },
+    Frame {
+        generation: u64,
+        path: PathBuf,
+        time_ms: u32,
+        result: Result<egui::ColorImage, String>,
+    },
 }
 
 enum PlaybackMessage {
@@ -83,6 +92,7 @@ pub(super) struct VideoStickerEditor {
     playback_control: Option<PlaybackControl>,
     playback_worker: Option<JoinHandle<()>>,
     playback_generation: u64,
+    preview_generation: u64,
     is_playing: bool,
 }
 
@@ -117,6 +127,7 @@ impl Default for VideoStickerEditor {
             playback_control: None,
             playback_worker: None,
             playback_generation: 0,
+            preview_generation: 0,
             is_playing: false,
         }
     }
@@ -125,6 +136,8 @@ impl Default for VideoStickerEditor {
 impl VideoStickerEditor {
     pub(super) fn set_input(&mut self, path: Option<PathBuf>) {
         if self.path == path { return; }
+        self.preview_generation = self.preview_generation.wrapping_add(1);
+        let generation = self.preview_generation;
         self.stop_playback();
         for worker in &self.workers {
             worker.cancel();
@@ -154,7 +167,7 @@ impl VideoStickerEditor {
             let worker_cancelled = cancelled.clone();
             let worker = thread::spawn(move || {
                 let result = inspect_video(&path, &worker_cancelled);
-                let _ = tx.send(Message::Metadata(path, result));
+                let _ = tx.send(Message::Metadata { generation, path, result });
             });
             self.workers.push(PreviewWorker { cancelled, worker });
         }
@@ -163,7 +176,8 @@ impl VideoStickerEditor {
     pub(super) fn poll(&mut self, ctx: &egui::Context) {
         while let Ok(message) = self.rx.try_recv() {
             match message {
-                Message::Metadata(path, result) => {
+                Message::Metadata { generation, path, result } => {
+                    if generation != self.preview_generation { continue; }
                     if self.metadata_pending.as_ref() == Some(&path) { self.metadata_pending = None; }
                     if self.path.as_ref() != Some(&path) { continue; }
                     match result {
@@ -176,7 +190,8 @@ impl VideoStickerEditor {
                         Err(error) => self.error = Some(error),
                     }
                 }
-                Message::Frame(path, time_ms, result) => {
+                Message::Frame { generation, path, time_ms, result } => {
+                    if generation != self.preview_generation { continue; }
                     if self.frame_pending.as_ref() == Some(&(path.clone(), time_ms)) { self.frame_pending = None; }
                     if self.path.as_ref() != Some(&path) || self.playhead_ms != time_ms { continue; }
                     match result {
@@ -249,11 +264,12 @@ impl VideoStickerEditor {
                     let at = self.playhead_ms.min(info.duration_ms.saturating_sub(1));
                     self.frame_pending = Some((path.clone(), at));
                     let tx = self.tx.clone();
+                    let generation = self.preview_generation;
                     let cancelled = Arc::new(AtomicBool::new(false));
                     let worker_cancelled = cancelled.clone();
                     let worker = thread::spawn(move || {
                         let result = preview_frame(&path, at, &worker_cancelled);
-                        let _ = tx.send(Message::Frame(path, at, result));
+                        let _ = tx.send(Message::Frame { generation, path, time_ms: at, result });
                     });
                     self.workers.push(PreviewWorker { cancelled, worker });
                 }

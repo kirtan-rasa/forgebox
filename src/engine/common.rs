@@ -515,45 +515,4 @@ mod prefix_reservation_tests {
 }
 
 
-#[cfg(test)]
-mod prefix_reservation_tests {
-    use super::{reserve_unique_prefix, temp_dir};
-    use std::fs;
-    use std::sync::{Arc, Barrier};
-    use std::thread;
 
-    #[test]
-    fn concurrent_multi_output_prefixes_are_reserved_independently() {
-        let directory = temp_dir("prefix-reservation-test").unwrap();
-        let barrier = Arc::new(Barrier::new(6));
-        let workers = (0..6)
-            .map(|_| {
-                let directory = directory.clone();
-                let barrier = barrier.clone();
-                thread::spawn(move || {
-                    barrier.wait();
-                    let reservation = reserve_unique_prefix(&directory, "pages").unwrap();
-                    let path = reservation.path().to_path_buf();
-                    (reservation, path)
-                })
-            })
-            .collect::<Vec<_>>();
-
-        let mut reservations = Vec::new();
-        let mut prefixes = Vec::new();
-        for worker in workers {
-            let (reservation, prefix) = worker.join().unwrap();
-            reservations.push(reservation);
-            prefixes.push(prefix);
-        }
-
-        prefixes.sort();
-        prefixes.dedup();
-        assert_eq!(prefixes.len(), 6);
-        assert_eq!(fs::read_dir(&directory).unwrap().count(), 6);
-
-        drop(reservations);
-        assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
-        fs::remove_dir_all(directory).unwrap();
-    }
-}
