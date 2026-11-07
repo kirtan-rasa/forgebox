@@ -47,6 +47,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Validate shell scripts
         run: find scripts packaging -type f -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
+      - name: Test public release asset selection
+        run: python3 scripts/prepare-release-assets.py --self-test
       - name: Install native build dependencies
         run: |
           sudo apt-get update
@@ -373,48 +375,7 @@ jobs:
           path: release-assets
           merge-multiple: true
       - name: Select public release files
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import shutil
-
-          source = Path("release-assets")
-          destination = Path("public-release")
-          destination.mkdir(parents=True, exist_ok=True)
-
-          required_assets = [
-              ("Fedora RPM", lambda path: path.suffix == ".rpm"),
-              ("Debian package", lambda path: path.suffix == ".deb"),
-              ("AppImage", lambda path: path.suffix.lower() == ".appimage"),
-              (
-                  "Arch Pacman package",
-                  lambda path: path.name.startswith("forgebox-")
-                  and path.name.endswith(".pkg.tar.zst")
-                  and not path.name.startswith("forgebox-debug-"),
-              ),
-              (
-                  "RPM public signing key",
-                  lambda path: path.name == "forgebox-rpm-signing-key.asc",
-              ),
-          ]
-
-          for label, matches_asset in required_assets:
-              matches = sorted(
-                  path for path in source.iterdir()
-                  if path.is_file() and matches_asset(path)
-              )
-              if len(matches) != 1:
-                  raise SystemExit(
-                      f"Expected exactly one {label} in CI artifacts, found {len(matches)}."
-                  )
-              shutil.copy2(matches[0], destination / matches[0].name)
-
-          print("Selected public release assets:")
-          for path in sorted(destination.iterdir()):
-              print(f"  {path.name}")
-          PY
+        run: python3 scripts/prepare-release-assets.py --source release-assets --destination public-release
       - uses: softprops/action-gh-release@v2
         with:
           name: ForgeBox ${{ github.ref_name }}
