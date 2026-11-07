@@ -5,7 +5,7 @@ use eframe::egui::{self, Color32, RichText, Stroke};
 
 impl ForgeApp {
     pub(super) fn render_queue(&mut self, ui: &mut egui::Ui) {
-        if self.queue.is_empty() {
+        if !self.queue_mode || self.queue.is_empty() {
             return;
         }
 

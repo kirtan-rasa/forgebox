@@ -59,9 +59,12 @@ pub enum ToolId {
     DocToPdf,
     PdfToDoc,
     DataConvert,
+    AudioConvert,
     ExtractAudio,
     VideoConvert,
     VideoToGif,
+    DavinciResolve,
+    VideoSticker,
 }
 
 pub struct ToolInfo {
@@ -74,7 +77,7 @@ pub struct ToolInfo {
     pub dependencies: &'static str,
 }
 
-pub const TOOLS: [ToolInfo; 23] = [
+pub const TOOLS: [ToolInfo; 26] = [
     ToolInfo { id: ToolId::ImagesToPdf, category: Category::Images, name: "Images to PDF", subtitle: "Multiple images in one multi-page PDF", description: "Combine selected images into a single PDF. Each image becomes a separate page in list order.", glyph: "󰈙", dependencies: "ImageMagick + img2pdf" },
     ToolInfo { id: ToolId::ImageConvert, category: Category::Images, name: "Image Converter", subtitle: "PNG · JPG · WebP · TIFF · HEIC", description: "Convert images between popular formats. Select multiple files at once.", glyph: "󰓦", dependencies: "ImageMagick (magick or convert)" },
     ToolInfo { id: ToolId::ImageResize, category: Category::Images, name: "Resize Image", subtitle: "Set width and height without distortion", description: "Resize an image to fit the requested dimensions while preserving its aspect ratio.", glyph: "󰩨", dependencies: "ImageMagick" },
@@ -95,8 +98,11 @@ pub const TOOLS: [ToolInfo; 23] = [
     ToolInfo { id: ToolId::DocToPdf, category: Category::Documents, name: "DOCX to PDF", subtitle: "Office documents to PDF", description: "Convert DOC/DOCX files to PDF using an installed office suite.", glyph: "D→P", dependencies: "LibreOffice" },
     ToolInfo { id: ToolId::PdfToDoc, category: Category::Documents, name: "PDF to DOCX", subtitle: "Extract text into an editable document", description: "Extract selectable PDF text and create a DOCX. Page layout and images are not preserved; scanned PDFs need OCR first.", glyph: "P→D", dependencies: "Poppler (pdftotext) + LibreOffice" },
     ToolInfo { id: ToolId::DataConvert, category: Category::Data, name: "CSV · JSON · Excel", subtitle: "Convert tables and data", description: "Convert CSV, JSON, and XLSX files. Text formats use built-in conversion; Excel operations require LibreOffice.", glyph: "󰓦", dependencies: "LibreOffice for XLSX" },
+    ToolInfo { id: ToolId::AudioConvert, category: Category::Media, name: "Audio Converter", subtitle: "MP3 · WAV · FLAC · AAC · OGG · Opus", description: "Convert audio files between common formats, preserve metadata, and choose a bitrate for lossy output.", glyph: "♫", dependencies: "FFmpeg with the selected audio encoder" },
     ToolInfo { id: ToolId::ExtractAudio, category: Category::Media, name: "Extract Audio", subtitle: "Video to MP3 / WAV / FLAC and more", description: "Extract an audio track from a video without re-encoding the video stream.", glyph: "󰎆", dependencies: "FFmpeg" },
     ToolInfo { id: ToolId::VideoConvert, category: Category::Media, name: "Video Converter", subtitle: "MP4 · WebM · MKV · MOV", description: "Convert videos to a convenient format with quality and encoding-speed controls.", glyph: "󰐊", dependencies: "FFmpeg with support for the selected codec" },
+    ToolInfo { id: ToolId::DavinciResolve, category: Category::Media, name: "DaVinci Resolve Linux", subtitle: "DNxHR · MOV · PCM 24-bit", description: "Prepare an editing intermediate for DaVinci Resolve on Linux. Automatically select a DNxHR profile, preserve audio tracks, and report media streams that cannot be included.", glyph: "󰑃", dependencies: "FFmpeg + FFprobe with the DNxHR encoder" },
+    ToolInfo { id: ToolId::VideoSticker, category: Category::Media, name: "Video to Sticker", subtitle: "Telegram video sticker · VP9 · WebM", description: "Trim a video to three seconds, position a square frame, and export a Telegram-compatible VP9 WebM sticker.", glyph: "▣", dependencies: "FFmpeg with libvpx-vp9 + FFprobe" },
     ToolInfo { id: ToolId::VideoToGif, category: Category::Media, name: "Video to GIF", subtitle: "Create an animated GIF from a clip", description: "Create a GIF with adjustable frame rate and width. Best for short clips.", glyph: "󰐊", dependencies: "FFmpeg" },
 ];
 

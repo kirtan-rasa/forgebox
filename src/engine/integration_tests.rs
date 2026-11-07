@@ -4,7 +4,7 @@
 
 use super::{
     execute, image_magick_program, os, pdf_page_count, run_magick_owned, temp_dir, Job,
-    JobOptions, PdfCompressionProfile, PdfImageFormat, PdfRotation,
+    JobOptions, PdfCompressionProfile, PdfImageFormat, PdfRotation, ResolveProfile,
 };
 use crate::catalog::ToolId;
 use image::{Rgba, RgbaImage};
@@ -408,6 +408,40 @@ fn audio_and_video_tools_extract_convert_and_generate_gif() {
     outputs(&audio, 1);
     assert_eq!(audio[0].extension().and_then(|e| e.to_str()), Some("mp3"));
 
+    for (format, expected_codec) in [
+        (super::AudioFormat::Mp3, "mp3"),
+        (super::AudioFormat::Wav, "pcm_s16le"),
+        (super::AudioFormat::Flac, "flac"),
+        (super::AudioFormat::Aac, "aac"),
+        (super::AudioFormat::M4a, "aac"),
+        (super::AudioFormat::Ogg, "vorbis"),
+        (super::AudioFormat::Opus, "opus"),
+    ] {
+        let converted = execute(job(
+            ToolId::AudioConvert,
+            audio.clone(),
+            ws.path(&format!("audio-{}", format.as_str())),
+            JobOptions::AudioConvert { format, bitrate: 192 },
+        )).unwrap_or_else(|error| panic!("{} audio conversion failed: {error}", format.as_str()));
+        outputs(&converted, 1);
+        assert_eq!(
+            converted[0].extension().and_then(|ext| ext.to_str()),
+            Some(format.as_str())
+        );
+
+        let probe = Command::new("ffprobe")
+            .args(["-v", "error", "-show_entries", "stream=codec_type,codec_name", "-of", "json"])
+            .arg(&converted[0])
+            .output()
+            .expect("probe converted audio");
+        assert!(probe.status.success(), "FFprobe failed: {}", String::from_utf8_lossy(&probe.stderr));
+        let metadata: serde_json::Value = serde_json::from_slice(&probe.stdout).expect("parse audio metadata");
+        let streams = metadata["streams"].as_array().expect("audio stream list");
+        assert_eq!(streams.len(), 1, "audio conversion should not retain video streams");
+        assert_eq!(streams[0]["codec_type"], "audio");
+        assert_eq!(streams[0]["codec_name"], expected_codec);
+    }
+
     let video = execute(job(
         ToolId::VideoConvert, vec![source.clone()], ws.path("video"),
         JobOptions::VideoConvert {
@@ -418,6 +452,52 @@ fn audio_and_video_tools_extract_convert_and_generate_gif() {
     )).expect("convert video to WebM");
     outputs(&video, 1);
 
+    let sticker = execute(job(
+        ToolId::VideoSticker,
+        vec![source.clone()],
+        ws.path("sticker"),
+        JobOptions::VideoSticker {
+            start_ms: 100,
+            end_ms: 900,
+            fit: super::VideoStickerFit::Crop,
+            crop_left: 500,
+            crop_top: 500,
+            zoom_milli: 1_000,
+        },
+    )).expect("create Telegram video sticker");
+    outputs(&sticker, 1);
+    assert_eq!(sticker[0].extension().and_then(|ext| ext.to_str()), Some("webm"));
+    assert!(fs::metadata(&sticker[0]).unwrap().len() <= 256 * 1024);
+    let sticker_probe = Command::new("ffprobe")
+        .args(["-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height:format=duration", "-of", "json"])
+        .arg(&sticker[0])
+        .output().expect("probe video sticker");
+    assert!(sticker_probe.status.success());
+    let sticker_info: serde_json::Value = serde_json::from_slice(&sticker_probe.stdout).unwrap();
+    let sticker_streams = sticker_info["streams"].as_array().unwrap();
+    assert_eq!(sticker_streams.len(), 1);
+    assert_eq!(sticker_streams[0]["codec_name"], "vp9");
+    assert_eq!(sticker_streams[0]["width"], 512);
+    assert_eq!(sticker_streams[0]["height"], 512);
+    let sticker_duration: f64 = sticker_info["format"]["duration"].as_str().unwrap().parse().unwrap();
+    assert!(sticker_duration <= 3.0);
+
+    let fitted_sticker = execute(job(
+        ToolId::VideoSticker,
+        vec![source.clone()],
+        ws.path("sticker-fit"),
+        JobOptions::VideoSticker {
+            start_ms: 0,
+            end_ms: 900,
+            fit: super::VideoStickerFit::Fit,
+            crop_left: 500,
+            crop_top: 500,
+            zoom_milli: 1_000,
+        },
+    )).expect("create fit-mode Telegram video sticker");
+    outputs(&fitted_sticker, 1);
+    assert!(fs::metadata(&fitted_sticker[0]).unwrap().len() <= 256 * 1024);
+
     let gif = execute(job(
         ToolId::VideoToGif, vec![source], ws.path("gif"),
         JobOptions::VideoToGif { width: 128, fps: 6 },
@@ -426,4 +506,106 @@ fn audio_and_video_tools_extract_convert_and_generate_gif() {
     let decoded = image::ImageReader::open(&gif[0]).unwrap()
         .with_guessed_format().unwrap().decode().unwrap();
     assert_eq!(decoded.width(), 128);
+}
+
+
+#[test]
+fn davinci_resolve_profile_creates_verified_dnxhr_mov_with_pcm_audio() {
+    if !require(&["ffmpeg", "ffprobe"], "DaVinci Resolve") {
+        return;
+    }
+
+    let encoder_list = Command::new("ffmpeg")
+        .args(["-hide_banner", "-encoders"])
+        .output()
+        .expect("query FFmpeg encoders");
+    let encoder_text = format!("{}{}", String::from_utf8_lossy(&encoder_list.stdout), String::from_utf8_lossy(&encoder_list.stderr));
+    if !encoder_text.contains("dnxhd") {
+        eprintln!("Skipping DaVinci Resolve integration test: this FFmpeg build has no DNxHR encoder.");
+        return;
+    }
+
+    let ws = Workspace::new("davinci-resolve");
+    let input = ws.path("source.mkv");
+    fixture_command("ffmpeg", vec![
+        os("-y"), os("-hide_banner"), os("-loglevel"), os("error"),
+        os("-f"), os("lavfi"), os("-i"), os("testsrc2=size=320x240:rate=25:duration=1"),
+        os("-f"), os("lavfi"), os("-i"), os("sine=frequency=1000:sample_rate=48000:duration=1"),
+        os("-c:v"), os("mpeg4"), os("-q:v"), os("5"), os("-pix_fmt"), os("yuv420p"),
+        os("-c:a"), os("pcm_s16le"), os("-shortest"), os(&input),
+    ]);
+
+    let result = execute(job(
+        ToolId::DavinciResolve,
+        vec![input],
+        ws.path("resolve-output"),
+        JobOptions::DavinciResolve { profile: ResolveProfile::Auto },
+    )).expect("DaVinci Resolve export should succeed");
+    outputs(&result, 1);
+    assert_eq!(result[0].extension().and_then(|ext| ext.to_str()), Some("mov"));
+
+    let probe = Command::new("ffprobe")
+        .args([
+            "-v", "error",
+            "-show_entries", "stream=codec_type,codec_name,profile,pix_fmt,sample_rate",
+            "-of", "json",
+        ])
+        .arg(&result[0])
+        .output()
+        .expect("probe exported MOV");
+    assert!(probe.status.success(), "FFprobe failed: {}", String::from_utf8_lossy(&probe.stderr));
+    let metadata: serde_json::Value = serde_json::from_slice(&probe.stdout).expect("parse output metadata");
+    let streams = metadata["streams"].as_array().expect("output stream list");
+    let video = streams.iter().find(|stream| stream["codec_type"] == "video").expect("video stream");
+    assert_eq!(video["codec_name"], "dnxhd");
+    assert!(video["profile"].as_str().map(|profile| profile.eq_ignore_ascii_case("DNxHR HQ")).unwrap_or(false), "unexpected DNxHR profile: {}", video["profile"]);
+    assert_eq!(video["pix_fmt"], "yuv422p");
+    let audio = streams.iter().find(|stream| stream["codec_type"] == "audio").expect("audio stream");
+    assert_eq!(audio["codec_name"], "pcm_s24le");
+    assert_eq!(audio["sample_rate"], "48000");
+
+    // Exercise the real 10-bit and 4:4:4 encoder paths as well as the common HQ path above.
+    for (fixture_name, pixel_format, expected_profile, expected_pix_fmt) in [
+        ("source-10bit.mkv", "yuv420p10le", "DNxHR HQX", "yuv422p10le"),
+        ("source-444.mkv", "yuv444p10le", "DNxHR 444", "yuv444p10le"),
+        ("source-rgb.mkv", "gbrp10le", "DNxHR 444", "gbrp10le"),
+    ] {
+        let source = ws.path(fixture_name);
+        fixture_command("ffmpeg", vec![
+            os("-y"), os("-hide_banner"), os("-loglevel"), os("error"),
+            os("-f"), os("lavfi"), os("-i"), os("testsrc=size=320x240:rate=25:duration=1"),
+            os("-vf"), os(&format!("format={pixel_format}")),
+            os("-c:v"), os("ffv1"), os("-level"), os("3"), os(&source),
+        ]);
+
+        let encoded = execute(job(
+            ToolId::DavinciResolve,
+            vec![source],
+            ws.path(if pixel_format == "yuv420p10le" { "resolve-hqx" } else { "resolve-444" }),
+            JobOptions::DavinciResolve { profile: ResolveProfile::Auto },
+        )).unwrap_or_else(|error| panic!("automatic {expected_profile} export failed: {error}"));
+        outputs(&encoded, 1);
+
+        let probe = Command::new("ffprobe")
+            .args([
+                "-v", "error",
+                "-show_entries", "stream=codec_type,codec_name,profile,pix_fmt",
+                "-of", "json",
+            ])
+            .arg(&encoded[0])
+            .output()
+            .expect("probe DNxHR test output");
+        assert!(probe.status.success(), "FFprobe failed: {}", String::from_utf8_lossy(&probe.stderr));
+        let metadata: serde_json::Value = serde_json::from_slice(&probe.stdout).expect("parse DNxHR output metadata");
+        let streams = metadata["streams"].as_array().expect("DNxHR output streams");
+        let video = streams.iter().find(|stream| stream["codec_type"] == "video").expect("DNxHR video stream");
+        assert_eq!(video["codec_name"], "dnxhd");
+        assert!(
+            video["profile"].as_str().map(|profile| profile.eq_ignore_ascii_case(expected_profile)).unwrap_or(false),
+            "expected {expected_profile}, got {}",
+            video["profile"]
+        );
+        assert_eq!(video["pix_fmt"], expected_pix_fmt, "unexpected pixel format for {fixture_name}");
+    }
+
 }

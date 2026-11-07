@@ -20,6 +20,7 @@ impl eframe::App for ForgeApp {
         self.poll_queue_events();
         self.poll_dialogs();
         self.poll_thumbnails(ctx);
+        self.video_sticker.poll(ctx);
         self.queue_thumbnails();
         let dropped = ctx.input(|input| input.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>());
         if !dropped.is_empty() && !self.running {
@@ -110,6 +111,8 @@ mod tests {
         assert!(super::files::is_supported_input_file(ToolId::ImageConvert, std::path::Path::new("input.HEIC")));
         assert!(!super::files::is_supported_input_file(ToolId::ImageConvert, std::path::Path::new("input.docx")));
         assert!(super::files::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("track.FLAC")));
+        assert!(super::files::is_supported_input_file(ToolId::AudioConvert, std::path::Path::new("track.opus")));
+        assert!(!super::files::is_supported_input_file(ToolId::AudioConvert, std::path::Path::new("clip.mkv")));
         assert!(super::files::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("clip.mkv")));
         assert!(!super::files::is_supported_input_file(ToolId::ExtractAudio, std::path::Path::new("table.xlsx")));
         assert!(super::files::is_supported_input_file(ToolId::DocToPdf, std::path::Path::new("report.docx")));

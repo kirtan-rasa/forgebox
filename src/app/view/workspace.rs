@@ -1,4 +1,4 @@
-use super::ForgeApp;
+use super::super::{ForgeApp, QueueStatus};
 use super::super::theme::*;
 use super::files::{file_glyph, reorder_item, reorder_item_to_index};
 use super::icons::{glyph_text, icon_font};
@@ -67,7 +67,8 @@ impl ForgeApp {
 
             // One connected wizard bar. Tools without options expose only Files and Save.
             let visible_steps = self.wizard_step_sequence();
-            let first_label = if self.selected_tool == ToolId::GenerateQr { "Content" } else { "Files" };
+            let first_label = if self.selected_tool == ToolId::GenerateQr { "Content" } else if self.selected_tool == ToolId::VideoSticker { "Video" } else { "Files" };
+            let options_label = if self.selected_tool == ToolId::VideoSticker { "Edit" } else { "Options" };
             egui::Frame::none()
                 .fill(PANEL)
                 .stroke(Stroke::new(1.0_f32, Color32::from_rgb(24, 76, 106)))
@@ -127,7 +128,7 @@ impl ForgeApp {
                             for (visible_index, step_id) in visible_steps.iter().copied().enumerate() {
                                 let label = match step_id {
                                     0 => first_label,
-                                    1 => "Options",
+                                    1 => options_label,
                                     _ => "Save",
                                 };
                                 let active = self.wizard_step == step_id;
@@ -598,7 +599,7 @@ impl ForgeApp {
                             if let Some((from, insertion_index)) = reorder_request {
                                 if !self.running { reorder_item(&mut self.files, from, insertion_index); }
                             }
-                            if let Some(index) = remove_index { if index < self.files.len() && !self.running { self.files.remove(index); } }
+                            if let Some(index) = remove_index { if index < self.files.len() && !self.running { self.files.remove(index); if self.selected_tool == ToolId::VideoSticker { self.video_sticker.set_input(self.files.first().cloned()); } } }
                             ui.add_space(5.0);
                             ui.label(RichText::new(format!("Files selected: {}", self.files.len())).size(12.0).color(MUTED));
                             if self.selected_tool == ToolId::PdfWatermark {
@@ -613,7 +614,11 @@ impl ForgeApp {
                         }
                     }
                     1 => {
-                        section_header(ui, "02", "Configure task", "Only options relevant to the selected tool");
+                        if self.selected_tool == ToolId::VideoSticker {
+                            section_header(ui, "02", "Edit video sticker", "Trim the clip and position the square frame");
+                        } else {
+                            section_header(ui, "02", "Configure task", "Only options relevant to the selected tool");
+                        }
                         ui.add_space(8.0);
                         ui.add_enabled_ui(!self.running, |ui| parameter_ui(ui, self));
                         ui.add_space(8.0);
@@ -638,8 +643,31 @@ impl ForgeApp {
                             self.choose_output_folder();
                         }
                         ui.add_space(10.0);
+                        let can_change_queue_mode = !self.running
+                            && !self.queue.iter().any(|entry| entry.status == QueueStatus::Pending);
+                        let mut queue_mode_changed = false;
+                        ui.horizontal(|ui| {
+                            let response = ui.add_enabled(
+                                can_change_queue_mode,
+                                egui::Checkbox::new(&mut self.queue_mode, "Queue multiple tasks"),
+                            );
+                            queue_mode_changed = response.changed();
+                            response.on_hover_text("Off: run this conversion immediately. On: stage several tasks, then run them together.");
+                        });
+                        if queue_mode_changed {
+                            self.queue.clear();
+                            self.queue_run_indices.clear();
+                        }
+                        ui.label(RichText::new(if self.queue_mode {
+                            "Add tasks to the queue, then run them in the order shown below."
+                        } else {
+                            "The selected files will be converted immediately."
+                        }).size(11.0).color(MUTED));
+                        ui.add_space(6.0);
                         let can_run = self.can_run();
-                        if !self.running && ui.add_enabled(can_run, egui::Button::new(RichText::new(format!("{}  Add to queue", glyph_text(self.icons_loaded, "󰐕"))).font(icon_font(16.0)).strong()).fill(if can_run { ACCENT } else { Color32::from_rgb(15, 35, 52) }).min_size(Vec2::new(ui.available_width(), 44.0))).clicked() {
+                        let action_label = if self.queue_mode { "Add to queue" } else { "Convert now" };
+                        let action_glyph = if self.queue_mode { "󰐕" } else { "󰄬" };
+                        if !self.running && ui.add_enabled(can_run, egui::Button::new(RichText::new(format!("{}  {action_label}", glyph_text(self.icons_loaded, action_glyph))).font(icon_font(16.0)).strong()).fill(if can_run { ACCENT } else { Color32::from_rgb(15, 35, 52) }).min_size(Vec2::new(ui.available_width(), 44.0))).clicked() {
                             self.start_job();
                         }
                         if !self.running && !can_run {
@@ -656,7 +684,8 @@ impl ForgeApp {
                         // One live status area for running, success or error; never duplicate status below the card.
                         if self.running || !self.logs.is_empty() {
                             ui.add_space(12.0);
-                            let has_error = self.logs.iter().any(|(ok, _)| !ok);
+                            let has_error = self.logs.iter().any(|(ok, message)| !ok && !message.starts_with("Open folder:"));
+                            let folder_open_error = self.logs.iter().find(|(ok, message)| !*ok && message.starts_with("Open folder:")).map(|(_, message)| message.clone());
                             let has_warning = self.logs.iter().any(|(ok, message)| *ok && message.starts_with("Warning:"));
                             let success_count = self.logs.iter().filter(|(ok, message)| *ok && message.starts_with("Done:")).count();
                             let (status_fill, status_edge) = if self.running {
@@ -689,14 +718,22 @@ impl ForgeApp {
                                                 } else {
                                                     self.execution_status.clone()
                                                 };
-                                                ui.label(RichText::new(format!("Task {} of {} · {} finished", self.active_queue_index + 1, self.queue_total, self.queue_finished)).size(11.0).color(MUTED));
-                                                let progress = if self.queue_total == 0 { 0.0 } else { self.queue_finished as f32 / self.queue_total as f32 };
-                                                ui.add(egui::ProgressBar::new(progress.clamp(0.0, 1.0)).desired_width(210.0).desired_height(6.0));
+                                                if self.active_queue_mode {
+                                                    ui.label(RichText::new(format!("Task {} of {} · {} finished", self.active_queue_index + 1, self.queue_total, self.queue_finished)).size(11.0).color(MUTED));
+                                                    let progress = if self.queue_total == 0 { 0.0 } else { self.queue_finished as f32 / self.queue_total as f32 };
+                                                    ui.add(egui::ProgressBar::new(progress.clamp(0.0, 1.0)).desired_width(210.0).desired_height(6.0));
+                                                }
                                                 ui.label(RichText::new(detail).size(11.5).color(MUTED));
                                             });
                                             ui.add_space(8.0);
                                             ui.add_enabled_ui(!self.cancel_requested, |ui| {
-                                                if ui.button(if self.cancel_requested { "Stopping…" } else { "Stop queue" }).clicked() {
+                                                if ui.button(if self.cancel_requested {
+                                                    "Stopping…"
+                                                } else if self.active_queue_mode {
+                                                    "Stop queue"
+                                                } else {
+                                                    "Cancel conversion"
+                                                }).clicked() {
                                                     self.cancel_job();
                                                 }
                                             });
@@ -704,13 +741,13 @@ impl ForgeApp {
                                             let (icon_rect, _) = ui.allocate_exact_size(Vec2::new(18.0, 22.0), egui::Sense::hover());
                                             ui.painter().text(icon_rect.center(), egui::Align2::CENTER_CENTER, "!", FontId::proportional(18.0), WARNING);
                                             ui.vertical(|ui| {
-                                                ui.label(RichText::new("Queue stopped").strong().color(WARNING));
+                                                ui.label(RichText::new(if self.active_queue_mode { "Queue stopped" } else { "Conversion cancelled" }).strong().color(WARNING));
                                                 ui.label(RichText::new("The active process was stopped and remaining tasks were cancelled. Completed files remain available.").size(11.5).color(MUTED));
                                             });
                                         } else if has_error {
                                             ui.label(RichText::new("✕").size(18.0).strong().color(RED));
                                             ui.vertical(|ui| {
-                                                ui.label(RichText::new("Queue finished with errors").strong().color(RED));
+                                                ui.label(RichText::new(if self.active_queue_mode { "Queue finished with errors" } else { "Conversion failed" }).strong().color(RED));
                                                 for (_, message) in self.logs.iter().filter(|(ok, _)| !*ok) {
                                                     ui.add(egui::Label::new(RichText::new(message).size(12.0).color(TEXT).strong()).wrap());
                                                 }
@@ -725,9 +762,17 @@ impl ForgeApp {
                                             }
                                             ui.vertical(|ui| {
                                                 let summary = if has_warning {
-                                                    format!("Queue completed with warnings · {success_count} task(s)")
+                                                    if self.active_queue_mode {
+                                                        format!("Queue completed with warnings · {success_count} task(s)")
+                                                    } else {
+                                                        "Conversion completed with warnings".to_owned()
+                                                    }
                                                 } else if success_count > 0 {
-                                                    format!("Queue completed · {success_count} task(s)")
+                                                    if self.active_queue_mode {
+                                                        format!("Queue completed · {success_count} task(s)")
+                                                    } else {
+                                                        "Conversion completed".to_owned()
+                                                    }
                                                 } else {
                                                     self.logs.first().map(|(_, message)| message.clone()).unwrap_or_else(|| "Task completed".into())
                                                 };
@@ -739,6 +784,9 @@ impl ForgeApp {
                                                 for (_, warning) in self.logs.iter().filter(|(ok, message)| *ok && message.starts_with("Warning:")) {
                                                     ui.add(egui::Label::new(RichText::new(warning).size(11.5).color(WARNING)).wrap());
                                                 }
+                                                if let Some(error) = folder_open_error.as_ref() {
+                                                    ui.add(egui::Label::new(RichText::new(error).size(11.5).color(RED)).wrap());
+                                                }
                                             });
 
                                         }
@@ -746,8 +794,23 @@ impl ForgeApp {
                                             if let Some(output_dir) = self.last_output_dir.clone() {
                                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                                     if ui.button("Open folder").clicked() {
+                                                        self.logs.retain(|(_, message)| !message.starts_with("Open folder:"));
                                                         #[cfg(target_os = "linux")]
-                                                        { let _ = std::process::Command::new("xdg-open").arg(&output_dir).spawn(); }
+                                                        {
+                                                            let directory = if output_dir.is_dir() {
+                                                                Some(output_dir.clone())
+                                                            } else {
+                                                                output_dir.parent().filter(|path| path.is_dir()).map(PathBuf::from)
+                                                            };
+                                                            if let Some(directory) = directory {
+                                                                let status_tx = self.status_tx.clone();
+                                                                std::thread::spawn(move || {
+                                                                    if let Err(error) = super::super::open_folder::open_folder(&directory) {
+                                                                        let _ = status_tx.send(format!("OPEN_FOLDER_ERROR:{error}"));
+                                                                    }
+                                                                });
+                                                            }
+                                                        }
                                                         #[cfg(target_os = "macos")]
                                                         { let _ = std::process::Command::new("open").arg(&output_dir).spawn(); }
                                                     }
