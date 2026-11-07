@@ -274,6 +274,9 @@ impl ForgeApp {
 
         let requested = paths.len();
         paths.retain(|path| path.is_file() && view::is_supported_input_file(self.selected_tool, path));
+        if self.selected_tool == ToolId::ImagesToPdf {
+            view::sort_image_paths_naturally(&mut paths);
+        }
         let skipped = requested.saturating_sub(paths.len());
         let mut notices = Vec::new();
         if skipped > 0 {
@@ -295,10 +298,6 @@ impl ForgeApp {
             for path in paths {
                 if !self.files.contains(&path) { self.files.push(path); }
             }
-        }
-
-        if self.selected_tool == ToolId::ImagesToPdf {
-            view::sort_image_paths_naturally(&mut self.files);
         }
 
         if self.selected_tool == ToolId::VideoSticker {
