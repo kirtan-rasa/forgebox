@@ -1,5 +1,47 @@
 use crate::catalog::ToolId;
+use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
+
+
+pub(super) fn sort_image_paths_naturally(paths: &mut Vec<PathBuf>) {
+    paths.sort_by(|left, right| {
+        let left_name = left.file_name().unwrap_or_default().to_string_lossy();
+        let right_name = right.file_name().unwrap_or_default().to_string_lossy();
+        natural_name_cmp(&left_name, &right_name).then_with(|| left.cmp(right))
+    });
+}
+
+fn natural_name_cmp(left: &str, right: &str) -> Ordering {
+    let left = left.to_lowercase();
+    let right = right.to_lowercase();
+    let (left, right) = (left.as_bytes(), right.as_bytes());
+    let (mut li, mut ri) = (0, 0);
+
+    while li < left.len() && ri < right.len() {
+        if left[li].is_ascii_digit() && right[ri].is_ascii_digit() {
+            let (ls, rs) = (li, ri);
+            while li < left.len() && left[li].is_ascii_digit() { li += 1; }
+            while ri < right.len() && right[ri].is_ascii_digit() { ri += 1; }
+
+            let (mut ln, mut rn) = (ls, rs);
+            while ln < li && left[ln] == b'0' { ln += 1; }
+            while rn < ri && right[rn] == b'0' { rn += 1; }
+            let numeric_order = (li - ln).cmp(&(ri - rn))
+                .then_with(|| left[ln..li].cmp(&right[rn..ri]));
+            if numeric_order != Ordering::Equal { return numeric_order; }
+
+            let width_order = (li - ls).cmp(&(ri - rs));
+            if width_order != Ordering::Equal { return width_order; }
+        } else {
+            let order = left[li].cmp(&right[ri]);
+            if order != Ordering::Equal { return order; }
+            li += 1;
+            ri += 1;
+        }
+    }
+
+    (left.len() - li).cmp(&(right.len() - ri))
+}
 
 pub(super) fn reorder_item<T>(items: &mut Vec<T>, from: usize, insertion_index: usize) {
     if from >= items.len() { return; }
