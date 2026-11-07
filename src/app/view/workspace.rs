@@ -257,7 +257,7 @@ impl ForgeApp {
                             let mut remove_index = None;
                             let mut reorder_request: Option<(usize, usize)> = None;
                             if self.selected_tool == ToolId::ImagesToPdf {
-                                ui.label(RichText::new("PDF pages · drag a card from anywhere except its buttons").size(12.0).color(MUTED));
+                                ui.label(RichText::new("Images · drag a card to set the export order").size(12.0).color(MUTED));
                                 ui.add_space(10.0);
                                 let available = ui.available_width().max(190.0);
                                 let cols = if available >= 2200.0 { 5usize }
