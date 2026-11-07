@@ -5,7 +5,7 @@ use super::{
 use std::fs;
 use std::path::PathBuf;
 
-pub(super) fn images_to_pdf(job: &Job, compress: bool, quality: u8) -> Result<Vec<PathBuf>, String> {
+pub(super) fn images_to_pdf(job: &Job, combine: bool, compress: bool, quality: u8) -> Result<Vec<PathBuf>, String> {
     require_files(job, 1, "Add at least one image to create a PDF.")?;
     let allowed = ["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "heic", "avif", "gif"];
     for input in &job.files {
@@ -15,7 +15,6 @@ pub(super) fn images_to_pdf(job: &Job, compress: bool, quality: u8) -> Result<Ve
         }
     }
 
-    let out = unique_path(&job.output_dir, "images", "pdf");
     let temp = temp_dir("images-pdf")?;
     let result = (|| -> Result<Vec<PathBuf>, String> {
         let mut normalized: Vec<PathBuf> = Vec::with_capacity(job.files.len());
@@ -52,13 +51,36 @@ pub(super) fn images_to_pdf(job: &Job, compress: bool, quality: u8) -> Result<Ve
         } else {
             pdf_pages = normalized;
         }
-        let mut args = vec![os("--output"), os(&out)];
-        args.extend(pdf_pages.iter().map(|page| os(page)));
-        run_ok("img2pdf", args)?;
-        Ok(vec![out.clone()])
+        if combine {
+            let out = unique_path(&job.output_dir, "images", "pdf");
+            let mut args = vec![os("--output"), os(&out)];
+            args.extend(pdf_pages.iter().map(|page| os(page)));
+            if let Err(error) = run_ok("img2pdf", args) {
+                let _ = fs::remove_file(&out);
+                return Err(error);
+            }
+            Ok(vec![out])
+        } else {
+            let mut outputs = Vec::with_capacity(job.files.len());
+            for (input, page) in job.files.iter().zip(pdf_pages.iter()) {
+                if let Err(error) = super::check_cancelled() {
+                    for output in &outputs { let _ = fs::remove_file(output); }
+                    return Err(error);
+                }
+                let out = output_for_input(job, input, "converted", "pdf");
+                let args = vec![os("--output"), os(&out), os(page)];
+                if let Err(error) = run_ok("img2pdf", args) {
+                    let _ = fs::remove_file(&out);
+                    for output in &outputs { let _ = fs::remove_file(output); }
+                    let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("image");
+                    return Err(format!(r#"Failed to create a PDF for "{name}": {error}"#));
+                }
+                outputs.push(out);
+            }
+            Ok(outputs)
+        }
     })();
     let _ = fs::remove_dir_all(&temp);
-    if result.is_err() { let _ = fs::remove_file(&out); }
     result
 }
 

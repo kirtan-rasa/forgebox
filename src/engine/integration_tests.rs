@@ -205,18 +205,28 @@ fn image_tool_paths_work_with_real_imagemagick_exiftool_and_tesseract() {
 
     let pdf = execute(job(
         ToolId::ImagesToPdf,
-        vec![input.clone(), second],
+        vec![input.clone(), second.clone()],
         ws.path("images-pdf"),
-        JobOptions::ImagesToPdf { compress: false, quality: 82 },
+        JobOptions::ImagesToPdf { combine: true, compress: false, quality: 82 },
     )).expect("images to PDF");
     outputs(&pdf, 1);
     assert_eq!(pdf_page_count(&pdf[0]).unwrap(), 2);
+
+    let separate_pdfs = execute(job(
+        ToolId::ImagesToPdf,
+        vec![input.clone(), second.clone()],
+        ws.path("images-pdf-separate"),
+        JobOptions::ImagesToPdf { combine: false, compress: false, quality: 82 },
+    )).expect("separate images to PDFs");
+    outputs(&separate_pdfs, 2);
+    assert!(separate_pdfs.iter().all(|path| pdf_page_count(path).unwrap() == 1));
+    assert_ne!(separate_pdfs[0], separate_pdfs[1]);
 
     let compressed_pdf = execute(job(
         ToolId::ImagesToPdf,
         vec![input.clone()],
         ws.path("images-pdf-compressed"),
-        JobOptions::ImagesToPdf { compress: true, quality: 65 },
+        JobOptions::ImagesToPdf { combine: true, compress: true, quality: 65 },
     )).expect("compressed images to PDF");
     outputs(&compressed_pdf, 1);
     assert_eq!(pdf_page_count(&compressed_pdf[0]).unwrap(), 1);

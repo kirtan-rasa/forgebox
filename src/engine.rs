@@ -136,8 +136,8 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
     use crate::catalog::ToolId as Tool;
 
     match (&job.tool, &job.options) {
-        (Tool::ImagesToPdf, Options::ImagesToPdf { compress, quality }) => {
-            images_to_pdf(&job, *compress, *quality)
+        (Tool::ImagesToPdf, Options::ImagesToPdf { combine, compress, quality }) => {
+            images_to_pdf(&job, *combine, *compress, *quality)
         }
         (Tool::ImageConvert, Options::ImageConvert { format }) => process_each(&job, |input, out| {
             let mut args = vec![os(input), os("-auto-orient")];

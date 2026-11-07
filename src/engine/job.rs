@@ -231,7 +231,7 @@ pub enum JobOptions {
     ImageConvert { format: ImageFormat },
     ImageResize { width: u32, height: u32 },
     ImageCompress { quality: u8 },
-    ImagesToPdf { compress: bool, quality: u8 },
+    ImagesToPdf { combine: bool, compress: bool, quality: u8 },
     ImageOcr { language: String },
     GenerateQr { text: String },
     PdfSplit { range: String },

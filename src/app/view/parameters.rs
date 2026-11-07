@@ -6,9 +6,17 @@ use eframe::egui::{self, RichText};
 pub(super) fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
     match app.selected_tool {
         ToolId::ImagesToPdf => {
-            ui.label(RichText::new("One PDF, with a separate page for each image.").size(12.0));
-            ui.label(RichText::new("Reorder pages by dragging files in the first step.").size(11.0).color(MUTED));
-            ui.add_space(12.0);
+            ui.label(RichText::new("Choose how selected images should be exported.").size(12.0));
+            ui.add_space(8.0);
+            ui.checkbox(&mut app.combine_images_pdf, "Combine all images into one PDF");
+            ui.label(RichText::new(if app.combine_images_pdf {
+                "All images become separate pages in one PDF, in the selected order."
+            } else {
+                "Each image is saved as its own PDF file."
+            }).size(11.0).color(MUTED));
+            ui.add_space(8.0);
+            ui.label(RichText::new("Reorder images by dragging files in the first step.").size(11.0).color(MUTED));
+            ui.add_space(8.0);
             ui.checkbox(&mut app.compress_pdf, "Compress images inside the PDF");
             if app.compress_pdf {
                 ui.label(RichText::new(format!("Image quality: {}%", app.quality)).size(12.0));

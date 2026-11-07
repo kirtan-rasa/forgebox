@@ -76,6 +76,7 @@ struct ForgeApp {
     width: String,
     height: String,
     quality: String,
+    combine_images_pdf: bool,
     compress_pdf: bool,
     pdf_profile: String,
     rotation: String,
@@ -145,6 +146,7 @@ impl ForgeApp {
             width: "1600".into(),
             height: "1200".into(),
             quality: "82".into(),
+            combine_images_pdf: true,
             compress_pdf: false,
             pdf_profile: "ebook".into(),
             rotation: "90".into(),
@@ -456,6 +458,7 @@ impl ForgeApp {
                 quality: positive_u8(&self.quality, 82, 1, 100),
             },
             ToolId::ImagesToPdf => JobOptions::ImagesToPdf {
+                combine: self.combine_images_pdf,
                 compress: self.compress_pdf,
                 quality: positive_u8(&self.quality, 82, 20, 100),
             },
