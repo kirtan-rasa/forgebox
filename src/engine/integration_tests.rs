@@ -439,7 +439,7 @@ fn davinci_resolve_profile_creates_verified_dnxhr_mov_with_pcm_audio() {
         .args(["-hide_banner", "-encoders"])
         .output()
         .expect("query FFmpeg encoders");
-    let encoder_text = String::from_utf8_lossy(&encoder_list.stdout);
+    let encoder_text = format!("{}\\n{}", String::from_utf8_lossy(&encoder_list.stdout), String::from_utf8_lossy(&encoder_list.stderr));
     if !encoder_text.lines().any(|line| line.contains("dnxhd")) {
         eprintln!("Skipping DaVinci Resolve integration test: this FFmpeg build has no DNxHR encoder.");
         return;

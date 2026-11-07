@@ -70,7 +70,9 @@ pub(super) fn extract_audio(input: &Path, output: &Path, target_format: &str) ->
 
 #[derive(Clone, Debug)]
 struct VideoProbe {
-    pixel_format: String,
+    width: u32,
+    height: u32,
+    is_interlaced: bool,
     bit_depth: u8,
     is_444: bool,
     is_rgb: bool,
@@ -107,7 +109,7 @@ fn probe_video(input: &Path) -> Result<VideoProbe, String> {
     let output = run_ok("ffprobe", vec![
         os("-v"), os("error"),
         os("-show_entries"),
-        os("stream=codec_type,codec_name,width,height,pix_fmt,bits_per_raw_sample,color_range,color_space,color_transfer,color_primaries,sample_rate,channels,channel_layout:format=duration"),
+        os("stream=codec_type,codec_name,width,height,pix_fmt,bits_per_raw_sample,field_order,color_range,color_space,color_transfer,color_primaries,sample_rate,channels,channel_layout:format=duration"),
         os("-of"), os("json"),
         os(input),
     ]).map_err(|error| {
@@ -125,6 +127,13 @@ fn probe_video(input: &Path) -> Result<VideoProbe, String> {
     let video = streams.iter().find(|stream| value_string(stream, "codec_type") == Some("video"))
         .ok_or_else(|| "No video stream was found in the selected file.".to_string())?;
     let pixel_format = value_string(video, "pix_fmt").unwrap_or("unknown").to_owned();
+    let width = video.get("width").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let height = video.get("height").and_then(Value::as_u64).unwrap_or(0) as u32;
+    if width < 256 || height < 120 {
+        return Err(format!("DNxHR requires video dimensions of at least 256×120 pixels. The selected file is {width}×{height}."));
+    }
+    let field_order = value_string(video, "field_order").unwrap_or("unknown");
+    let is_interlaced = matches!(field_order, "tt" | "bb" | "tb" | "bt");
     let raw_depth = video.get("bits_per_raw_sample")
         .and_then(|value| value.as_str().and_then(|s| s.parse::<u8>().ok()).or_else(|| value.as_u64().map(|v| v as u8)))
         .unwrap_or(0);
@@ -136,7 +145,9 @@ fn probe_video(input: &Path) -> Result<VideoProbe, String> {
         || pixel_format.contains("gbrap")
         || pixel_format.contains("gbra");
     Ok(VideoProbe {
-        pixel_format,
+        width,
+        height,
+        is_interlaced,
         bit_depth,
         is_444,
         is_rgb,
@@ -223,6 +234,9 @@ pub(super) fn convert_davinci_resolve(input: &Path, output: &Path, requested_pro
     let source = probe_video(input)?;
     let encoding = select_resolve_encoding(requested_profile, &source);
 
+    if source.is_interlaced {
+        record_execution_warning("Interlaced footage was detected. ForgeBox will deinterlace it with BWDIF and output progressive frames at the source frame rate; field-rate motion detail is not retained.".into());
+    }
     if source.has_subtitles {
         record_execution_warning("Subtitle tracks were found in the source but are not embedded in the DNxHR MOV. Keep the original file if you need them.".into());
     }
@@ -257,6 +271,9 @@ pub(super) fn convert_davinci_resolve(input: &Path, output: &Path, requested_pro
         os("-ar"), os("48000"),
         os("-movflags"), os("+faststart"),
     ];
+    if source.is_interlaced {
+        args.extend([os("-vf"), os("bwdif=mode=send_frame:parity=auto:deint=all")]);
+    }
     copy_color_metadata(&mut args, &source);
     args.push(os(output));
 
@@ -280,7 +297,9 @@ mod davinci_tests {
 
     fn source(pixel_format: &str, bit_depth: u8) -> VideoProbe {
         VideoProbe {
-            pixel_format: pixel_format.into(),
+            width: 320,
+            height: 240,
+            is_interlaced: false,
             bit_depth,
             is_444: pixel_format.contains("444") || pixel_format.starts_with("gbr") || pixel_format.starts_with("rgb"),
             is_rgb: pixel_format.starts_with("gbr") || pixel_format.starts_with("rgb"),
