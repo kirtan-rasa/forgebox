@@ -48,6 +48,21 @@ mod tests {
     use super::files::reorder_item;
 
     #[test]
+    fn images_to_pdf_paths_sort_by_natural_filename_order() {
+        let mut paths = vec![
+            std::path::PathBuf::from("PDF4.png"),
+            std::path::PathBuf::from("PDF10.png"),
+            std::path::PathBuf::from("PDF2.png"),
+            std::path::PathBuf::from("PDF1.png"),
+        ];
+        super::files::sort_image_paths_naturally(&mut paths);
+        let names = paths.iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["PDF1.png", "PDF2.png", "PDF4.png", "PDF10.png"]);
+    }
+
+    #[test]
     fn reorder_item_moves_up_and_down_without_off_by_one() {
         let mut values = vec!["A", "B", "C", "D"];
         reorder_item(&mut values, 0, 3);
