@@ -33,8 +33,6 @@ enum PlaybackMessage {
 enum TimelineDrag { Start, End, Playhead }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum CropDrag { Move, Resize(usize) }
-
 struct PlaybackControl {
     stop: Arc<AtomicBool>,
     pid: Arc<AtomicI32>,
@@ -59,7 +57,6 @@ pub(super) struct VideoStickerEditor {
     metadata_pending: Option<PathBuf>,
     frame_pending: Option<(PathBuf, u32)>,
     timeline_drag: Option<TimelineDrag>,
-    crop_drag: Option<CropDrag>,
     tx: Sender<Message>,
     rx: Receiver<Message>,
     workers: Vec<JoinHandle<()>>,
@@ -94,7 +91,6 @@ impl Default for VideoStickerEditor {
             metadata_pending: None,
             frame_pending: None,
             timeline_drag: None,
-            crop_drag: None,
             tx,
             rx,
             workers: Vec::new(),
@@ -130,7 +126,6 @@ impl VideoStickerEditor {
         self.metadata_pending = None;
         self.frame_pending = None;
         self.timeline_drag = None;
-        self.crop_drag = None;
         if let Some(path) = path {
             self.metadata_pending = Some(path.clone());
             let tx = self.tx.clone();
@@ -210,6 +205,7 @@ impl VideoStickerEditor {
             if self.is_playing {
                 self.is_playing = false;
                 self.playback_texture = None;
+                self.playhead_ms = self.end_ms;
             }
         }
 
@@ -286,10 +282,11 @@ impl VideoStickerEditor {
         self.playback_control = Some(PlaybackControl { stop: stop.clone(), pid: pid.clone() });
         let tx = self.playback_tx.clone();
         self.is_playing = true;
+        let start_ms = self.playhead_ms;
         self.playback_worker = Some(thread::spawn(move || {
             stream_preview(
-                path, self::PLAYBACK_WIDTH, self::PLAYBACK_HEIGHT, self::PLAYBACK_FPS,
-                self.start_ms, duration_ms, filter, generation, stop, pid, tx,
+                path, PLAYBACK_WIDTH, PLAYBACK_HEIGHT, PLAYBACK_FPS,
+                start_ms, duration_ms, filter, generation, stop, pid, tx,
             );
         }));
     }
@@ -420,8 +417,9 @@ impl VideoStickerEditor {
             ui.id().with("sticker-crop-move"),
             Sense::drag(),
         );
+        if center.hovered() { ui.ctx().set_cursor_icon(egui::CursorIcon::Grab); }
         if center.dragged() {
-            self.crop_drag = Some(CropDrag::Move);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
             let delta = ui.input(|input| input.pointer.delta());
             let side = info.width.min(info.height) as f32 / self.zoom.clamp(1.0, 4.0);
             let available_x = info.width as f32 - side;
@@ -449,8 +447,10 @@ impl VideoStickerEditor {
                 2.0,
                 Stroke::new(1.0, Color32::WHITE),
             );
+            if response.hovered() || response.dragged() {
+                ui.ctx().set_cursor_icon(if index == 0 || index == 3 { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
+            }
             if response.dragged() {
-                self.crop_drag = Some(CropDrag::Resize(index));
                 if let Some(pointer) = ui.input(|input| input.pointer.interact_pos()) {
                     self.resize_crop_from_corner(info, image_rect, index, pointer);
                     geometry_changed = true;
@@ -459,7 +459,6 @@ impl VideoStickerEditor {
         }
 
         if geometry_changed { self.stop_playback(); }
-        if ui.input(|input| input.pointer.any_released()) { self.crop_drag = None; }
     }
 
     fn resize_crop_from_corner(&mut self, info: VideoInfo, image_rect: egui::Rect, corner: usize, pointer: egui::Pos2) {
