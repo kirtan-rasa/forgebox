@@ -28,10 +28,7 @@ impl ForgeApp {
             let header_width = full_header_width.min(if compact_ui { 520.0 } else { 840.0 });
             ui.with_layout(Layout::top_down(Align::Center), |ui| {
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(8, 29, 46))
-                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(19, 59, 81)))
-                    .rounding(6.0)
-                    .inner_margin(egui::Margin { left: 12.0, right: 12.0, top: 7.0, bottom: 7.0 })
+                    .inner_margin(egui::Margin { left: 8.0, right: 8.0, top: 4.0, bottom: 4.0 })
                     .show(ui, |ui| {
                         ui.set_width((header_width - 24.0).max(1.0));
                         ui.vertical_centered(|ui| {
@@ -39,9 +36,9 @@ impl ForgeApp {
                                 RichText::new(tool.name)
                                     .size(if compact_ui { 20.0 } else { 23.0 })
                                     .strong()
-                                    .color(TEXT),
+                                    .color(CYAN),
                             );
-                            ui.add_space(1.0);
+                            ui.add_space(3.0);
                             ui.add(
                                 egui::Label::new(
                                     RichText::new(tool.description)
@@ -70,10 +67,7 @@ impl ForgeApp {
             let first_label = if self.selected_tool == ToolId::GenerateQr { "Content" } else if self.selected_tool == ToolId::VideoSticker { "Video" } else { "Files" };
             let options_label = if self.selected_tool == ToolId::VideoSticker { "Edit" } else { "Options" };
             egui::Frame::none()
-                .fill(PANEL)
-                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(24, 76, 106)))
-                .rounding(6.0)
-                .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                .inner_margin(egui::Margin::symmetric(4.0, 5.0))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     let full_width = ui.available_width();
@@ -133,8 +127,8 @@ impl ForgeApp {
                                 };
                                 let active = self.wizard_step == step_id;
                                 let complete = current_index > visible_index;
-                                let fill = if active { ACCENT } else if complete { Color32::from_rgb(20, 75, 75) } else { Color32::from_rgb(11, 31, 48) };
-                                let edge = if active { ACCENT } else if complete { GREEN.linear_multiply(0.75) } else { Color32::from_rgb(30, 72, 96) };
+                                let fill = if active { Color32::from_rgb(16, 50, 73) } else if complete { Color32::from_rgb(15, 48, 49) } else { Color32::TRANSPARENT };
+                                let edge = if active { ACCENT } else if complete { GREEN.linear_multiply(0.7) } else { Color32::TRANSPARENT };
                                 // Keep completion marks independent of fonts; some systems render ✓ as a missing-glyph square.
                                 let caption = if show_step_labels {
                                     if complete { label.to_owned() } else { format!("{}  {label}", visible_index + 1) }
@@ -216,7 +210,7 @@ impl ForgeApp {
             }
             ui.add_space(8.0);
 
-            egui::Frame::none().fill(PANEL).stroke(Stroke::new(1.0_f32, Color32::from_rgb(24, 76, 106))).rounding(7.0).inner_margin(egui::Margin::same(15.0)).show(ui, |ui| {
+            egui::Frame::none().inner_margin(egui::Margin::same(8.0)).show(ui, |ui| {
                 // Keep the configuration card aligned with the full content panel rather than
                 // sizing it to whichever control happens to be the narrowest.
                 ui.set_width(ui.available_width());
@@ -237,7 +231,7 @@ impl ForgeApp {
                         });
                         ui.add_space(12.0);
                         // Persistent drop target: keep it visible even after files have been added.
-                        let drop = egui::Frame::none().fill(if dragging_external_files { Color32::from_rgb(10, 39, 55) } else { Color32::from_rgb(8, 24, 39) }).stroke(Stroke::new(1.0_f32, if dragging_external_files { CYAN } else { Color32::from_rgb(26, 80, 112) })).rounding(6.0).inner_margin(egui::Margin::same(16.0)).show(ui, |ui| {
+                        let drop = egui::Frame::none().fill(if dragging_external_files { Color32::from_rgb(13, 39, 56) } else { Color32::from_rgb(9, 24, 39) }).stroke(Stroke::new(1.0_f32, if dragging_external_files { CYAN } else { Color32::from_rgb(29, 67, 91) })).rounding(8.0).inner_margin(egui::Margin::same(16.0)).show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             ui.set_min_height(if self.files.is_empty() { 142.0 } else { 76.0 });
                             ui.vertical_centered(|ui| {
@@ -645,7 +639,7 @@ impl ForgeApp {
                         ui.add_space(8.0);
                         ui.label(RichText::new("Output folder").strong().size(13.0));
                         ui.add_space(7.0);
-                        egui::Frame::none().fill(Color32::from_rgb(8, 24, 39)).rounding(5.0).inner_margin(egui::Margin::same(12.0)).show(ui, |ui| {
+                        egui::Frame::none().inner_margin(egui::Margin::symmetric(2.0, 7.0)).show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new(glyph_text(self.icons_loaded, "󰉋")).font(icon_font(17.0)).color(CYAN));
                                 ui.add(egui::Label::new(RichText::new(self.output_dir.display().to_string()).size(13.0)).truncate());

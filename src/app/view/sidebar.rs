@@ -15,13 +15,13 @@ impl ForgeApp {
         egui::SidePanel::left("forge-sidebar")
             .exact_width(sidebar_width)
             .resizable(false)
-            .frame(egui::Frame::none().fill(PANEL).inner_margin(egui::Margin::same(12.0)))
+            .frame(egui::Frame::none().fill(PANEL).stroke(Stroke::new(1.0_f32, Color32::from_rgb(20, 48, 68))).inner_margin(egui::Margin::same(12.0)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.add_sized([38.0, 38.0], egui::Label::new(RichText::new(glyph_text(self.icons_loaded, "󰉋")).font(icon_font(25.0)).strong().color(CYAN)).selectable(false));
                     ui.vertical(|ui| {
                         ui.label(RichText::new("FORGEBOX").strong().size(18.0));
-                        ui.label(RichText::new("BETA · FILE TOOLS").size(10.0).color(MUTED));
+                        ui.label(RichText::new("LOCAL FILE WORKSPACE").size(9.5).color(MUTED));
                     });
                 });
                 ui.add_space(12.0);
@@ -44,12 +44,12 @@ impl ForgeApp {
                 ui.painter().rect_filled(
                     search_rect,
                     5.0,
-                    Color32::from_rgb(5, 17, 29),
+                    Color32::from_rgb(9, 23, 38),
                 );
                 ui.painter().rect_stroke(
                     search_rect,
                     5.0,
-                    Stroke::new(1.0_f32, Color32::from_rgb(22, 69, 95)),
+                    Stroke::new(1.0_f32, Color32::from_rgb(25, 61, 84)),
                 );
                 let search_content = search_rect.shrink2(Vec2::new(7.0, 2.0));
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(search_content), |ui| {
@@ -88,9 +88,8 @@ impl ForgeApp {
                     }
                     for tool in filtered {
                         let selected = self.selected_tool == tool.id;
-                        let fill = if selected { Color32::from_rgb(10, 39, 61) } else { PANEL };
-                        let stroke = if selected { Stroke::new(1.0_f32, ACCENT) } else { Stroke::new(1.0_f32, Color32::TRANSPARENT) };
-                        let response = egui::Frame::none().fill(fill).stroke(stroke).rounding(5.0).inner_margin(egui::Margin::symmetric(10.0, 8.0)).show(ui, |ui| {
+                        let fill = if selected { Color32::from_rgb(12, 39, 59) } else { Color32::TRANSPARENT };
+                        let response = egui::Frame::none().fill(fill).inner_margin(egui::Margin::symmetric(9.0, 7.0)).show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             ui.horizontal(|ui| {
                                 ui.add_sized([25.0, 28.0], egui::Label::new(RichText::new(glyph_text(self.icons_loaded, tool.glyph)).font(icon_font(17.0)).color(if selected { CYAN } else { MUTED })).selectable(false));

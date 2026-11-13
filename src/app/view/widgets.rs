@@ -63,9 +63,8 @@ pub(super) fn section_header(ui: &mut egui::Ui, number: &str, title: &str, subti
 }
 
 pub(super) fn nav_button(ui: &mut egui::Ui, glyph: &str, label: &str, active: bool, icons_loaded: bool) -> bool {
-    let fill = if active { Color32::from_rgb(10, 39, 61) } else { PANEL };
-    let stroke = if active { Stroke::new(1.0_f32, Color32::from_rgb(30, 107, 153)) } else { Stroke::new(1.0_f32, Color32::TRANSPARENT) };
-    let response = egui::Frame::none().fill(fill).stroke(stroke).rounding(4.0).inner_margin(egui::Margin::symmetric(10.0, 8.0)).show(ui, |ui| {
+    let fill = if active { Color32::from_rgb(12, 39, 59) } else { Color32::TRANSPARENT };
+    let response = egui::Frame::none().fill(fill).inner_margin(egui::Margin::symmetric(10.0, 7.0)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             ui.add_sized([21.0, 18.0], egui::Label::new(RichText::new(glyph_text(icons_loaded, glyph)).font(icon_font(15.0)).color(if active { CYAN } else { MUTED })).selectable(false));

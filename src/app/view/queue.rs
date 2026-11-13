@@ -28,10 +28,7 @@ impl ForgeApp {
             };
 
             egui::Frame::none()
-                .fill(Color32::from_rgb(8, 24, 39))
-                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(24, 48, 67)))
-                .rounding(7.0)
-                .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+                .inner_margin(egui::Margin::symmetric(5.0, 7.0))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
