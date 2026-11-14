@@ -30,7 +30,7 @@ impl eframe::App for ForgeApp {
         let dragging_external_files = ctx.input(|input| !input.raw.hovered_files.is_empty());
 
         let screen_width = ctx.screen_rect().width();
-        let sidebar_width = if screen_width < 900.0 { 186.0 } else if screen_width < 1120.0 { 218.0 } else { 258.0 };
+        let sidebar_width = if screen_width < 900.0 { 190.0 } else if screen_width < 1120.0 { 218.0 } else { 240.0 };
         // Responsive decisions must use the width that remains after the sidebar.
         // Using the full window width keeps the desktop layout active for a narrow
         // central panel, which can force the wizard controls beyond the right edge.

@@ -1,7 +1,7 @@
 use super::super::{ForgeApp, QueueStatus};
 use crate::catalog::ToolId;
 use super::widgets::reorder_arrow_button;
-use eframe::egui::{self, Color32, RichText, Stroke};
+use eframe::egui::{self, Color32, RichText};
 
 impl ForgeApp {
     pub(super) fn render_queue(&mut self, ui: &mut egui::Ui) {
@@ -28,10 +28,7 @@ impl ForgeApp {
             };
 
             egui::Frame::none()
-                .fill(Color32::from_rgb(8, 24, 39))
-                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(24, 48, 67)))
-                .rounding(7.0)
-                .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+                .inner_margin(egui::Margin::symmetric(5.0, 7.0))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
