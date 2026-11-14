@@ -17,11 +17,23 @@ impl ForgeApp {
         dragging_external_files: bool,
     ) {
         let page_margin = if content_width < 620.0 { 18.0 } else if content_width < 920.0 { 22.0 } else { 28.0 };
-        egui::CentralPanel::default().frame(egui::Frame::none().fill(BG).inner_margin(egui::Margin::symmetric(page_margin, if compact_ui { 10.0 } else { 14.0 }))).show(ctx, |ui| {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(BG).inner_margin(egui::Margin::symmetric(page_margin, if compact_ui { 10.0 } else { 14.0 })))
+            .show(ctx, |ui| {
+                let available = ui.available_size();
+                ui.allocate_ui_with_layout(available, Layout::top_down(Align::Center), |ui| {
+                    ui.set_max_width(if compact_ui { 640.0 } else { 860.0 });
             // Keep title, stepper and navigation outside the scroll area. Only the active step content scrolls.
             // This prevents egui from restoring a stale scroll offset above the upload panel.
             ui.set_width(ui.available_width());
             let tool = info(self.selected_tool);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("NEW CONVERSION").font(egui::FontId::monospace(10.0)).color(MUTED));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(RichText::new(tool.name).font(egui::FontId::monospace(10.0)).color(Color32::from_rgb(91, 155, 190)));
+                });
+            });
+            ui.add_space(14.0);
             // Compact, centered tool heading: constrain the card width as well as
             // centering its text. Use the standard UI font; hierarchy comes from size/weight.
             let full_header_width = ui.available_width();
@@ -34,7 +46,7 @@ impl ForgeApp {
                         ui.vertical_centered(|ui| {
                             ui.label(
                                 RichText::new(tool.name)
-                                    .size(if compact_ui { 20.0 } else { 23.0 })
+                                    .size(if compact_ui { 22.0 } else { 29.0 })
                                     .strong()
                                     .color(CYAN),
                             );
@@ -42,8 +54,8 @@ impl ForgeApp {
                             ui.add(
                                 egui::Label::new(
                                     RichText::new(tool.description)
-                                        .size(12.5)
-                                        .color(Color32::from_rgb(169, 204, 224)),
+                                        .size(13.0)
+                                        .color(Color32::from_rgb(111, 163, 194)),
                                 )
                                 .halign(Align::Center)
                                 .wrap(),
@@ -127,8 +139,8 @@ impl ForgeApp {
                                 };
                                 let active = self.wizard_step == step_id;
                                 let complete = current_index > visible_index;
-                                let fill = if active { Color32::from_rgb(16, 50, 73) } else if complete { Color32::from_rgb(15, 48, 49) } else { Color32::TRANSPARENT };
-                                let edge = if active { ACCENT } else if complete { GREEN.linear_multiply(0.7) } else { Color32::TRANSPARENT };
+                                let fill = if active { Color32::from_rgb(13, 39, 59) } else { Color32::TRANSPARENT };
+                                let edge = Color32::TRANSPARENT;
                                 // Keep completion marks independent of fonts; some systems render ✓ as a missing-glyph square.
                                 let caption = if show_step_labels {
                                     if complete { label.to_owned() } else { format!("{}  {label}", visible_index + 1) }
@@ -137,7 +149,7 @@ impl ForgeApp {
                                 };
                                 let step_response = ui.add_sized(
                                     [node_width(step_id), 34.0],
-                                    egui::Button::new(RichText::new(caption).size(if small_controls { 11.5 } else { 13.0 }).strong().color(TEXT))
+                                    egui::Button::new(RichText::new(caption).font(egui::FontId::monospace(if small_controls { 10.5 } else { 11.5 })).strong().color(if active { CYAN } else if complete { GREEN } else { MUTED }))
                                         .fill(fill)
                                         .stroke(Stroke::new(1.0_f32, edge)),
                                 );
@@ -833,8 +845,8 @@ impl ForgeApp {
                 // immediately after Add to queue resets the editor to the Files step.
                 self.render_queue(ui);
             });
-
+                    },
+                );
             });
-        });
     }
 }

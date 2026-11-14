@@ -63,13 +63,18 @@ pub(super) fn section_header(ui: &mut egui::Ui, number: &str, title: &str, subti
 }
 
 pub(super) fn nav_button(ui: &mut egui::Ui, glyph: &str, label: &str, active: bool, icons_loaded: bool) -> bool {
-    let fill = if active { Color32::from_rgb(12, 39, 59) } else { Color32::TRANSPARENT };
-    let response = egui::Frame::none().fill(fill).inner_margin(egui::Margin::symmetric(10.0, 7.0)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.add_sized([21.0, 18.0], egui::Label::new(RichText::new(glyph_text(icons_loaded, glyph)).font(icon_font(15.0)).color(if active { CYAN } else { MUTED })).selectable(false));
-            ui.label(RichText::new(label).size(13.0).color(if active { TEXT } else { Color32::from_rgb(144, 198, 226) }));
-        });
-    }).response;
-    response.interact(egui::Sense::click()).clicked()
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 29.0), egui::Sense::click());
+    if active {
+        ui.painter().rect_filled(rect, 3.0, Color32::from_rgb(12, 37, 56));
+        ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, Vec2::new(2.0, rect.height())), 1.0, ACCENT);
+    } else if response.hovered() {
+        ui.painter().rect_filled(rect, 3.0, Color32::from_rgb(11, 29, 44));
+    }
+    ui.painter().text(rect.left_center() + Vec2::new(12.0, 0.0), egui::Align2::LEFT_CENTER,
+        glyph_text(icons_loaded, glyph), icon_font(13.0),
+        if active { CYAN } else { Color32::from_rgb(83, 145, 177) });
+    ui.painter().text(rect.left_center() + Vec2::new(34.0, 0.0), egui::Align2::LEFT_CENTER,
+        label, egui::FontId::monospace(11.0),
+        if active { TEXT } else { Color32::from_rgb(151, 194, 218) });
+    response.clicked()
 }
