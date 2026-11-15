@@ -12,7 +12,7 @@ mod job;
 pub(crate) use self::command::{image_magick_program, image_magick_thread_limit};
 use self::command::{
     command_version_succeeds, configure_command_environment, recommended_image_magick_threads,
-    run_capture, run_magick_owned, run_ok, run_qpdf,
+    run_capture, run_magick_owned, run_ok, run_ok_with_timeout, run_qpdf,
 };
 use self::common::{
     display_io, files_with_prefix, first_file, normalized_ext, os, reserve_output_for_input,

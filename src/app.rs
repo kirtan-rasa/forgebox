@@ -5,7 +5,7 @@ use crate::engine::{
     VideoFormat, VideoPreset, ResolveProfile,
 };
 use eframe::egui::{self, Vec2};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -276,12 +276,11 @@ impl ForgeApp {
         if self.selected_tool == ToolId::GenerateQr { return; }
         self.selection_notice = None;
 
-        let requested = paths.len();
-        let mut pending = paths;
+        let mut pending: VecDeque<PathBuf> = paths.into();
         let mut supported = Vec::new();
         let mut skipped = 0usize;
         let mut unreadable_directories = 0usize;
-        while let Some(path) = pending.pop() {
+        while let Some(path) = pending.pop_front() {
             let metadata = match fs::symlink_metadata(&path) {
                 Ok(metadata) => metadata,
                 Err(_) => { skipped += 1; continue; }
@@ -294,12 +293,14 @@ impl ForgeApp {
             } else if kind.is_dir() {
                 match fs::read_dir(&path) {
                     Ok(entries) => {
-                        for entry in entries {
-                            match entry {
-                                Ok(entry) => pending.push(entry.path()),
-                                Err(_) => skipped += 1,
-                            }
-                        }
+                        let mut children = entries
+                            .filter_map(|entry| match entry {
+                                Ok(entry) => Some(entry.path()),
+                                Err(_) => { skipped += 1; None }
+                            })
+                            .collect::<Vec<_>>();
+                        children.sort();
+                        pending.extend(children);
                     }
                     Err(_) => unreadable_directories += 1,
                 }
@@ -313,7 +314,7 @@ impl ForgeApp {
         let mut paths = supported;
         let mut notices = Vec::new();
         if unreadable_directories > 0 {
-            notices.push(format!("Could not read {unreadable_directories} dropped director(y/ies)."));
+            notices.push(format!("Could not read {unreadable_directories} dropped folder(s)."));
         }
         if skipped > 0 {
             notices.push(format!(
