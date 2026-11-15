@@ -418,14 +418,14 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].get(0), Some(""));
+        assert_eq!(rows[0].get(0), Some("1"));
         assert_eq!(rows[0].get(1), Some("Ada"));
         assert_eq!(rows[0].get(2), Some(r#"{"ok":true}"#));
-        assert_eq!(rows[0].get(3), Some("1"));
-        assert_eq!(rows[1].get(0), Some("true"));
+        assert_eq!(rows[0].get(3), Some(""));
+        assert_eq!(rows[1].get(0), Some(""));
         assert_eq!(rows[1].get(1), Some(""));
         assert_eq!(rows[1].get(2), Some(""));
-        assert_eq!(rows[1].get(3), Some(""));
+        assert_eq!(rows[1].get(3), Some("true"));
         fs::remove_dir_all(directory).unwrap();
     }
 

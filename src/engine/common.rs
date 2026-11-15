@@ -75,7 +75,11 @@ where
         if let Err(error) = operation(input, &out) {
             let _ = fs::remove_file(&out);
             let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-            return Err(format!(r#"Failed to process "{name}": {error}"#));
+            return Err(if outputs.is_empty() {
+                format!(r#"Failed to process "{name}": {error}"#)
+            } else {
+                format!(r#"Failed to process "{name}": {error}. {} earlier completed output(s) were kept in {}."#, outputs.len(), job.output_dir.display())
+            });
         }
         if let Err(error) = ensure_output_file(&out) {
             let _ = fs::remove_file(&out);
@@ -102,7 +106,11 @@ where
         if let Err(error) = operation(input, &out) {
             let _ = fs::remove_file(&out);
             let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-            return Err(format!(r#"Failed to read metadata from "{name}": {error}"#));
+            return Err(if outputs.is_empty() {
+                format!(r#"Failed to read metadata from "{name}": {error}"#)
+            } else {
+                format!(r#"Failed to read metadata from "{name}": {error}. {} earlier completed output(s) were kept in {}."#, outputs.len(), job.output_dir.display())
+            });
         }
         if let Err(error) = ensure_output_file(&out) {
             let _ = fs::remove_file(&out);
@@ -126,7 +134,11 @@ pub(super) fn process_each_convert(job: &Job, target_ext: &str) -> Result<Vec<Pa
         if let Err(error) = soffice_convert(input, target_ext, &out) {
             let _ = fs::remove_file(&out);
             let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("document");
-            return Err(format!(r#"Failed to convert "{name}": {error}"#));
+            return Err(if outputs.is_empty() {
+                format!(r#"Failed to convert "{name}": {error}"#)
+            } else {
+                format!(r#"Failed to convert "{name}": {error}. {} earlier completed output(s) were kept in {}."#, outputs.len(), job.output_dir.display())
+            });
         }
         if let Err(error) = ensure_output_file(&out) {
             let _ = fs::remove_file(&out);
@@ -424,6 +436,38 @@ mod cancellation_cleanup_tests {
         let outputs = fs::read_dir(&output_dir).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
         assert_eq!(outputs.len(), 1, "the first completed output must be preserved");
         assert_eq!(fs::read(outputs[0].path()).unwrap(), b"completed output");
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_later_file_failure_keeps_earlier_completed_outputs() {
+        let directory = temp_dir("batch-failure-preserve-test").unwrap();
+        let first_input = directory.join("first.png");
+        let second_input = directory.join("second.png");
+        fs::write(&first_input, b"first").unwrap();
+        fs::write(&second_input, b"second").unwrap();
+
+        let output_dir = directory.join("output");
+        fs::create_dir_all(&output_dir).unwrap();
+        let job = Job::new(
+            ToolId::ImageConvert,
+            vec![first_input.clone(), second_input.clone()],
+            output_dir.clone(),
+            JobOptions::ImageConvert { format: ImageFormat::Png },
+        ).unwrap();
+
+        let result = process_each(&job, |input, output| {
+            if input == second_input {
+                return Err("simulated second-file failure".into());
+            }
+            fs::write(output, b"first completed output").map_err(|error| error.to_string())
+        });
+
+        assert!(result.unwrap_err().contains("simulated second-file failure"));
+        let outputs = fs::read_dir(&output_dir).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(outputs.len(), 1, "the first output should remain after a later failure");
+        assert_eq!(fs::read(outputs[0].path()).unwrap(), b"first completed output");
 
         fs::remove_dir_all(directory).unwrap();
     }

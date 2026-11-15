@@ -243,24 +243,49 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
             let input = first_file(&job)?;
             let page_count = pdf_page_count(input)?;
             let (first, end) = parse_pdf_page_range(range, page_count)?;
-            let prefix_reservation = reserve_unique_prefix(&job.output_dir, &format!("{}-split", input.file_stem().and_then(|value| value.to_str()).unwrap_or("document")))?;
+            let prefix_reservation = reserve_unique_prefix(
+                &job.output_dir,
+                &format!("{}-split", input.file_stem().and_then(|value| value.to_str()).unwrap_or("document")),
+            )?;
             let prefix = prefix_reservation.path().to_path_buf();
-            let pattern = job.output_dir.join(format!("{}-%d.pdf", prefix.file_name().and_then(|value| value.to_str()).unwrap_or("split")));
-            let pattern_prefix = pattern.file_name().and_then(|value| value.to_str()).unwrap_or("split-%d.pdf")
-                .split("%d").next().unwrap_or("split-").to_string();
-            if let Err(error) = run_ok("pdfseparate", vec![os("-f"), os(&first.to_string()), os("-l"), os(&end.to_string()), os(input), os(&pattern)]) {
-                for created in files_with_prefix(&job.output_dir, &pattern_prefix) { let _ = fs::remove_file(created); }
-                return Err(error);
-            }
-            let mut outputs = files_with_prefix(&job.output_dir, &pattern_prefix);
-            outputs.retain(|path| path.extension().and_then(|value| value.to_str()).map(|extension| extension.eq_ignore_ascii_case("pdf")).unwrap_or(false));
-            sort_numbered_paths(&mut outputs);
-            if outputs.is_empty() {
-                for created in files_with_prefix(&job.output_dir, &pattern_prefix) { let _ = fs::remove_file(created); }
-                Err("The PDF was processed, but no output pages were found. Check the page range.".into())
-            } else {
+            let prefix_name = prefix.file_name().and_then(|value| value.to_str()).unwrap_or("split");
+
+            // pdfseparate treats percent signs in its output pattern as format
+            // directives, so never place the user's output directory in that pattern.
+            let temp = temp_dir("pdf-split")?;
+            let pattern = temp.join("page-%d.pdf");
+            let result = (|| -> Result<Vec<PathBuf>, String> {
+                run_ok("pdfseparate", vec![
+                    os("-f"), os(&first.to_string()),
+                    os("-l"), os(&end.to_string()),
+                    os(input), os(&pattern),
+                ])?;
+
+                let mut pages = files_with_prefix(&temp, "page-");
+                pages.retain(|path| path.extension().and_then(|value| value.to_str())
+                    .map(|extension| extension.eq_ignore_ascii_case("pdf")).unwrap_or(false));
+                sort_numbered_paths(&mut pages);
+                if pages.is_empty() {
+                    return Err("The PDF was processed, but no output pages were found. Check the page range.".into());
+                }
+
+                let mut outputs = Vec::with_capacity(pages.len());
+                for (index, page) in pages.iter().enumerate() {
+                    let page_number = first + index as u32;
+                    let output = job.output_dir.join(format!("{prefix_name}-{page_number}.pdf"));
+                    if let Err(error) = fs::copy(page, &output) {
+                        return Err(if outputs.is_empty() {
+                            format!("Could not save split PDF page {page_number}: {error}")
+                        } else {
+                            format!("Could not save split PDF page {page_number}: {error}. {} earlier page(s) were kept in {}.", outputs.len(), job.output_dir.display())
+                        });
+                    }
+                    outputs.push(output);
+                }
                 Ok(outputs)
-            }
+            })();
+            let _ = fs::remove_dir_all(&temp);
+            result
         }
         (Tool::PdfCompress, Options::PdfCompress { profile }) => {
             let input = first_file(&job)?;

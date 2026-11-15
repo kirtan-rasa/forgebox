@@ -77,7 +77,11 @@ pub(super) fn images_to_pdf(job: &Job, combine: bool, compress: bool, quality: u
                 if let Err(error) = run_ok("img2pdf", args) {
                     let _ = fs::remove_file(&out);
                     let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("image");
-                    return Err(format!(r#"Failed to create a PDF for "{name}": {error}"#));
+                    return Err(if outputs.is_empty() {
+                        format!(r#"Failed to create a PDF for "{name}": {error}"#)
+                    } else {
+                        format!(r#"Failed to create a PDF for "{name}": {error}. {} earlier completed PDF(s) were kept in {}."#, outputs.len(), job.output_dir.display())
+                    });
                 }
                 outputs.push(out);
             }

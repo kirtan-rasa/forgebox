@@ -320,3 +320,23 @@ mod cancellation_tests {
     }
 }
 
+
+
+#[cfg(all(test, unix))]
+mod timeout_tests {
+    use super::{os, run_ok_with_timeout};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn timeout_terminates_a_running_process_group() {
+        let started = Instant::now();
+        let error = run_ok_with_timeout(
+            "sh",
+            vec![os("-c"), os("sleep 10")],
+            Duration::from_millis(150),
+        ).unwrap_err();
+
+        assert!(error.contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+}
