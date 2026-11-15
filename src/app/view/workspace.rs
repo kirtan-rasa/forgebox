@@ -20,9 +20,9 @@ impl ForgeApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(BG).inner_margin(egui::Margin::symmetric(page_margin, if compact_ui { 10.0 } else { 14.0 })))
             .show(ctx, |ui| {
-                let available = ui.available_size();
-                ui.allocate_ui_with_layout(available, Layout::top_down(Align::Center), |ui| {
-                    ui.set_max_width(if compact_ui { 640.0 } else { 860.0 });
+            // Use the complete remaining width. Individual controls already calculate
+            // their compact layout from the actual available width; an extra centered
+            // max-width container here made the stepper believe it had more room than it did.
             // Keep title, stepper and navigation outside the scroll area. Only the active step content scrolls.
             // This prevents egui from restoring a stale scroll offset above the upload panel.
             ui.set_width(ui.available_width());
@@ -851,8 +851,6 @@ impl ForgeApp {
                 self.render_queue(ui);
             });
             });
-                    },
-                );
-            });
+        });
     }
 }
