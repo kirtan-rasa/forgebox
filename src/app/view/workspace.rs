@@ -845,6 +845,7 @@ impl ForgeApp {
                 // immediately after Add to queue resets the editor to the Files step.
                 self.render_queue(ui);
             });
+            });
                     },
                 );
             });
