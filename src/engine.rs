@@ -270,8 +270,12 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
                 }
 
                 let mut outputs = Vec::with_capacity(pages.len());
-                for (index, page) in pages.iter().enumerate() {
-                    let page_number = first + index as u32;
+                for page in &pages {
+                    let page_number = page.file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .and_then(|stem| stem.strip_prefix("page-"))
+                        .and_then(|number| number.parse::<u32>().ok())
+                        .ok_or_else(|| format!("Could not determine the page number for {}.", page.display()))?;
                     let output = job.output_dir.join(format!("{prefix_name}-{page_number}.pdf"));
                     if let Err(error) = fs::copy(page, &output) {
                         return Err(if outputs.is_empty() {

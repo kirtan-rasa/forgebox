@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn uri_list_paths() {
         let list = b"# comment\r\nfile:///home/me/a%20b.png\r\nfile://localhost/tmp/x.psd\r\n\
-            https://example.com/c.png\r\nfile:///tmp/%D1%84.jpg\r\nfile:///tmp/bad%2\n";
+            https://example.com/c.png\r\nfile:///tmp/%D1%84.jpg\r\nfile:/tmp/single-slash.png\r\nfile:///tmp/bad%2\n";
         let paths = parse_uri_list(list);
         assert_eq!(
             paths,
@@ -373,6 +373,7 @@ mod tests {
                 PathBuf::from("/home/me/a b.png"),
                 PathBuf::from("/tmp/x.psd"),
                 PathBuf::from("/tmp/ф.jpg"),
+                PathBuf::from("/tmp/single-slash.png"),
                 PathBuf::from("/tmp/bad%2"),
             ]
         );
