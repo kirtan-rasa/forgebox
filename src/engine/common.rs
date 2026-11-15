@@ -36,12 +36,25 @@ fn output_details(job: &Job, input: &Path) -> (&'static str, String) {
     }
 }
 
-fn check_cancelled_or_remove_outputs(outputs: &[PathBuf]) -> Result<(), String> {
-    if let Err(error) = check_cancelled() {
-        for output in outputs {
-            let _ = fs::remove_file(output);
+fn check_batch_cancelled(outputs: &[PathBuf], output_dir: &Path) -> Result<(), String> {
+    check_cancelled().map_err(|error| {
+        if outputs.is_empty() {
+            error
+        } else {
+            format!(
+                "{error} {} completed output(s) were kept in {}.",
+                outputs.len(),
+                output_dir.display()
+            )
         }
-        return Err(error);
+    })
+}
+
+fn ensure_output_file(path: &Path) -> Result<(), String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("The converter did not create the expected output file: {error}"))?;
+    if !metadata.is_file() || metadata.len() == 0 {
+        return Err("The converter did not create a non-empty output file.".into());
     }
     Ok(())
 }
@@ -53,7 +66,7 @@ where
     require_files(job, 1, "Add files to process first.")?;
     let mut outputs: Vec<PathBuf> = Vec::new();
     for (index, input) in job.files.iter().enumerate() {
-        check_cancelled_or_remove_outputs(&outputs)?;
+        check_batch_cancelled(&outputs, &job.output_dir)?;
         let name = input.file_name().and_then(|value| value.to_str()).unwrap_or("file");
         report_status(format!("Processing {name} ({}/{})", index + 1, job.files.len()));
         let (suffix, extension) = output_details(job, input);
@@ -61,9 +74,13 @@ where
         let out = reservation.path().to_path_buf();
         if let Err(error) = operation(input, &out) {
             let _ = fs::remove_file(&out);
-            for created in &outputs { let _ = fs::remove_file(created); }
             let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("file");
             return Err(format!(r#"Failed to process "{name}": {error}"#));
+        }
+        if let Err(error) = ensure_output_file(&out) {
+            let _ = fs::remove_file(&out);
+            let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+            return Err(format!(r#"Failed to process "{name}": {error}. Earlier completed outputs, if any, were kept."#));
         }
         outputs.push(out);
     }
@@ -77,16 +94,20 @@ where
     require_files(job, 1, "Add files to process first.")?;
     let mut outputs: Vec<PathBuf> = Vec::new();
     for (index, input) in job.files.iter().enumerate() {
-        check_cancelled_or_remove_outputs(&outputs)?;
+        check_batch_cancelled(&outputs, &job.output_dir)?;
         let name = input.file_name().and_then(|value| value.to_str()).unwrap_or("file");
         report_status(format!("Reading metadata from {name} ({}/{})", index + 1, job.files.len()));
         let reservation = reserve_output_for_input(job, input, "exif", "json")?;
         let out = reservation.path().to_path_buf();
         if let Err(error) = operation(input, &out) {
             let _ = fs::remove_file(&out);
-            for created in &outputs { let _ = fs::remove_file(created); }
             let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("file");
             return Err(format!(r#"Failed to read metadata from "{name}": {error}"#));
+        }
+        if let Err(error) = ensure_output_file(&out) {
+            let _ = fs::remove_file(&out);
+            let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+            return Err(format!(r#"Failed to read metadata from "{name}": {error}. Earlier completed outputs, if any, were kept."#));
         }
         outputs.push(out);
     }
@@ -97,16 +118,20 @@ pub(super) fn process_each_convert(job: &Job, target_ext: &str) -> Result<Vec<Pa
     require_files(job, 1, "Add documents first.")?;
     let mut outputs: Vec<PathBuf> = Vec::new();
     for (index, input) in job.files.iter().enumerate() {
-        check_cancelled_or_remove_outputs(&outputs)?;
+        check_batch_cancelled(&outputs, &job.output_dir)?;
         let name = input.file_name().and_then(|value| value.to_str()).unwrap_or("document");
         report_status(format!("Converting {name} ({}/{})", index + 1, job.files.len()));
         let reservation = reserve_output_for_input(job, input, "converted", target_ext)?;
         let out = reservation.path().to_path_buf();
         if let Err(error) = soffice_convert(input, target_ext, &out) {
             let _ = fs::remove_file(&out);
-            for created in &outputs { let _ = fs::remove_file(created); }
             let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("document");
             return Err(format!(r#"Failed to convert "{name}": {error}"#));
+        }
+        if let Err(error) = ensure_output_file(&out) {
+            let _ = fs::remove_file(&out);
+            let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("document");
+            return Err(format!(r#"Failed to convert "{name}": {error}. Earlier completed outputs, if any, were kept."#));
         }
         outputs.push(out);
     }
@@ -365,7 +390,7 @@ mod cancellation_cleanup_tests {
     use std::sync::mpsc;
 
     #[test]
-    fn cancelling_between_files_removes_outputs_from_the_current_batch() {
+    fn cancelling_between_files_keeps_completed_outputs() {
         let directory = temp_dir("batch-cancel-cleanup-test").unwrap();
         let first_input = directory.join("first.png");
         let second_input = directory.join("second.png");
@@ -396,11 +421,9 @@ mod cancellation_cleanup_tests {
         });
 
         assert!(result.unwrap_err().contains("cancelled"));
-        assert_eq!(
-            fs::read_dir(&output_dir).unwrap().count(),
-            0,
-            "a cancelled batch must not leave files from earlier inputs"
-        );
+        let outputs = fs::read_dir(&output_dir).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(outputs.len(), 1, "the first completed output must be preserved");
+        assert_eq!(fs::read(outputs[0].path()).unwrap(), b"completed output");
 
         fs::remove_dir_all(directory).unwrap();
     }

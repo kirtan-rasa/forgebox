@@ -35,6 +35,12 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+fn image_first_frame_arg(input: &Path) -> OsString {
+    let mut argument = input.as_os_str().to_os_string();
+    argument.push("[0]");
+    argument
+}
+
 thread_local! {
     static EXECUTION_WARNINGS: RefCell<Vec<String>> = RefCell::new(Vec::new());
     static EXECUTION_CONTROL: RefCell<Option<ExecutionControl>> = const { RefCell::new(None) };
@@ -140,7 +146,7 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
             images_to_pdf(&job, *combine, *compress, *quality)
         }
         (Tool::ImageConvert, Options::ImageConvert { format }) => process_each(&job, |input, out| {
-            let mut args = vec![os(input), os("-auto-orient")];
+            let mut args = vec![image_first_frame_arg(input), os("-auto-orient")];
             if matches!(format, ImageFormat::Jpeg) {
                 args.extend([os("-background"), os("white"), os("-alpha"), os("remove"), os("-alpha"), os("off")]);
             }
@@ -149,14 +155,14 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
         }),
         (Tool::ImageResize, Options::ImageResize { width, height }) => process_each(&job, |input, out| {
             let size = format!("{width}x{height}");
-            run_magick_owned(vec![os(input), os("-auto-orient"), os("-resize"), os(&size), os(out)])
+            run_magick_owned(vec![image_first_frame_arg(input), os("-auto-orient"), os("-resize"), os(&size), os(out)])
         }),
         (Tool::ImageCompress, Options::ImageCompress { quality }) => process_each(&job, |input, out| {
             let quality = quality.to_string();
-            run_magick_owned(vec![os(input), os("-auto-orient"), os("-quality"), os(&quality), os(out)])
+            run_magick_owned(vec![image_first_frame_arg(input), os("-auto-orient"), os("-quality"), os(&quality), os(out)])
         }),
         (Tool::ImageGrayscale, Options::None) => process_each(&job, |input, out| {
-            run_magick_owned(vec![os(input), os("-auto-orient"), os("-colorspace"), os("Gray"), os(out)])
+            run_magick_owned(vec![image_first_frame_arg(input), os("-auto-orient"), os("-colorspace"), os("Gray"), os(out)])
         }),
         (Tool::RemoveBackground, Options::None) => process_each(&job, |input, out| {
             run_ok("rembg", vec![os("i"), os(input), os(out)]).map(|_| ())
