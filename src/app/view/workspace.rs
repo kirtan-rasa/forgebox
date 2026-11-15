@@ -27,20 +27,17 @@ impl ForgeApp {
             // This prevents egui from restoring a stale scroll offset above the upload panel.
             ui.set_width(ui.available_width());
             let tool = info(self.selected_tool);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("NEW CONVERSION").font(egui::FontId::monospace(10.0)).color(MUTED));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new(tool.name).font(egui::FontId::monospace(10.0)).color(Color32::from_rgb(91, 155, 190)));
-                });
-            });
-            ui.add_space(14.0);
+            ui.add_space(6.0);
             // Compact, centered tool heading: constrain the card width as well as
             // centering its text. Use the standard UI font; hierarchy comes from size/weight.
             let full_header_width = ui.available_width();
             let header_width = full_header_width.min(if compact_ui { 520.0 } else { 840.0 });
             ui.with_layout(Layout::top_down(Align::Center), |ui| {
                 egui::Frame::none()
-                    .inner_margin(egui::Margin { left: 8.0, right: 8.0, top: 4.0, bottom: 4.0 })
+                    .fill(Color32::from_rgb(8, 29, 46))
+                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(19, 59, 81)))
+                    .rounding(6.0)
+                    .inner_margin(egui::Margin { left: 12.0, right: 12.0, top: 9.0, bottom: 9.0 })
                     .show(ui, |ui| {
                         ui.set_width((header_width - 24.0).max(1.0));
                         ui.vertical_centered(|ui| {
@@ -79,7 +76,10 @@ impl ForgeApp {
             let first_label = if self.selected_tool == ToolId::GenerateQr { "Content" } else if self.selected_tool == ToolId::VideoSticker { "Video" } else { "Files" };
             let options_label = if self.selected_tool == ToolId::VideoSticker { "Edit" } else { "Options" };
             egui::Frame::none()
-                .inner_margin(egui::Margin::symmetric(4.0, 5.0))
+                .fill(PANEL)
+                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(24, 76, 106)))
+                .rounding(6.0)
+                .inner_margin(egui::Margin::symmetric(12.0, 8.0))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     let full_width = ui.available_width();
@@ -222,7 +222,12 @@ impl ForgeApp {
             }
             ui.add_space(8.0);
 
-            egui::Frame::none().inner_margin(egui::Margin::same(8.0)).show(ui, |ui| {
+            egui::Frame::none()
+                .fill(PANEL)
+                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(24, 76, 106)))
+                .rounding(7.0)
+                .inner_margin(egui::Margin::same(15.0))
+                .show(ui, |ui| {
                 // Keep the configuration card aligned with the full content panel rather than
                 // sizing it to whichever control happens to be the narrowest.
                 ui.set_width(ui.available_width());
