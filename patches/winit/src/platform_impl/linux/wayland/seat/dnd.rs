@@ -1,6 +1,6 @@
 //! File drag and drop (receiving side) through `wl_data_device`.
 //!
-//! PhotoCraft fork: winit 0.30 has no Wayland drag and drop. A drag that offers `text/uri-list`
+//! ForgeBox Wayland drag-and-drop support for winit 0.30. A drag that offers `text/uri-list`
 //! is read asynchronously (the pipe is a calloop source, so a slow source never blocks the loop)
 //! and reported as the same events X11 sends: `HoveredFile` for each path once the list arrives,
 //! `DroppedFile` on drop, `HoveredFileCancelled` when the drag leaves. The drag position is
@@ -310,17 +310,25 @@ pub(crate) fn parse_uri_list(data: &[u8]) -> Vec<PathBuf> {
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .filter_map(|uri| {
-            let rest = uri.strip_prefix("file://")?;
-            // `file://host/path`: the host is empty or `localhost` for local files.
-            let path = if rest.starts_with('/') {
-                rest
+            // Accept both common local URI forms: file:///path and file:/path.
+            // For file://host/path, only accept an empty, localhost, or this host.
+            let path = if let Some(rest) = uri.strip_prefix("file://") {
+                if rest.starts_with('/') {
+                    rest
+                } else {
+                    let slash = rest.find('/')?;
+                    let host = &rest[..slash];
+                    if !host.is_empty() && host != "localhost" && !is_this_host(host) {
+                        return None;
+                    }
+                    &rest[slash..]
+                }
             } else {
-                let slash = rest.find('/')?;
-                let host = &rest[..slash];
-                if !host.is_empty() && host != "localhost" && !is_this_host(host) {
+                let rest = uri.strip_prefix("file:")?;
+                if !rest.starts_with('/') {
                     return None;
                 }
-                &rest[slash..]
+                rest
             };
             let bytes = percent_decode(path.as_bytes());
             Some(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
