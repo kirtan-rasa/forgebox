@@ -6,6 +6,7 @@ use crate::engine::{
 };
 use eframe::egui::{self, Vec2};
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -211,7 +212,7 @@ impl ForgeApp {
         self.completed_cancelled = false;
         match id {
             ToolId::ImageConvert => self.target_format = "png".into(),
-            ToolId::ImagesToPdf => self.target_format = "pdf".into(),
+            ToolId::ImagesToPdf => { self.target_format = "pdf".into(); self.quality = "82".into(); },
             ToolId::PdfToImages => { self.target_format = "png".into(); self.dpi = "150".into(); },
             ToolId::AudioConvert => { self.target_format = "mp3".into(); self.audio_bitrate = "192".into(); },
             ToolId::ExtractAudio => self.target_format = "mp3".into(),
@@ -271,17 +272,52 @@ impl ForgeApp {
         }
     }
 
-    fn add_files(&mut self, mut paths: Vec<PathBuf>) {
+    fn add_files(&mut self, paths: Vec<PathBuf>) {
         if self.selected_tool == ToolId::GenerateQr { return; }
         self.selection_notice = None;
 
         let requested = paths.len();
-        paths.retain(|path| path.is_file() && view::is_supported_input_file(self.selected_tool, path));
-        let skipped = requested.saturating_sub(paths.len());
+        let mut pending = paths;
+        let mut supported = Vec::new();
+        let mut skipped = 0usize;
+        let mut unreadable_directories = 0usize;
+        while let Some(path) = pending.pop() {
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(_) => { skipped += 1; continue; }
+            };
+            let kind = metadata.file_type();
+            if kind.is_symlink() {
+                // Do not follow links: a dragged directory can otherwise contain
+                // cycles or unexpectedly import files outside the selected tree.
+                skipped += 1;
+            } else if kind.is_dir() {
+                match fs::read_dir(&path) {
+                    Ok(entries) => {
+                        for entry in entries {
+                            match entry {
+                                Ok(entry) => pending.push(entry.path()),
+                                Err(_) => skipped += 1,
+                            }
+                        }
+                    }
+                    Err(_) => unreadable_directories += 1,
+                }
+            } else if kind.is_file() && view::is_supported_input_file(self.selected_tool, &path) {
+                supported.push(path);
+            } else {
+                skipped += 1;
+            }
+        }
+        supported.sort();
+        let mut paths = supported;
         let mut notices = Vec::new();
+        if unreadable_directories > 0 {
+            notices.push(format!("Could not read {unreadable_directories} dropped director(y/ies)."));
+        }
         if skipped > 0 {
             notices.push(format!(
-                "Skipped {skipped} unsupported item(s). This tool accepts {}.",
+                "Skipped {skipped} unsupported or inaccessible item(s). This tool accepts {}.",
                 view::accepted_input_description(self.selected_tool)
             ));
         }
@@ -445,11 +481,17 @@ impl ForgeApp {
     }
 
     fn build_job(&self) -> Result<Job, String> {
-        let positive_u32 = |value: &str, fallback: u32| {
-            value.trim().parse::<i32>().ok().filter(|number| *number > 0).map(|number| number as u32).unwrap_or(fallback)
+        let bounded_u32 = |value: &str, label: &str, min: u32, max: u32| -> Result<u32, String> {
+            let parsed = value.trim().parse::<u32>()
+                .map_err(|_| format!("{label} must be a whole number between {min} and {max}."))?;
+            if !(min..=max).contains(&parsed) {
+                return Err(format!("{label} must be between {min} and {max}."));
+            }
+            Ok(parsed)
         };
-        let positive_u8 = |value: &str, fallback: u8, min: u8, max: u8| {
-            value.trim().parse::<i32>().ok().filter(|number| *number > 0).unwrap_or(i32::from(fallback)).clamp(i32::from(min), i32::from(max)) as u8
+        let bounded_u8 = |value: &str, label: &str, min: u8, max: u8| -> Result<u8, String> {
+            let parsed = bounded_u32(value, label, u32::from(min), u32::from(max))?;
+            Ok(parsed as u8)
         };
 
         let options = match self.selected_tool {
@@ -464,12 +506,12 @@ impl ForgeApp {
                 JobOptions::ImageResize { width, height }
             },
             ToolId::ImageCompress => JobOptions::ImageCompress {
-                quality: positive_u8(&self.quality, 82, 1, 100),
+                quality: bounded_u8(&self.quality, "Image quality", 1, 100)?,
             },
             ToolId::ImagesToPdf => JobOptions::ImagesToPdf {
                 combine: self.combine_images_pdf,
                 compress: self.compress_pdf,
-                quality: positive_u8(&self.quality, 82, 20, 100),
+                quality: if self.compress_pdf { bounded_u8(&self.quality, "PDF image quality", 20, 100)? } else { 82 },
             },
             ToolId::ImageOcr => JobOptions::ImageOcr {
                 language: if self.language.trim().is_empty() { "eng".into() } else { self.language.trim().to_owned() },
@@ -485,7 +527,7 @@ impl ForgeApp {
             ToolId::PdfReorder => JobOptions::PdfReorder { order: self.pages.trim().to_owned() },
             ToolId::PdfToImages => JobOptions::PdfToImages {
                 format: PdfImageFormat::parse(&self.target_format)?,
-                dpi: positive_u32(&self.dpi, 150).clamp(36, 600) as u16,
+                dpi: bounded_u32(&self.dpi, "PDF image DPI", 36, 600)? as u16,
             },
             ToolId::PdfWatermark => JobOptions::PdfWatermark {
                 watermark_file: self.secondary_file.clone().ok_or("Select the watermark PDF in the first step.")?,
@@ -495,7 +537,7 @@ impl ForgeApp {
             },
             ToolId::AudioConvert => JobOptions::AudioConvert {
                 format: AudioFormat::parse(&self.target_format)?,
-                bitrate: positive_u32(&self.audio_bitrate, 192).clamp(64, 320) as u16,
+                bitrate: bounded_u32(&self.audio_bitrate, "Audio bitrate", 64, 320)? as u16,
             },
             ToolId::ExtractAudio => JobOptions::ExtractAudio {
                 format: AudioFormat::parse(&self.target_format)?,
@@ -503,11 +545,11 @@ impl ForgeApp {
             ToolId::VideoConvert => JobOptions::VideoConvert {
                 format: VideoFormat::parse(&self.target_format)?,
                 preset: VideoPreset::parse(&self.video_preset)?,
-                quality: positive_u8(&self.quality, 23, 18, 30),
+                quality: bounded_u8(&self.quality, "Video quality", 18, 30)?,
             },
             ToolId::VideoToGif => JobOptions::VideoToGif {
-                width: positive_u32(&self.width, 480).clamp(64, 1280) as u16,
-                fps: positive_u32(&self.fps, 12).clamp(1, 30) as u8,
+                width: bounded_u32(&self.width, "GIF width", 64, 1280)? as u16,
+                fps: bounded_u32(&self.fps, "GIF frame rate", 1, 30)? as u8,
             },
             ToolId::VideoSticker => self.video_sticker.job_options()?,
             ToolId::DavinciResolve => JobOptions::DavinciResolve {

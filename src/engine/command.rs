@@ -4,7 +4,7 @@ use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn os<T: AsRef<OsStr>>(value: T) -> OsString {
     value.as_ref().to_os_string()
@@ -79,7 +79,7 @@ pub(super) fn configure_command_environment(program: &str, command: &mut Command
     }
 }
 
-fn run_cancellable(command: &mut Command) -> io::Result<Output> {
+fn run_cancellable(command: &mut Command, timeout: Option<Duration>) -> io::Result<Output> {
     super::check_cancelled()
         .map_err(|message| io::Error::new(io::ErrorKind::Interrupted, message))?;
 
@@ -98,8 +98,15 @@ fn run_cancellable(command: &mut Command) -> io::Result<Output> {
     let stderr = child.stderr.take().expect("stderr was configured as piped");
     let stdout_reader = read_pipe(stdout);
     let stderr_reader = read_pipe(stderr);
+    let started = Instant::now();
 
     let status = loop {
+        if timeout.map(|limit| started.elapsed() >= limit).unwrap_or(false) {
+            stop_child(&mut child);
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "External command exceeded its time limit."));
+        }
         if super::execution_cancelled() {
             stop_child(&mut child);
             let _ = stdout_reader.join();
@@ -154,6 +161,22 @@ fn stop_child(child: &mut Child) {
 }
 
 pub(super) fn run_ok(program: &str, args: Vec<OsString>) -> Result<Output, String> {
+    run_ok_internal(program, args, None)
+}
+
+pub(super) fn run_ok_with_timeout(
+    program: &str,
+    args: Vec<OsString>,
+    timeout: Duration,
+) -> Result<Output, String> {
+    run_ok_internal(program, args, Some(timeout))
+}
+
+fn run_ok_internal(
+    program: &str,
+    args: Vec<OsString>,
+    timeout: Option<Duration>,
+) -> Result<Output, String> {
     super::check_cancelled()?;
     super::report_status(format!("Running {program}…"));
     let candidates = command_candidates(program);
@@ -163,7 +186,7 @@ pub(super) fn run_ok(program: &str, args: Vec<OsString>) -> Result<Output, Strin
         let mut command = Command::new(&candidate);
         configure_command_environment(program, &mut command);
         command.args(args.iter());
-        match run_cancellable(&mut command) {
+        match run_cancellable(&mut command, timeout) {
             Ok(output) if output.status.success() => return Ok(output),
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -178,6 +201,9 @@ pub(super) fn run_ok(program: &str, args: Vec<OsString>) -> Result<Output, Strin
             Err(error) if error.kind() == io::ErrorKind::NotFound => tried.push(label),
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {
                 return Err("Operation cancelled by user.".into());
+            }
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+                return Err(format!("Command `{program}` timed out after {} seconds. The process was stopped.", timeout.map(|value| value.as_secs()).unwrap_or_default()));
             }
             Err(error) => return Err(format!("Failed to launch `{program}` via `{label}`: {error}")),
         }
