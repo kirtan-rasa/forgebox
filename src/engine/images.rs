@@ -65,17 +65,23 @@ pub(super) fn images_to_pdf(job: &Job, combine: bool, compress: bool, quality: u
             let mut outputs = Vec::with_capacity(job.files.len());
             for (input, page) in job.files.iter().zip(pdf_pages.iter()) {
                 if let Err(error) = super::check_cancelled() {
-                    for output in &outputs { let _ = fs::remove_file(output); }
-                    return Err(error);
+                    return Err(format!(
+                        "{error} {} completed PDF(s) were kept in {}.",
+                        outputs.len(),
+                        job.output_dir.display()
+                    ));
                 }
                 let reservation = reserve_output_for_input(job, input, "converted", "pdf")?;
                 let out = reservation.path().to_path_buf();
                 let args = vec![os("--output"), os(&out), os(page)];
                 if let Err(error) = run_ok("img2pdf", args) {
                     let _ = fs::remove_file(&out);
-                    for output in &outputs { let _ = fs::remove_file(output); }
                     let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("image");
-                    return Err(format!(r#"Failed to create a PDF for "{name}": {error}"#));
+                    return Err(if outputs.is_empty() {
+                        format!(r#"Failed to create a PDF for "{name}": {error}"#)
+                    } else {
+                        format!(r#"Failed to create a PDF for "{name}": {error}. {} earlier completed PDF(s) were kept in {}."#, outputs.len(), job.output_dir.display())
+                    });
                 }
                 outputs.push(out);
             }

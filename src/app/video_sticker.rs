@@ -1098,9 +1098,14 @@ fn run_preview_command(mut command: Command, cancelled: &AtomicBool) -> Result<s
     Ok(std::process::Output { status, stdout, stderr })
 }
 
+fn display_oriented_dimensions(width: u32, height: u32, rotation: Option<f64>) -> (u32, u32) {
+    let rotation = rotation.unwrap_or(0.0).round() as i32;
+    if rotation.rem_euclid(180) == 90 { (height, width) } else { (width, height) }
+}
+
 fn inspect_video(path: &Path, cancelled: &AtomicBool) -> Result<VideoInfo, String> {
     let mut command = Command::new("ffprobe");
-    command.args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,duration:format=duration", "-of", "json"])
+    command.args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,duration:stream_side_data=rotation:format=duration", "-of", "json"])
         .arg(path);
     let output = run_preview_command(command, cancelled)
         .map_err(|e| format!("Could not inspect the selected video: {e}. Install FFmpeg and FFprobe if they are missing."))?;
@@ -1114,6 +1119,9 @@ fn inspect_video(path: &Path, cancelled: &AtomicBool) -> Result<VideoInfo, Strin
         .or_else(|| stream["duration"].as_str().and_then(|s| s.parse::<f64>().ok())).unwrap_or(0.0);
     let width = stream["width"].as_u64().unwrap_or(0) as u32;
     let height = stream["height"].as_u64().unwrap_or(0) as u32;
+    let rotation = stream["side_data_list"].as_array()
+        .and_then(|items| items.iter().find_map(|item| item["rotation"].as_f64()));
+    let (width, height) = display_oriented_dimensions(width, height, rotation);
     if width < 2 || height < 2 || !duration.is_finite() || duration <= 0.0 {
         return Err("FFprobe could not determine the video dimensions or duration.".into());
     }
@@ -1146,6 +1154,13 @@ mod tests {
     use super::{crop_rect_for_preview, sticker_preview_filter, VideoInfo};
     use crate::engine::VideoStickerFit;
     use eframe::egui;
+
+    #[test]
+    fn portrait_display_matrix_swaps_dimensions_for_crop_geometry() {
+        assert_eq!(super::display_oriented_dimensions(1920, 1080, Some(90.0)), (1080, 1920));
+        assert_eq!(super::display_oriented_dimensions(1920, 1080, Some(-90.0)), (1080, 1920));
+        assert_eq!(super::display_oriented_dimensions(1920, 1080, None), (1920, 1080));
+    }
 
     #[test]
     fn square_crop_preview_is_positioned_and_zoomed_within_source_bounds() {
