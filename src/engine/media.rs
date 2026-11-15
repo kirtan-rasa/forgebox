@@ -401,12 +401,30 @@ fn pixel_format_has_alpha(pixel_format: &str) -> bool {
 }
 
 fn inferred_pixel_depth(pixel_format: &str) -> u8 {
+    let format = pixel_format.to_ascii_lowercase();
+
+    // Packed RGB formats encode total bits per pixel in the suffix.
+    if ["rgb48", "bgr48", "rgba64", "bgra64", "argb64", "abgr64"]
+        .iter()
+        .any(|prefix| format.starts_with(prefix))
+    {
+        return 16;
+    }
+
+    // Planar high-bit-depth formats carry component depth after p,
+    // e.g. yuv420p10le, yuva444p12be, gbrp16le.
+    if format.contains("p010") {
+        return 10;
+    }
     for depth in [16_u8, 14, 12, 10, 9] {
-        if pixel_format.contains(&depth.to_string()) {
+        if format.contains(&format!("p{depth}")) {
             return depth;
         }
     }
-    if pixel_format.contains("p010") { 10 } else { 8 }
+    if format.starts_with("gray16") || format.starts_with("ya16") {
+        return 16;
+    }
+    8
 }
 
 fn probe_video(input: &Path) -> Result<VideoProbe, String> {
@@ -688,7 +706,7 @@ mod sticker_orientation_tests {
 
 #[cfg(test)]
 mod davinci_tests {
-    use super::{ffmpeg_color_space_tag, is_rgb_pixel_format, pixel_format_has_alpha, select_resolve_encoding, video_sync_args_from_help, ResolveProfile, VideoProbe};
+    use super::{ffmpeg_color_space_tag, inferred_pixel_depth, is_rgb_pixel_format, pixel_format_has_alpha, select_resolve_encoding, video_sync_args_from_help, ResolveProfile, VideoProbe};
 
     fn source(pixel_format: &str, bit_depth: u8) -> VideoProbe {
         VideoProbe {
@@ -709,6 +727,21 @@ mod davinci_tests {
         }
     }
 
+    #[test]
+    fn pixel_depth_ignores_chroma_subsampling_digits() {
+        assert_eq!(inferred_pixel_depth("nv12"), 8);
+        assert_eq!(inferred_pixel_depth("yuv410p"), 8);
+        assert_eq!(inferred_pixel_depth("yuv420p"), 8);
+    }
+
+    #[test]
+    fn pixel_depth_detects_component_depth_and_packed_rgb() {
+        assert_eq!(inferred_pixel_depth("yuv420p10le"), 10);
+        assert_eq!(inferred_pixel_depth("yuva444p12be"), 12);
+        assert_eq!(inferred_pixel_depth("gbrp16le"), 16);
+        assert_eq!(inferred_pixel_depth("rgb48le"), 16);
+        assert_eq!(inferred_pixel_depth("rgba64le"), 16);
+    }
     #[test]
     fn modern_ffmpeg_uses_fps_mode_passthrough() {
         let help = "  -fps_mode[:stream_specifier]  set framerate mode\n  -vsync parameter  legacy sync mode";

@@ -302,6 +302,18 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
                 output_argument, os(input),
             ]);
             if let Err(error) = result { let _ = fs::remove_file(&out); return Err(error); }
+            record_execution_warning(
+                "Ghostscript rewrites PDF content. Interactive forms, annotations, and digital-signature validity may not be preserved; keep the original PDF.".into()
+            );
+            if let (Ok(source), Ok(compressed)) = (fs::metadata(input), fs::metadata(&out)) {
+                if compressed.len() > source.len() {
+                    record_execution_warning(format!(
+                        "The compressed PDF is larger than the source ({} bytes vs {} bytes).",
+                        compressed.len(),
+                        source.len()
+                    ));
+                }
+            }
             Ok(vec![out])
         }
         (Tool::PdfRotate, Options::PdfRotate { rotation }) => {

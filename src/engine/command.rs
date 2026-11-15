@@ -126,6 +126,18 @@ fn run_cancellable(command: &mut Command, timeout: Option<Duration>) -> io::Resu
         }
     };
 
+    if let Some(limit) = timeout {
+        while !stdout_reader.is_finished() || !stderr_reader.is_finished() {
+            if started.elapsed() >= limit {
+                stop_child(&mut child);
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "External command exceeded its time limit."));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     let stdout = join_pipe(stdout_reader)?;
     let stderr = join_pipe(stderr_reader)?;
     Ok(Output { status, stdout, stderr })

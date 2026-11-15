@@ -1,6 +1,6 @@
 use super::{
-    check_cancelled, display_io, first_file, normalized_ext, os, report_status,
-    run_ok, run_ok_with_timeout, temp_dir, Job,
+    check_cancelled, display_io, first_file, normalized_ext, os, record_execution_warning,
+    report_status, run_ok, run_ok_with_timeout, temp_dir, Job,
 };
 use csv::{ReaderBuilder, WriterBuilder};
 use serde::de::{Error as _, SeqAccess, Visitor};
@@ -25,6 +25,19 @@ pub(super) fn data_convert(job: &Job, target_format: &str) -> Result<Vec<PathBuf
     }
     if source_ext == target_ext {
         return Err("The input and output formats are the same.".into());
+    }
+
+    match (source_ext.as_str(), target_ext.as_str()) {
+        ("csv", "json") => record_execution_warning(
+            "CSV has no built-in data types; ForgeBox imports its cell values as strings.".into()
+        ),
+        ("csv", "xlsx") | ("json", "xlsx") => record_execution_warning(
+            "LibreOffice may infer spreadsheet cell types. Check identifiers with leading zeroes, long numbers, and date-like text after conversion.".into()
+        ),
+        ("xlsx", "csv") => record_execution_warning(
+            "CSV stores one table only. LibreOffice exports the active/first worksheet; other worksheets are not included.".into()
+        ),
+        _ => {}
     }
 
     let reservation = super::reserve_output_for_input(job, input, "converted", &target_ext)?;
