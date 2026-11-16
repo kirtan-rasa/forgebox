@@ -658,7 +658,7 @@ impl ForgeApp {
                         ui.add_space(7.0);
                         egui::Frame::none()
                             .fill(INPUT)
-                            .stroke(Stroke::new(1.0, BORDER))
+                            .stroke(Stroke::new(1.0_f32, BORDER))
                             .rounding(6.0)
                             .inner_margin(egui::Margin::symmetric(10.0, 8.0))
                             .show(ui, |ui| {
