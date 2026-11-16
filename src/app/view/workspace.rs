@@ -3,7 +3,7 @@ use super::super::theme::*;
 use super::files::{file_glyph, reorder_item, reorder_item_to_index};
 use super::icons::{glyph_text, icon_font};
 use super::parameters::parameter_ui;
-use super::widgets::{paint_check_mark, reorder_arrow_button, section_header};
+use super::widgets::{square_nav_button, paint_check_mark, reorder_arrow_button, section_header};
 use crate::catalog::{info, ToolId};
 use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Stroke, Vec2};
 use std::path::PathBuf;
@@ -17,36 +17,42 @@ impl ForgeApp {
         dragging_external_files: bool,
     ) {
         let page_margin = if content_width < 620.0 { 18.0 } else if content_width < 920.0 { 22.0 } else { 28.0 };
-        egui::CentralPanel::default().frame(egui::Frame::none().fill(BG).inner_margin(egui::Margin::symmetric(page_margin, if compact_ui { 10.0 } else { 14.0 }))).show(ctx, |ui| {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(BG).inner_margin(egui::Margin::symmetric(page_margin, if compact_ui { 10.0 } else { 14.0 })))
+            .show(ctx, |ui| {
+            // Use the complete remaining width. Individual controls already calculate
+            // their compact layout from the actual available width; an extra centered
+            // max-width container here made the stepper believe it had more room than it did.
             // Keep title, stepper and navigation outside the scroll area. Only the active step content scrolls.
             // This prevents egui from restoring a stale scroll offset above the upload panel.
             ui.set_width(ui.available_width());
             let tool = info(self.selected_tool);
+            ui.add_space(6.0);
             // Compact, centered tool heading: constrain the card width as well as
             // centering its text. Use the standard UI font; hierarchy comes from size/weight.
             let full_header_width = ui.available_width();
             let header_width = full_header_width.min(if compact_ui { 520.0 } else { 840.0 });
             ui.with_layout(Layout::top_down(Align::Center), |ui| {
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(8, 29, 46))
-                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(19, 59, 81)))
+                    .fill(CARD)
+                    .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
                     .rounding(6.0)
-                    .inner_margin(egui::Margin { left: 12.0, right: 12.0, top: 7.0, bottom: 7.0 })
+                    .inner_margin(egui::Margin { left: 12.0, right: 12.0, top: 9.0, bottom: 9.0 })
                     .show(ui, |ui| {
                         ui.set_width((header_width - 24.0).max(1.0));
                         ui.vertical_centered(|ui| {
                             ui.label(
                                 RichText::new(tool.name)
-                                    .size(if compact_ui { 20.0 } else { 23.0 })
+                                    .size(if compact_ui { 22.0 } else { 29.0 })
                                     .strong()
-                                    .color(TEXT),
+                                    .color(CYAN),
                             );
-                            ui.add_space(1.0);
+                            ui.add_space(3.0);
                             ui.add(
                                 egui::Label::new(
                                     RichText::new(tool.description)
-                                        .size(12.5)
-                                        .color(Color32::from_rgb(169, 204, 224)),
+                                        .size(13.0)
+                                        .color(Color32::from_rgb(111, 163, 194)),
                                 )
                                 .halign(Align::Center)
                                 .wrap(),
@@ -80,10 +86,10 @@ impl ForgeApp {
                     let small_controls = compact_ui || full_width < 680.0;
                     // Preserve full step names on narrow layouts by placing navigation
                     // on a separate row instead of crushing the progress buttons.
-                    let controls_width = if small_controls { 94.0 } else { 206.0 };
+                    let controls_width = 96.0;
                     // Allocate the whole row, then position the stepper and navigation
                     // explicitly. No implicit horizontal spacing can push Back/Next inward.
-                    let nav_gap = 16.0_f32;
+                    let nav_gap = 34.0_f32;
                     let flow_width = (full_width - controls_width - nav_gap).max(0.0);
                     // Hide labels only when the stepper itself has too little room.
                     // This keeps numbered steps readable instead of squeezing their captions.
@@ -133,30 +139,22 @@ impl ForgeApp {
                                 };
                                 let active = self.wizard_step == step_id;
                                 let complete = current_index > visible_index;
-                                let fill = if active { ACCENT } else if complete { Color32::from_rgb(20, 75, 75) } else { Color32::from_rgb(11, 31, 48) };
-                                let edge = if active { ACCENT } else if complete { GREEN.linear_multiply(0.75) } else { Color32::from_rgb(30, 72, 96) };
+                                let fill = if active { ACTIVE_BG } else { Color32::TRANSPARENT };
+                                let edge = Color32::TRANSPARENT;
                                 // Keep completion marks independent of fonts; some systems render ✓ as a missing-glyph square.
                                 let caption = if show_step_labels {
-                                    if complete { label.to_owned() } else { format!("{}  {label}", visible_index + 1) }
+                                    format!("{}  {label}", visible_index + 1)
                                 } else {
                                     (visible_index + 1).to_string()
                                 };
-                                let step_response = ui.add_sized(
+                                ui.add_sized(
                                     [node_width(step_id), 34.0],
-                                    egui::Button::new(RichText::new(caption).size(if small_controls { 11.5 } else { 13.0 }).strong().color(TEXT))
+                                    egui::Button::new(RichText::new(caption).font(egui::FontId::monospace(if small_controls { 10.5 } else { 11.5 })).strong().color(if active { CYAN } else if complete { GREEN } else { MUTED }))
                                         .fill(fill)
                                         .stroke(Stroke::new(1.0_f32, edge)),
                                 );
-                                if complete && show_step_labels {
-                                    paint_check_mark(
-                                        ui.painter(),
-                                        egui::pos2(step_response.rect.left() + 14.0, step_response.rect.center().y),
-                                        1.7,
-                                        TEXT,
-                                    );
-                                }
                                 if visible_index + 1 < visible_steps.len() {
-                                    let arrow_color = if current_index > visible_index { GREEN } else { Color32::from_rgb(45, 103, 134) };
+                                    let arrow_color = if current_index > visible_index { GREEN } else { BORDER };
                                     let (rect, _) = ui.allocate_exact_size(Vec2::new(arrow_width, 24.0), egui::Sense::hover());
                                     let y = rect.center().y;
                                     let start = egui::pos2(rect.left() + 2.0, y);
@@ -182,19 +180,15 @@ impl ForgeApp {
                             let current_index = visible_steps.iter().position(|step_id| *step_id == self.wizard_step).unwrap_or(0);
                             let back_enabled = current_index > 0 && !self.running;
                             let next_enabled = current_index + 1 < visible_steps.len() && can_next && !self.running;
-                            if small_controls {
-                                if ui.add_enabled(next_enabled, egui::Button::new("›").fill(if next_enabled { ACCENT } else { Color32::from_rgb(15, 35, 52) }).min_size(Vec2::new(36.0, 34.0))).on_hover_text("Next").clicked() {
-                                    if let Some(next_step) = visible_steps.get(current_index + 1) { self.wizard_step = *next_step; }
+                            if square_nav_button(ui, next_enabled, true, "Next step") {
+                                if let Some(next_step) = visible_steps.get(current_index + 1) {
+                                    self.wizard_step = *next_step;
                                 }
-                                if ui.add_enabled(back_enabled, egui::Button::new("‹").min_size(Vec2::new(36.0, 34.0))).on_hover_text("Back").clicked() {
-                                    if current_index > 0 { self.wizard_step = visible_steps[current_index - 1]; }
-                                }
-                            } else {
-                                if ui.add_enabled(next_enabled, egui::Button::new(RichText::new("Next  ›").size(13.0)).fill(if next_enabled { ACCENT } else { Color32::from_rgb(15, 35, 52) }).min_size(Vec2::new(88.0, 34.0))).clicked() {
-                                    if let Some(next_step) = visible_steps.get(current_index + 1) { self.wizard_step = *next_step; }
-                                }
-                                if ui.add_enabled(back_enabled, egui::Button::new(RichText::new("‹  Back").size(13.0)).min_size(Vec2::new(88.0, 34.0))).clicked() {
-                                    if current_index > 0 { self.wizard_step = visible_steps[current_index - 1]; }
+                            }
+                            ui.add_space(14.0);
+                            if square_nav_button(ui, back_enabled, false, "Previous step") {
+                                if current_index > 0 {
+                                    self.wizard_step = visible_steps[current_index - 1];
                                 }
                             }
                         });
@@ -216,7 +210,12 @@ impl ForgeApp {
             }
             ui.add_space(8.0);
 
-            egui::Frame::none().fill(PANEL).stroke(Stroke::new(1.0_f32, Color32::from_rgb(24, 76, 106))).rounding(7.0).inner_margin(egui::Margin::same(15.0)).show(ui, |ui| {
+            egui::Frame::none()
+                .fill(PANEL)
+                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(24, 76, 106)))
+                .rounding(7.0)
+                .inner_margin(egui::Margin::same(15.0))
+                .show(ui, |ui| {
                 // Keep the configuration card aligned with the full content panel rather than
                 // sizing it to whichever control happens to be the narrowest.
                 ui.set_width(ui.available_width());
@@ -237,7 +236,7 @@ impl ForgeApp {
                         });
                         ui.add_space(12.0);
                         // Persistent drop target: keep it visible even after files have been added.
-                        let drop = egui::Frame::none().fill(if dragging_external_files { Color32::from_rgb(10, 39, 55) } else { Color32::from_rgb(8, 24, 39) }).stroke(Stroke::new(1.0_f32, if dragging_external_files { CYAN } else { Color32::from_rgb(26, 80, 112) })).rounding(6.0).inner_margin(egui::Margin::same(16.0)).show(ui, |ui| {
+                        let drop = egui::Frame::none().fill(if dragging_external_files { ACTIVE_BG } else { INPUT }).stroke(Stroke::new(1.0_f32, if dragging_external_files { CYAN } else { BORDER })).rounding(8.0).inner_margin(egui::Margin::same(16.0)).show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             ui.set_min_height(if self.files.is_empty() { 142.0 } else { 76.0 });
                             ui.vertical_centered(|ui| {
@@ -322,7 +321,7 @@ impl ForgeApp {
                                                             ui.painter().rect_filled(
                                                                 slot_rect.shrink(1.0),
                                                                 12.0,
-                                                                Color32::from_rgb(11, 31, 49),
+                                                                CARD,
                                                             );
                                                             ui.painter().rect_stroke(
                                                                 slot_rect.shrink(1.0),
@@ -351,7 +350,7 @@ impl ForgeApp {
                                                             ui.set_width(inner_width);
                                                             ui.vertical_centered(|ui| {
                                                                 egui::Frame::none()
-                                                                    .fill(Color32::from_rgb(5, 16, 28))
+                                                                    .fill(PREVIEW)
                                                                     .rounding(8.0)
                                                                     .inner_margin(egui::Margin::same(4.0))
                                                                     .show(ui, |ui| {
@@ -378,7 +377,7 @@ impl ForgeApp {
                                                                     // card body receives the drag interaction after layout is complete.
                                                                     let handle_sense = egui::Sense::hover();
                                                                     let (handle_rect, handle_response) = ui.allocate_exact_size(Vec2::new(34.0, 34.0), handle_sense);
-                                                                    let handle_fill = if handle_response.hovered() { Color32::from_rgb(20, 55, 78) } else { Color32::from_rgb(10, 29, 46) };
+                                                                    let handle_fill = if handle_response.hovered() { HOVER_BG } else { DISABLED_BG };
                                                                     ui.painter().rect_filled(handle_rect, 6.0, handle_fill);
                                                                     // Six-dot grip, drawn directly so it works with any configured font.
                                                                     for row in 0..3 {
@@ -513,7 +512,7 @@ impl ForgeApp {
                                         preview_rect.min + Vec2::new(9.0, 9.0),
                                         Vec2::new((preview_rect.width() - 18.0).max(1.0), (preview_height * preview_scale).min(preview_rect.height() * 0.66).max(1.0)),
                                     );
-                                    painter.rect_filled(thumb_rect, 8.0, Color32::from_rgb(5, 16, 28));
+                                    painter.rect_filled(thumb_rect, 8.0, PREVIEW);
                                     if let Some(texture) = self.thumbnails.get(path) {
                                         let texture_size = texture.size_vec2();
                                         if texture_size.x > 0.0 && texture_size.y > 0.0 {
@@ -628,7 +627,7 @@ impl ForgeApp {
                     }
                     1 => {
                         if self.selected_tool == ToolId::VideoSticker {
-                            section_header(ui, "02", "Edit video sticker", "Trim the clip and position the square frame");
+                            section_header(ui, "02", "Edit video sticker", "");
                         } else {
                             section_header(ui, "02", "Configure task", "Only options relevant to the selected tool");
                         }
@@ -645,12 +644,17 @@ impl ForgeApp {
                         ui.add_space(8.0);
                         ui.label(RichText::new("Output folder").strong().size(13.0));
                         ui.add_space(7.0);
-                        egui::Frame::none().fill(Color32::from_rgb(8, 24, 39)).rounding(5.0).inner_margin(egui::Margin::same(12.0)).show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(glyph_text(self.icons_loaded, "󰉋")).font(icon_font(17.0)).color(CYAN));
-                                ui.add(egui::Label::new(RichText::new(self.output_dir.display().to_string()).size(13.0)).truncate());
+                        egui::Frame::none()
+                            .fill(INPUT)
+                            .stroke(Stroke::new(1.0_f32, BORDER))
+                            .rounding(6.0)
+                            .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(glyph_text(self.icons_loaded, "󰉋")).font(icon_font(17.0)).color(CYAN));
+                                    ui.add(egui::Label::new(RichText::new(self.output_dir.display().to_string()).size(13.0)).truncate());
+                                });
                             });
-                        });
                         ui.add_space(8.0);
                         if ui.add_enabled(!self.dialog_open && !self.running, egui::Button::new("Choose folder…").min_size(Vec2::new(150.0, 36.0))).clicked() {
                             self.choose_output_folder();
@@ -678,9 +682,22 @@ impl ForgeApp {
                         }).size(11.0).color(MUTED));
                         ui.add_space(6.0);
                         let can_run = self.can_run();
-                        let action_label = if self.queue_mode { "Add to queue" } else { "Convert now" };
+                        let completed_successfully = !self.running
+                            && !self.queue_mode
+                            && self.logs.iter().any(|(ok, message)| *ok && message.starts_with("Done:"));
+                        let action_label = if self.queue_mode {
+                            "Add to queue"
+                        } else if self.logs.iter().any(|(ok, _)| !ok) {
+                            "Try again"
+                        } else {
+                            "Convert now"
+                        };
                         let action_glyph = if self.queue_mode { "󰐕" } else { "󰄬" };
-                        if !self.running && ui.add_enabled(can_run, egui::Button::new(RichText::new(format!("{}  {action_label}", glyph_text(self.icons_loaded, action_glyph))).font(icon_font(16.0)).strong()).fill(if can_run { ACCENT } else { Color32::from_rgb(15, 35, 52) }).min_size(Vec2::new(ui.available_width(), 44.0))).clicked() {
+                        // On success, the completion card replaces the primary action.
+                        // A single "Convert again" action lives inside that card.
+                        if !self.running && !completed_successfully
+                            && ui.add_enabled(can_run, egui::Button::new(RichText::new(format!("{}  {action_label}", glyph_text(self.icons_loaded, action_glyph))).font(icon_font(16.0)).strong()).fill(if can_run { ACCENT } else { Color32::from_rgb(15, 35, 52) }).min_size(Vec2::new(ui.available_width(), 44.0))).clicked()
+                        {
                             self.start_job();
                         }
                         if !self.running && !can_run {
@@ -702,15 +719,15 @@ impl ForgeApp {
                             let has_warning = self.logs.iter().any(|(ok, message)| *ok && message.starts_with("Warning:"));
                             let success_count = self.logs.iter().filter(|(ok, message)| *ok && message.starts_with("Done:")).count();
                             let (status_fill, status_edge) = if self.running {
-                                (Color32::from_rgb(19, 35, 48), Color32::from_rgb(35, 119, 160))
+                                (STATUS_RUNNING, STATUS_RUNNING_BORDER)
                             } else if self.completed_cancelled {
-                                (Color32::from_rgb(48, 39, 23), Color32::from_rgb(139, 108, 51))
+                                (STATUS_WARNING, STATUS_WARNING_BORDER)
                             } else if has_error {
-                                (Color32::from_rgb(47, 23, 39), Color32::from_rgb(139, 60, 83))
+                                (STATUS_ERROR, STATUS_ERROR_BORDER)
                             } else if has_warning {
-                                (Color32::from_rgb(48, 39, 23), Color32::from_rgb(139, 108, 51))
+                                (STATUS_WARNING, STATUS_WARNING_BORDER)
                             } else {
-                                (Color32::from_rgb(11, 43, 43), Color32::from_rgb(37, 103, 87))
+                                (STATUS_SUCCESS, STATUS_SUCCESS_BORDER)
                             };
                             egui::Frame::none()
                                 .fill(status_fill)
@@ -804,6 +821,9 @@ impl ForgeApp {
 
                                         }
                                         if !self.running {
+                                            if completed_successfully && ui.button("Convert again").clicked() {
+                                                self.start_job();
+                                            }
                                             if let Some(output_dir) = self.last_output_dir.clone() {
                                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                                     if ui.button("Open folder").clicked() {
@@ -839,7 +859,6 @@ impl ForgeApp {
                 // immediately after Add to queue resets the editor to the Files step.
                 self.render_queue(ui);
             });
-
             });
         });
     }

@@ -36,7 +36,7 @@ ForgeBox brings common image, PDF, document, spreadsheet, and media tools into o
 
 - Batch operations support multiple input files where the tool allows it.
 - Audio conversion supports bitrate selection for lossy formats; WAV uses uncompressed 16-bit PCM, while FLAC uses lossless compression. Source metadata is copied when supported.
-- Video stickers include a trim-and-crop editor and export VP9 WebM files within Telegram’s 256 KB limit.
+- Video stickers include full-source playback, a looping animated preview of the selected 512 × 512 crop, and a compact trim editor. Export produces VP9 WebM within Telegram’s 256 KB limit.
 - Images-to-PDF includes page previews and drag-to-reorder controls.
 - Original files are never overwritten. ForgeBox chooses an unused output name.
 - File dialogs and thumbnail generation run outside the UI thread.
