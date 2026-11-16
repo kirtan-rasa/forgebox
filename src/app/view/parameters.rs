@@ -1,4 +1,4 @@
-use super::super::theme::MUTED;
+use super::super::theme::*;
 use super::ForgeApp;
 use crate::catalog::ToolId;
 use eframe::egui::{self, RichText};
@@ -199,14 +199,14 @@ pub(super) fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
 }
 
 pub(super) fn format_combo(ui: &mut egui::Ui, selected: &mut String, formats: &[&str]) {
-    egui::ComboBox::from_id_salt("target-format").selected_text(selected.to_uppercase()).show_ui(ui, |ui| {
+    egui::ComboBox::from_id_salt("target-format").selected_text(selected.to_uppercase()).width(ui.available_width().min(360.0)).show_ui(ui, |ui| {
         for format in formats { ui.selectable_value(selected, (*format).to_string(), format.to_uppercase()); }
     });
 }
 
 pub(super) fn labeled_text(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str) {
     ui.vertical(|ui| {
-        ui.label(RichText::new(label).size(11.5).color(MUTED));
-        ui.add(egui::TextEdit::singleline(value).hint_text(hint).desired_width(95.0));
+        ui.label(RichText::new(label).size(12.0).color(MUTED));
+        ui.add(egui::TextEdit::singleline(value).hint_text(hint).desired_width(124.0));
     });
 }
