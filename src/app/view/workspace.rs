@@ -34,8 +34,8 @@ impl ForgeApp {
             let header_width = full_header_width.min(if compact_ui { 520.0 } else { 840.0 });
             ui.with_layout(Layout::top_down(Align::Center), |ui| {
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(8, 29, 46))
-                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(19, 59, 81)))
+                    .fill(CARD)
+                    .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
                     .rounding(6.0)
                     .inner_margin(egui::Margin { left: 12.0, right: 12.0, top: 9.0, bottom: 9.0 })
                     .show(ui, |ui| {
@@ -139,7 +139,7 @@ impl ForgeApp {
                                 };
                                 let active = self.wizard_step == step_id;
                                 let complete = current_index > visible_index;
-                                let fill = if active { Color32::from_rgb(13, 39, 59) } else { Color32::TRANSPARENT };
+                                let fill = if active { ACTIVE_BG } else { Color32::TRANSPARENT };
                                 let edge = Color32::TRANSPARENT;
                                 // Keep completion marks independent of fonts; some systems render ✓ as a missing-glyph square.
                                 let caption = if show_step_labels {
@@ -162,7 +162,7 @@ impl ForgeApp {
                                     );
                                 }
                                 if visible_index + 1 < visible_steps.len() {
-                                    let arrow_color = if current_index > visible_index { GREEN } else { Color32::from_rgb(45, 103, 134) };
+                                    let arrow_color = if current_index > visible_index { GREEN } else { BORDER };
                                     let (rect, _) = ui.allocate_exact_size(Vec2::new(arrow_width, 24.0), egui::Sense::hover());
                                     let y = rect.center().y;
                                     let start = egui::pos2(rect.left() + 2.0, y);
@@ -248,7 +248,7 @@ impl ForgeApp {
                         });
                         ui.add_space(12.0);
                         // Persistent drop target: keep it visible even after files have been added.
-                        let drop = egui::Frame::none().fill(if dragging_external_files { Color32::from_rgb(13, 39, 56) } else { Color32::from_rgb(9, 24, 39) }).stroke(Stroke::new(1.0_f32, if dragging_external_files { CYAN } else { Color32::from_rgb(29, 67, 91) })).rounding(8.0).inner_margin(egui::Margin::same(16.0)).show(ui, |ui| {
+                        let drop = egui::Frame::none().fill(if dragging_external_files { ACTIVE_BG } else { INPUT }).stroke(Stroke::new(1.0_f32, if dragging_external_files { CYAN } else { BORDER })).rounding(8.0).inner_margin(egui::Margin::same(16.0)).show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             ui.set_min_height(if self.files.is_empty() { 142.0 } else { 76.0 });
                             ui.vertical_centered(|ui| {
@@ -333,7 +333,7 @@ impl ForgeApp {
                                                             ui.painter().rect_filled(
                                                                 slot_rect.shrink(1.0),
                                                                 12.0,
-                                                                Color32::from_rgb(11, 31, 49),
+                                                                CARD,
                                                             );
                                                             ui.painter().rect_stroke(
                                                                 slot_rect.shrink(1.0),
@@ -362,7 +362,7 @@ impl ForgeApp {
                                                             ui.set_width(inner_width);
                                                             ui.vertical_centered(|ui| {
                                                                 egui::Frame::none()
-                                                                    .fill(Color32::from_rgb(5, 16, 28))
+                                                                    .fill(PREVIEW)
                                                                     .rounding(8.0)
                                                                     .inner_margin(egui::Margin::same(4.0))
                                                                     .show(ui, |ui| {
@@ -389,7 +389,7 @@ impl ForgeApp {
                                                                     // card body receives the drag interaction after layout is complete.
                                                                     let handle_sense = egui::Sense::hover();
                                                                     let (handle_rect, handle_response) = ui.allocate_exact_size(Vec2::new(34.0, 34.0), handle_sense);
-                                                                    let handle_fill = if handle_response.hovered() { Color32::from_rgb(20, 55, 78) } else { Color32::from_rgb(10, 29, 46) };
+                                                                    let handle_fill = if handle_response.hovered() { HOVER_BG } else { DISABLED_BG };
                                                                     ui.painter().rect_filled(handle_rect, 6.0, handle_fill);
                                                                     // Six-dot grip, drawn directly so it works with any configured font.
                                                                     for row in 0..3 {
@@ -524,7 +524,7 @@ impl ForgeApp {
                                         preview_rect.min + Vec2::new(9.0, 9.0),
                                         Vec2::new((preview_rect.width() - 18.0).max(1.0), (preview_height * preview_scale).min(preview_rect.height() * 0.66).max(1.0)),
                                     );
-                                    painter.rect_filled(thumb_rect, 8.0, Color32::from_rgb(5, 16, 28));
+                                    painter.rect_filled(thumb_rect, 8.0, PREVIEW);
                                     if let Some(texture) = self.thumbnails.get(path) {
                                         let texture_size = texture.size_vec2();
                                         if texture_size.x > 0.0 && texture_size.y > 0.0 {
@@ -656,12 +656,17 @@ impl ForgeApp {
                         ui.add_space(8.0);
                         ui.label(RichText::new("Output folder").strong().size(13.0));
                         ui.add_space(7.0);
-                        egui::Frame::none().inner_margin(egui::Margin::symmetric(2.0, 7.0)).show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(glyph_text(self.icons_loaded, "󰉋")).font(icon_font(17.0)).color(CYAN));
-                                ui.add(egui::Label::new(RichText::new(self.output_dir.display().to_string()).size(13.0)).truncate());
+                        egui::Frame::none()
+                            .fill(INPUT)
+                            .stroke(Stroke::new(1.0, BORDER))
+                            .rounding(6.0)
+                            .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(glyph_text(self.icons_loaded, "󰉋")).font(icon_font(17.0)).color(CYAN));
+                                    ui.add(egui::Label::new(RichText::new(self.output_dir.display().to_string()).size(13.0)).truncate());
+                                });
                             });
-                        });
                         ui.add_space(8.0);
                         if ui.add_enabled(!self.dialog_open && !self.running, egui::Button::new("Choose folder…").min_size(Vec2::new(150.0, 36.0))).clicked() {
                             self.choose_output_folder();
@@ -713,15 +718,15 @@ impl ForgeApp {
                             let has_warning = self.logs.iter().any(|(ok, message)| *ok && message.starts_with("Warning:"));
                             let success_count = self.logs.iter().filter(|(ok, message)| *ok && message.starts_with("Done:")).count();
                             let (status_fill, status_edge) = if self.running {
-                                (Color32::from_rgb(19, 35, 48), Color32::from_rgb(35, 119, 160))
+                                (STATUS_RUNNING, STATUS_RUNNING_BORDER)
                             } else if self.completed_cancelled {
-                                (Color32::from_rgb(48, 39, 23), Color32::from_rgb(139, 108, 51))
+                                (STATUS_WARNING, STATUS_WARNING_BORDER)
                             } else if has_error {
-                                (Color32::from_rgb(47, 23, 39), Color32::from_rgb(139, 60, 83))
+                                (STATUS_ERROR, STATUS_ERROR_BORDER)
                             } else if has_warning {
-                                (Color32::from_rgb(48, 39, 23), Color32::from_rgb(139, 108, 51))
+                                (STATUS_WARNING, STATUS_WARNING_BORDER)
                             } else {
-                                (Color32::from_rgb(11, 43, 43), Color32::from_rgb(37, 103, 87))
+                                (STATUS_SUCCESS, STATUS_SUCCESS_BORDER)
                             };
                             egui::Frame::none()
                                 .fill(status_fill)
