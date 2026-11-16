@@ -1,4 +1,5 @@
 use crate::engine::{JobOptions, VideoStickerFit};
+use super::theme::*;
 use eframe::egui::{self, Color32, FontId, RichText, Sense, Stroke, TextureHandle, Vec2};
 use serde_json::Value;
 use std::io::{Read, ErrorKind};
@@ -356,12 +357,12 @@ impl VideoStickerEditor {
         ui.label(
             RichText::new("Trim the clip, preview the result, then position the square sticker frame.")
                 .size(12.5)
-                .color(Color32::from_rgb(176, 196, 211)),
+                .color(TEXT_SECONDARY),
         );
         ui.add_space(9.0);
 
         if let Some(error) = &self.error {
-            ui.colored_label(Color32::from_rgb(239, 125, 139), error);
+            ui.colored_label(RED, error);
             return;
         }
         let Some(info) = self.info else {
@@ -375,8 +376,8 @@ impl VideoStickerEditor {
         };
 
         egui::Frame::none()
-            .fill(Color32::from_rgb(7, 19, 32))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(24, 76, 106)))
+            .fill(PANEL)
+            .stroke(Stroke::new(1.0, BORDER))
             .rounding(8.0)
             .inner_margin(egui::Margin::symmetric(12.0, 9.0))
             .show(ui, |ui| {
@@ -385,27 +386,27 @@ impl VideoStickerEditor {
                     ui.label(
                         RichText::new(format!("{} × {}", info.width, info.height))
                             .size(11.5)
-                            .color(Color32::from_rgb(176, 196, 211)),
+                            .color(TEXT_SECONDARY),
                     );
                     ui.separator();
                     ui.label(
                         RichText::new(format!("Source {}", time_label(info.duration_ms)))
                             .size(11.5)
-                            .color(Color32::from_rgb(176, 196, 211)),
+                            .color(TEXT_SECONDARY),
                     );
                     ui.separator();
                     ui.label(
                         RichText::new("512 × 512 · VP9 · WebM")
                             .size(11.5)
-                            .color(Color32::from_rgb(72, 190, 218)),
+                            .color(CYAN),
                     );
                 });
             });
 
         ui.add_space(9.0);
         egui::Frame::none()
-            .fill(Color32::from_rgb(5, 15, 26))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(24, 76, 106)))
+            .fill(PREVIEW)
+            .stroke(Stroke::new(1.0, BORDER))
             .rounding(10.0)
             .inner_margin(egui::Margin::symmetric(10.0, 10.0))
             .show(ui, |ui| {
@@ -432,7 +433,7 @@ impl VideoStickerEditor {
                     enabled,
                     egui::Button::new(RichText::new(label).strong())
                         .min_size(Vec2::new(132.0, 34.0))
-                        .fill(Color32::from_rgb(24, 91, 126)),
+                        .fill(ACCENT),
                 )
                 .clicked()
             {
@@ -450,19 +451,19 @@ impl VideoStickerEditor {
                 ))
                 .monospace()
                 .size(12.0)
-                .color(Color32::from_rgb(176, 196, 211)),
+                .color(TEXT_SECONDARY),
             );
         });
         if let Some(error) = &self.playback_error {
             ui.vertical_centered(|ui| {
-                ui.colored_label(Color32::from_rgb(239, 125, 139), error);
+                ui.colored_label(RED, error);
             });
         }
 
         ui.add_space(14.0);
         egui::Frame::none()
-            .fill(Color32::from_rgb(7, 19, 32))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(24, 76, 106)))
+            .fill(PANEL)
+            .stroke(Stroke::new(1.0, BORDER))
             .rounding(8.0)
             .inner_margin(egui::Margin::symmetric(12.0, 10.0))
             .show(ui, |ui| {
@@ -472,7 +473,7 @@ impl VideoStickerEditor {
                         RichText::new("TRIM CLIP")
                             .strong()
                             .size(11.0)
-                            .color(Color32::from_rgb(72, 190, 218)),
+                            .color(CYAN),
                     );
                     ui.with_layout(
                         egui::Layout::right_to_left(egui::Align::Center),
@@ -484,7 +485,7 @@ impl VideoStickerEditor {
                                 ))
                                 .monospace()
                                 .size(11.0)
-                                .color(Color32::from_rgb(176, 196, 211)),
+                                .color(TEXT_SECONDARY),
                             );
                         },
                     );
@@ -497,22 +498,22 @@ impl VideoStickerEditor {
                         RichText::new(format!("IN  {}", time_label(self.start_ms)))
                             .monospace()
                             .size(11.0)
-                            .color(Color32::from_rgb(72, 190, 218)),
+                            .color(CYAN),
                     );
                     ui.separator();
                     ui.label(
                         RichText::new(format!("OUT  {}", time_label(self.end_ms)))
                             .monospace()
                             .size(11.0)
-                            .color(Color32::from_rgb(72, 190, 218)),
+                            .color(CYAN),
                     );
                 });
             });
 
         ui.add_space(10.0);
         egui::Frame::none()
-            .fill(Color32::from_rgb(7, 19, 32))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(24, 76, 106)))
+            .fill(PANEL)
+            .stroke(Stroke::new(1.0, BORDER))
             .rounding(8.0)
             .inner_margin(egui::Margin::symmetric(12.0, 10.0))
             .show(ui, |ui| {
@@ -521,7 +522,7 @@ impl VideoStickerEditor {
                     RichText::new("FRAME")
                         .strong()
                         .size(11.0)
-                        .color(Color32::from_rgb(72, 190, 218)),
+                        .color(CYAN),
                 );
                 ui.add_space(5.0);
                 let previous_fit = self.fit;
@@ -537,20 +538,20 @@ impl VideoStickerEditor {
                     ui.label(
                         RichText::new("Drag the square to move it. Drag any corner to resize it while keeping the square shape.")
                             .size(11.0)
-                            .color(Color32::from_rgb(150, 173, 191)),
+                            .color(TEXT_MUTED),
                     );
                 } else {
                     ui.label(
                         RichText::new("The entire source frame remains visible; empty space is transparent.")
                             .size(11.0)
-                            .color(Color32::from_rgb(150, 173, 191)),
+                            .color(TEXT_MUTED),
                     );
                 }
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new("Telegram constraints are checked on export: 3 seconds, 30 FPS, no audio, maximum 256 KB.")
                         .size(11.0)
-                        .color(Color32::from_rgb(150, 173, 191)),
+                        .color(TEXT_MUTED),
                 );
             });
     }
@@ -562,7 +563,7 @@ impl VideoStickerEditor {
             ui.horizontal(|ui| {
                 ui.add_space(((row_width - desired) * 0.5).max(0.0));
                 let (rect, _) = ui.allocate_exact_size(Vec2::splat(desired), Sense::hover());
-                ui.painter().rect_filled(rect, 8.0, Color32::from_rgb(5, 15, 26));
+                ui.painter().rect_filled(rect, 8.0, PREVIEW);
                 if let Some(texture) = self.playback_texture.as_ref() {
                     ui.painter().image(
                         texture.id(),
@@ -579,7 +580,7 @@ impl VideoStickerEditor {
                         egui::Align2::CENTER_CENTER,
                         "Starting preview…",
                         FontId::proportional(12.0),
-                        Color32::from_rgb(145, 169, 188),
+                        TEXT_MUTED,
                     );
                 }
             });
@@ -595,18 +596,18 @@ impl VideoStickerEditor {
                     Vec2::new(desired_width, 250.0),
                     Sense::hover(),
                 );
-                ui.painter().rect_filled(rect, 7.0, Color32::from_rgb(5, 15, 26));
+                ui.painter().rect_filled(rect, 7.0, PREVIEW);
                 ui.painter().text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
                     "Rendering preview frame…",
                     FontId::proportional(13.0),
-                    Color32::from_rgb(145, 169, 188),
+                    TEXT_MUTED,
                 );
             });
             if let Some(error) = &self.frame_error {
                 ui.vertical_centered(|ui| {
-                    ui.colored_label(Color32::from_rgb(239, 125, 139), error);
+                    ui.colored_label(RED, error);
                 });
             }
             return;
@@ -621,7 +622,7 @@ impl VideoStickerEditor {
         ui.horizontal(|ui| {
             ui.add_space(((row_width - display_size.x) * 0.5).max(0.0));
             let (image_rect, _) = ui.allocate_exact_size(display_size, Sense::hover());
-            ui.painter().rect_filled(image_rect, 5.0, Color32::from_rgb(5, 15, 26));
+            ui.painter().rect_filled(image_rect, 5.0, PREVIEW);
             ui.painter().image(
                 texture_id,
                 image_rect,
@@ -660,7 +661,7 @@ impl VideoStickerEditor {
                 ui.painter().rect_stroke(
                     crop,
                     2.0,
-                    Stroke::new(2.0, Color32::from_rgb(72, 190, 218)),
+                    Stroke::new(2.0, CYAN),
                 );
                 self.draw_crop_handles(ui, image_rect, crop, info);
             } else {
@@ -671,20 +672,20 @@ impl VideoStickerEditor {
                 ui.painter().rect_stroke(
                     fitted,
                     2.0,
-                    Stroke::new(2.0, Color32::from_rgb(72, 190, 218)),
+                    Stroke::new(2.0, CYAN),
                 );
                 ui.painter().text(
                     fitted.center(),
                     egui::Align2::CENTER_CENTER,
                     "FIT",
                     FontId::proportional(10.0),
-                    Color32::from_rgb(72, 190, 218),
+                    CYAN,
                 );
             }
         });
         if let Some(error) = &self.frame_error {
             ui.vertical_centered(|ui| {
-                ui.colored_label(Color32::from_rgb(239, 125, 139), error);
+                ui.colored_label(RED, error);
             });
         }
     }
@@ -721,7 +722,7 @@ impl VideoStickerEditor {
             ui.painter().rect_filled(
                 egui::Rect::from_center_size(point, Vec2::splat(10.0)),
                 2.0,
-                Color32::from_rgb(72, 190, 218),
+                CYAN,
             );
             ui.painter().rect_stroke(
                 egui::Rect::from_center_size(point, Vec2::splat(10.0)),
@@ -781,8 +782,8 @@ impl VideoStickerEditor {
 
     fn draw_timeline(&mut self, ui: &mut egui::Ui, info: VideoInfo) {
         egui::Frame::none()
-            .fill(Color32::from_rgb(6, 20, 34))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(24, 76, 106)))
+            .fill(INPUT)
+            .stroke(Stroke::new(1.0, BORDER))
             .rounding(7.0)
             .inner_margin(egui::Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
@@ -797,7 +798,7 @@ impl VideoStickerEditor {
                     let x = track_left + track_width * tick as f32 / 4.0;
                     ui.painter().line_segment(
                         [egui::pos2(x, ruler_y + 2.0), egui::pos2(x, ruler_y + 9.0)],
-                        Stroke::new(1.0, Color32::from_rgb(72, 100, 121)),
+                        Stroke::new(1.0, BORDER_MUTED),
                     );
                     let time = info.duration_ms.saturating_mul(tick) / 4;
                     ui.painter().text(
@@ -805,7 +806,7 @@ impl VideoStickerEditor {
                         if tick == 0 { egui::Align2::LEFT_BOTTOM } else if tick == 4 { egui::Align2::RIGHT_BOTTOM } else { egui::Align2::CENTER_BOTTOM },
                         time_label(time),
                         FontId::proportional(9.5),
-                        Color32::from_rgb(113, 143, 163),
+                        TEXT_MUTED,
                     );
                 }
 
@@ -813,29 +814,29 @@ impl VideoStickerEditor {
                     egui::pos2(track_left, rect.top() + 26.0),
                     egui::pos2(track_right, rect.top() + 43.0),
                 );
-                ui.painter().rect_filled(track, 4.0, Color32::from_rgb(21, 39, 54));
+                ui.painter().rect_filled(track, 4.0, CARD);
                 let selected = egui::Rect::from_min_max(
                     egui::pos2(x_at(self.start_ms), track.top()),
                     egui::pos2(x_at(self.end_ms), track.bottom()),
                 );
-                ui.painter().rect_filled(selected, 3.0, Color32::from_rgb(31, 112, 149));
-                ui.painter().rect_stroke(selected, 3.0, Stroke::new(1.0, Color32::from_rgb(99, 207, 234)));
+                ui.painter().rect_filled(selected, 3.0, BORDER);
+                ui.painter().rect_stroke(selected, 3.0, Stroke::new(1.0, CYAN_SOFT));
 
                 for x in [x_at(self.start_ms), x_at(self.end_ms)] {
                     ui.painter().line_segment(
                         [egui::pos2(x, track.top() - 5.0), egui::pos2(x, track.bottom() + 5.0)],
-                        Stroke::new(2.0, Color32::from_rgb(99, 207, 234)),
+                        Stroke::new(2.0, CYAN_SOFT),
                     );
-                    ui.painter().circle_filled(egui::pos2(x, track.center().y), 5.0, Color32::from_rgb(99, 207, 234));
+                    ui.painter().circle_filled(egui::pos2(x, track.center().y), 5.0, CYAN_SOFT);
                     ui.painter().circle_stroke(egui::pos2(x, track.center().y), 5.0, Stroke::new(1.0, Color32::WHITE));
                 }
 
                 let play_x = x_at(self.playhead_ms);
                 ui.painter().line_segment(
                     [egui::pos2(play_x, rect.top() + 12.0), egui::pos2(play_x, rect.bottom() - 3.0)],
-                    Stroke::new(2.0, Color32::from_rgb(247, 194, 95)),
+                    Stroke::new(2.0, WARNING),
                 );
-                ui.painter().circle_filled(egui::pos2(play_x, rect.top() + 13.0), 4.0, Color32::from_rgb(247, 194, 95));
+                ui.painter().circle_filled(egui::pos2(play_x, rect.top() + 13.0), 4.0, WARNING);
 
                 if response.drag_started() {
                     if let Some(pointer) = ui.input(|input| input.pointer.interact_pos()) {
