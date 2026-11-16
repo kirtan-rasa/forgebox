@@ -11,30 +11,36 @@ impl ForgeApp {
             .exact_width(sidebar_width)
             .resizable(false)
             .frame(egui::Frame::none().fill(PANEL)
-                .stroke(Stroke::new(1.0, Color32::from_rgb(23, 48, 67)))
+                .stroke(Stroke::new(1.0, BORDER_SUBTLE))
                 .inner_margin(egui::Margin { left: 10.0, right: 10.0, top: 12.0, bottom: 10.0 }))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.add_sized([25.0, 30.0], egui::Label::new(
                         RichText::new(glyph_text(self.icons_loaded, "󰉋")).font(icon_font(19.0)).color(CYAN)
                     ).selectable(false));
-                    ui.label(RichText::new("ForgeBox").font(egui::FontId::monospace(16.0)).strong().color(CYAN));
+                    ui.label(RichText::new("ForgeBox").font(egui::FontId::proportional(17.0)).strong().color(CYAN));
                 });
                 ui.add_space(12.0);
                 ui.separator();
                 ui.add_space(8.0);
 
-                // Search is a quiet text row, not a floating card.
-                ui.horizontal(|ui| {
-                    ui.add_sized([18.0, 25.0], egui::Label::new(
-                        RichText::new(glyph_text(self.icons_loaded, "󰍉")).font(icon_font(13.0)).color(MUTED)
-                    ).selectable(false));
-                    ui.add(egui::TextEdit::singleline(&mut self.search).frame(false)
-                        .margin(egui::Margin::symmetric(2.0, 3.0))
-                        .hint_text(RichText::new("Search tools").size(12.0).color(MUTED))
-                        .desired_width(ui.available_width()));
-                });
-                ui.separator();
+                // Search follows the same restrained outlined-field treatment as the workspace.
+                egui::Frame::none()
+                    .fill(INPUT)
+                    .stroke(Stroke::new(1.0, BORDER))
+                    .rounding(5.0)
+                    .inner_margin(egui::Margin::symmetric(7.0, 3.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.add_sized([18.0, 25.0], egui::Label::new(
+                                RichText::new(glyph_text(self.icons_loaded, "󰍉")).font(icon_font(13.0)).color(MUTED)
+                            ).selectable(false));
+                            ui.add(egui::TextEdit::singleline(&mut self.search).frame(false)
+                                .margin(egui::Margin::symmetric(2.0, 3.0))
+                                .hint_text(RichText::new("Search tools").size(12.0).color(MUTED))
+                                .desired_width(ui.available_width()));
+                        });
+                    });
                 ui.add_space(8.0);
 
                 ui.label(RichText::new("CATEGORIES").font(egui::FontId::monospace(9.5)).color(MUTED));
@@ -74,17 +80,17 @@ impl ForgeApp {
                             egui::Sense::click(),
                         );
                         if selected {
-                            ui.painter().rect_filled(rect, 3.0, Color32::from_rgb(12, 37, 56));
+                            ui.painter().rect_filled(rect, 3.0, ACTIVE_BG);
                             ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, Vec2::new(2.0, rect.height())), 1.0, ACCENT);
                         } else if response.hovered() {
-                            ui.painter().rect_filled(rect, 3.0, Color32::from_rgb(11, 29, 44));
+                            ui.painter().rect_filled(rect, 3.0, HOVER_BG);
                         }
                         ui.painter().text(rect.left_center() + Vec2::new(13.0, 0.0), egui::Align2::LEFT_CENTER,
                             glyph_text(self.icons_loaded, tool.glyph), icon_font(14.0),
-                            if selected { CYAN } else { Color32::from_rgb(83, 145, 177) });
+                            if selected { CYAN } else { MUTED });
                         ui.painter().text(rect.left_center() + Vec2::new(37.0, 0.0), egui::Align2::LEFT_CENTER,
-                            tool.name, egui::FontId::monospace(11.5),
-                            if selected { TEXT } else { Color32::from_rgb(151, 194, 218) });
+                            tool.name, egui::FontId::proportional(12.5),
+                            if selected { TEXT } else { TEXT_SECONDARY });
                         if response.clicked() && !self.running && !self.dialog_open {
                             self.select_tool(tool.id);
                         }
