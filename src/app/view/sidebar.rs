@@ -3,7 +3,7 @@ use super::super::theme::*;
 use super::icons::{glyph_text, icon_font};
 use super::widgets::nav_button;
 use crate::catalog::{Category, TOOLS};
-use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
+use eframe::egui::{self, RichText, Stroke, Vec2};
 
 impl ForgeApp {
     pub(super) fn render_sidebar(&mut self, ctx: &egui::Context, sidebar_width: f32, compact_ui: bool) {
@@ -11,7 +11,7 @@ impl ForgeApp {
             .exact_width(sidebar_width)
             .resizable(false)
             .frame(egui::Frame::none().fill(PANEL)
-                .stroke(Stroke::new(1.0, BORDER_SUBTLE))
+                .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
                 .inner_margin(egui::Margin { left: 10.0, right: 10.0, top: 12.0, bottom: 10.0 }))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -27,7 +27,7 @@ impl ForgeApp {
                 // Search follows the same restrained outlined-field treatment as the workspace.
                 egui::Frame::none()
                     .fill(INPUT)
-                    .stroke(Stroke::new(1.0, BORDER))
+                    .stroke(Stroke::new(1.0_f32, BORDER))
                     .rounding(5.0)
                     .inner_margin(egui::Margin::symmetric(7.0, 3.0))
                     .show(ui, |ui| {
