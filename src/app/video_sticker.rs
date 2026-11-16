@@ -827,12 +827,14 @@ impl VideoStickerEditor {
                         let start_distance = (pointer.x - start_x).abs();
                         let end_distance = (pointer.x - end_x).abs();
                         let playhead_distance = (pointer.x - play_x).abs();
-                        self.timeline_drag = Some(if playhead_distance <= 8.0 {
-                            TimelineDrag::Playhead
-                        } else if start_distance <= 14.0 && start_distance <= end_distance {
+                        // Trim handles take priority over the playhead when they overlap,
+                        // which happens at the start of a newly loaded clip (time = 0).
+                        self.timeline_drag = Some(if start_distance <= 14.0 && start_distance <= end_distance {
                             TimelineDrag::Start
                         } else if end_distance <= 14.0 {
                             TimelineDrag::End
+                        } else if playhead_distance <= 8.0 {
+                            TimelineDrag::Playhead
                         } else if pointer.x > start_x && pointer.x < end_x {
                             TimelineDrag::Selection { pointer_anchor_ms: value, start_ms: self.start_ms, end_ms: self.end_ms }
                         } else {
