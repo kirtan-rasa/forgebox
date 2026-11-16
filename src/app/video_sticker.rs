@@ -99,6 +99,7 @@ pub(super) struct VideoStickerEditor {
     playback_generation: u64,
     preview_generation: u64,
     is_playing: bool,
+    show_sticker_preview: bool,
 }
 
 impl Default for VideoStickerEditor {
@@ -134,6 +135,7 @@ impl Default for VideoStickerEditor {
             playback_generation: 0,
             preview_generation: 0,
             is_playing: false,
+            show_sticker_preview: false,
         }
     }
 }
@@ -165,6 +167,7 @@ impl VideoStickerEditor {
         self.metadata_pending = None;
         self.frame_pending = None;
         self.timeline_drag = None;
+        self.show_sticker_preview = false;
         if let Some(path) = path {
             self.metadata_pending = Some(path.clone());
             let tx = self.tx.clone();
@@ -324,6 +327,7 @@ impl VideoStickerEditor {
     fn start_playback(&mut self) {
         if self.playback_worker.is_some() { return; }
         let (Some(path), Some(info)) = (self.path.clone(), self.info) else { return; };
+        self.show_sticker_preview = false;
 
         // Playback is for inspecting the original clip, not rendering the
         // sticker crop. The playhead spans the complete source duration.
@@ -447,7 +451,7 @@ impl VideoStickerEditor {
         }
 
         ui.add_space(9.0);
-        let controls_width = 300.0_f32.min(ui.available_width());
+        let controls_width = 420.0_f32.min(ui.available_width());
         ui.horizontal(|ui| {
             let row_width = ui.available_width();
             ui.add_space(((row_width - controls_width) * 0.5).max(0.0));
@@ -464,7 +468,7 @@ impl VideoStickerEditor {
                 .add_enabled(
                     enabled,
                     egui::Button::new(RichText::new(label).strong())
-                        .min_size(Vec2::new(132.0, 34.0))
+                        .min_size(Vec2::new(136.0, 36.0))
                         .fill(ACCENT),
                 )
                 .clicked()
@@ -473,6 +477,20 @@ impl VideoStickerEditor {
                     self.stop_playback();
                 } else {
                     self.start_playback();
+                }
+            }
+            ui.add_space(8.0);
+            let preview_label = if self.show_sticker_preview { "Source" } else { "Preview sticker" };
+            if ui.add_enabled(
+                self.playback_worker.is_none() && !self.is_playing,
+                egui::Button::new(RichText::new(preview_label).strong())
+                    .min_size(Vec2::new(136.0, 36.0))
+                    .fill(if self.show_sticker_preview { CARD } else { ACTIVE_BG }),
+            ).clicked() {
+                self.show_sticker_preview = !self.show_sticker_preview;
+                if self.show_sticker_preview {
+                    self.playhead_ms = self.playhead_ms.clamp(self.start_ms, self.end_ms.saturating_sub(1));
+                    self.texture_time = None;
                 }
             }
             ui.label(
@@ -585,80 +603,37 @@ impl VideoStickerEditor {
     }
 
     fn draw_preview(&mut self, ui: &mut egui::Ui, info: VideoInfo) {
-        let texture_data = if self.is_playing {
-            self.playback_texture.as_ref()
-        } else {
-            self.texture.as_ref()
-        }.map(|texture| (texture.id(), texture.size_vec2()));
-
+        if self.show_sticker_preview {
+            self.draw_sticker_preview(ui, info);
+            return;
+        }
+    fn draw_sticker_preview(&mut self, ui: &mut egui::Ui, info: VideoInfo) {
+        let texture_data = self.texture.as_ref().map(|texture| (texture.id(), texture.size_vec2()));
+        let side = ui.available_width().min(420.0).min(370.0);
+        let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
+        ui.painter().rect_filled(rect, 8.0, Color32::BLACK);
         let Some((texture_id, source_size)) = texture_data else {
-            let (preview_width, preview_height) = playback_dimensions(info);
-            let max_width = ui.available_width().min(680.0);
-            let scale = (max_width / preview_width as f32).min(370.0 / preview_height as f32);
-            let display_size = Vec2::new(preview_width as f32, preview_height as f32) * scale;
-            let row_width = ui.available_width();
-            ui.horizontal(|ui| {
-                ui.add_space(((row_width - display_size.x) * 0.5).max(0.0));
-                let (rect, _) = ui.allocate_exact_size(display_size, Sense::hover());
-                ui.painter().rect_filled(rect, 7.0, PREVIEW);
-                ui.painter().text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    if self.is_playing { "Starting playback…" } else { "Loading source frame…" },
-                    FontId::proportional(13.0),
-                    TEXT_MUTED,
-                );
-            });
-            if !self.is_playing {
-                if let Some(error) = &self.frame_error {
-                    ui.vertical_centered(|ui| { ui.colored_label(RED, error); });
-                }
-            }
+            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Loading sticker preview…", FontId::proportional(13.0), TEXT_MUTED);
             return;
         };
-
-        let max_width = ui.available_width().min(680.0);
-        let scale = (max_width / source_size.x).min(370.0 / source_size.y);
-        let display_size = source_size * scale;
-        let row_width = ui.available_width();
-        ui.horizontal(|ui| {
-            ui.add_space(((row_width - display_size.x) * 0.5).max(0.0));
-            let (image_rect, _) = ui.allocate_exact_size(display_size, Sense::hover());
-            ui.painter().rect_filled(image_rect, 5.0, PREVIEW);
-            ui.painter().image(
-                texture_id,
-                image_rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                Color32::WHITE,
+        if self.fit == VideoStickerFit::Crop {
+            let source_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, source_size);
+            let crop = crop_rect_for_preview(info, source_rect, self.left, self.top, self.zoom);
+            let uv = egui::Rect::from_min_max(
+                egui::pos2(crop.left() / source_size.x, crop.top() / source_size.y),
+                egui::pos2(crop.right() / source_size.x, crop.bottom() / source_size.y),
             );
-
-            if self.fit == VideoStickerFit::Crop {
-                let crop = crop_rect_for_preview(info, image_rect, self.left, self.top, self.zoom);
-                let shade = Color32::from_black_alpha(145);
-                for r in [
-                    egui::Rect::from_min_max(image_rect.min, egui::pos2(image_rect.right(), crop.top())),
-                    egui::Rect::from_min_max(egui::pos2(image_rect.left(), crop.bottom()), image_rect.max),
-                    egui::Rect::from_min_max(egui::pos2(image_rect.left(), crop.top()), egui::pos2(crop.left(), crop.bottom())),
-                    egui::Rect::from_min_max(egui::pos2(crop.right(), crop.top()), egui::pos2(image_rect.right(), crop.bottom())),
-                ] {
-                    if r.is_positive() { ui.painter().rect_filled(r, 0.0, shade); }
-                }
-                ui.painter().rect_stroke(crop, 2.0, Stroke::new(2.0_f32, CYAN));
-                self.draw_crop_handles(ui, image_rect, crop, info);
-            } else {
-                let fitted = egui::Rect::from_center_size(
-                    image_rect.center(),
-                    Vec2::splat(image_rect.width().min(image_rect.height())),
-                );
-                ui.painter().rect_stroke(fitted, 2.0, Stroke::new(2.0_f32, CYAN));
-                ui.painter().text(fitted.center(), egui::Align2::CENTER_CENTER, "FIT", FontId::proportional(10.0), CYAN);
-            }
-        });
-        if !self.is_playing {
-            if let Some(error) = &self.frame_error {
-                ui.vertical_centered(|ui| { ui.colored_label(RED, error); });
-            }
+            ui.painter().image(texture_id, rect, uv, Color32::WHITE);
+        } else {
+            let scale = (side / source_size.x).min(side / source_size.y);
+            let fitted = source_size * scale;
+            let image_rect = egui::Rect::from_center_size(rect.center(), fitted);
+            ui.painter().image(texture_id, image_rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
         }
+        ui.painter().rect_stroke(rect, 8.0, Stroke::new(1.0_f32, BORDER));
+        ui.painter().text(egui::pos2(rect.center().x, rect.bottom() - 9.0), egui::Align2::CENTER_BOTTOM,
+            format!("Sticker preview · {}", time_label(self.playhead_ms)), FontId::proportional(10.5), Color32::from_white_alpha(190));
     }
 
     fn draw_crop_handles(&mut self, ui: &mut egui::Ui, image_rect: egui::Rect, crop: egui::Rect, info: VideoInfo) {

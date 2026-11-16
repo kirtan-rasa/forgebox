@@ -44,23 +44,15 @@ pub(super) fn reorder_arrow_button(ui: &mut egui::Ui, enabled: bool, up: bool, t
     response.on_hover_text(tooltip).clicked()
 }
 
-pub(super) fn circular_nav_button(ui: &mut egui::Ui, enabled: bool, right: bool, tooltip: &str) -> bool {
+pub(super) fn square_nav_button(ui: &mut egui::Ui, enabled: bool, right: bool, tooltip: &str) -> bool {
     let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(34.0), sense);
     let center = rect.center();
-    let fill = if !enabled {
-        DISABLED_BG
-    } else if response.is_pointer_button_down_on() {
-        ACTIVE_BG
-    } else if response.hovered() {
-        HOVER_BG
-    } else {
-        CARD
-    };
+    let fill = if !enabled { DISABLED_BG } else if response.is_pointer_button_down_on() { ACTIVE_BG } else if response.hovered() { HOVER_BG } else { CARD };
     let border = if response.hovered() && enabled { ACCENT } else { BORDER };
     let glyph = if enabled { TEXT } else { MUTED };
-    ui.painter().circle_filled(center, 17.0, fill);
-    ui.painter().circle_stroke(center, 17.0, Stroke::new(1.0_f32, border));
+    ui.painter().rect_filled(rect, 5.0, fill);
+    ui.painter().rect_stroke(rect, 5.0, Stroke::new(1.0_f32, border));
     let direction = if right { 1.0 } else { -1.0 };
     let tip = center + Vec2::new(direction * 4.0, 0.0);
     let upper = center + Vec2::new(-direction * 3.5, -5.0);
@@ -90,7 +82,7 @@ pub(super) fn section_header(ui: &mut egui::Ui, number: &str, title: &str, subti
 }
 
 pub(super) fn nav_button(ui: &mut egui::Ui, glyph: &str, label: &str, active: bool, icons_loaded: bool) -> bool {
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 29.0), egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 32.0), egui::Sense::click());
     if active {
         ui.painter().rect_filled(rect, 3.0, ACTIVE_BG);
         ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, Vec2::new(2.0, rect.height())), 1.0, ACCENT);
@@ -98,10 +90,10 @@ pub(super) fn nav_button(ui: &mut egui::Ui, glyph: &str, label: &str, active: bo
         ui.painter().rect_filled(rect, 3.0, HOVER_BG);
     }
     ui.painter().text(rect.left_center() + Vec2::new(12.0, 0.0), egui::Align2::LEFT_CENTER,
-        glyph_text(icons_loaded, glyph), icon_font(13.0),
+        glyph_text(icons_loaded, glyph), icon_font(14.0),
         if active { CYAN } else { MUTED });
     ui.painter().text(rect.left_center() + Vec2::new(34.0, 0.0), egui::Align2::LEFT_CENTER,
-        label, egui::FontId::proportional(12.5),
+        label, egui::FontId::proportional(13.5),
         if active { TEXT } else { TEXT_SECONDARY });
     response.clicked()
 }

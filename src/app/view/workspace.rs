@@ -3,7 +3,7 @@ use super::super::theme::*;
 use super::files::{file_glyph, reorder_item, reorder_item_to_index};
 use super::icons::{glyph_text, icon_font};
 use super::parameters::parameter_ui;
-use super::widgets::{circular_nav_button, paint_check_mark, reorder_arrow_button, section_header};
+use super::widgets::{square_nav_button, paint_check_mark, reorder_arrow_button, section_header};
 use crate::catalog::{info, ToolId};
 use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Stroke, Vec2};
 use std::path::PathBuf;
@@ -86,10 +86,10 @@ impl ForgeApp {
                     let small_controls = compact_ui || full_width < 680.0;
                     // Preserve full step names on narrow layouts by placing navigation
                     // on a separate row instead of crushing the progress buttons.
-                    let controls_width = 76.0;
+                    let controls_width = 82.0;
                     // Allocate the whole row, then position the stepper and navigation
                     // explicitly. No implicit horizontal spacing can push Back/Next inward.
-                    let nav_gap = 16.0_f32;
+                    let nav_gap = 22.0_f32;
                     let flow_width = (full_width - controls_width - nav_gap).max(0.0);
                     // Hide labels only when the stepper itself has too little room.
                     // This keeps numbered steps readable instead of squeezing their captions.
@@ -143,7 +143,7 @@ impl ForgeApp {
                                 let edge = Color32::TRANSPARENT;
                                 // Keep completion marks independent of fonts; some systems render ✓ as a missing-glyph square.
                                 let caption = if show_step_labels {
-                                    if complete { label.to_owned() } else { format!("{}  {label}", visible_index + 1) }
+                                    format!("{}  {label}", visible_index + 1)
                                 } else {
                                     (visible_index + 1).to_string()
                                 };
@@ -153,14 +153,6 @@ impl ForgeApp {
                                         .fill(fill)
                                         .stroke(Stroke::new(1.0_f32, edge)),
                                 );
-                                if complete && show_step_labels {
-                                    paint_check_mark(
-                                        ui.painter(),
-                                        egui::pos2(step_response.rect.left() + 14.0, step_response.rect.center().y),
-                                        1.7,
-                                        TEXT,
-                                    );
-                                }
                                 if visible_index + 1 < visible_steps.len() {
                                     let arrow_color = if current_index > visible_index { GREEN } else { BORDER };
                                     let (rect, _) = ui.allocate_exact_size(Vec2::new(arrow_width, 24.0), egui::Sense::hover());
@@ -188,13 +180,13 @@ impl ForgeApp {
                             let current_index = visible_steps.iter().position(|step_id| *step_id == self.wizard_step).unwrap_or(0);
                             let back_enabled = current_index > 0 && !self.running;
                             let next_enabled = current_index + 1 < visible_steps.len() && can_next && !self.running;
-                            if circular_nav_button(ui, next_enabled, true, "Next step") {
+                            if square_nav_button(ui, next_enabled, true, "Next step") {
                                 if let Some(next_step) = visible_steps.get(current_index + 1) {
                                     self.wizard_step = *next_step;
                                 }
                             }
-                            ui.add_space(6.0);
-                            if circular_nav_button(ui, back_enabled, false, "Previous step") {
+                            ui.add_space(12.0);
+                            if square_nav_button(ui, back_enabled, false, "Previous step") {
                                 if current_index > 0 {
                                     self.wizard_step = visible_steps[current_index - 1];
                                 }
