@@ -147,7 +147,7 @@ impl ForgeApp {
                                 } else {
                                     (visible_index + 1).to_string()
                                 };
-                                let step_response = ui.add_sized(
+                                ui.add_sized(
                                     [node_width(step_id), 34.0],
                                     egui::Button::new(RichText::new(caption).font(egui::FontId::monospace(if small_controls { 10.5 } else { 11.5 })).strong().color(if active { CYAN } else if complete { GREEN } else { MUTED }))
                                         .fill(fill)
