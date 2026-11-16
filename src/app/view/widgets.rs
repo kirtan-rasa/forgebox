@@ -76,7 +76,9 @@ pub(super) fn section_header(ui: &mut egui::Ui, number: &str, title: &str, subti
         ui.add_sized([32.0, 28.0], egui::Label::new(RichText::new(number).font(FontId::monospace(11.0)).strong().color(CYAN)).selectable(false));
         ui.vertical(|ui| {
             ui.label(RichText::new(title).size(16.5).strong());
-            ui.label(RichText::new(subtitle).size(12.0).color(MUTED));
+            if !subtitle.is_empty() {
+                ui.label(RichText::new(subtitle).size(12.0).color(MUTED));
+            }
         });
     });
 }
