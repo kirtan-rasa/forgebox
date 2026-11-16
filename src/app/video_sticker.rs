@@ -235,6 +235,9 @@ impl VideoStickerEditor {
                 PlaybackMessage::Finished { generation } if generation == self.playback_generation => {
                     self.is_playing = false;
                     self.playback_texture = None;
+                    if let Some(info) = self.info {
+                        self.playhead_ms = info.duration_ms.saturating_sub(1);
+                    }
                 }
                 PlaybackMessage::Error { generation, message } if generation == self.playback_generation => {
                     self.is_playing = false;
@@ -251,6 +254,9 @@ impl VideoStickerEditor {
             if self.is_playing {
                 self.is_playing = false;
                 self.playback_texture = None;
+                if let Some(info) = self.info {
+                    self.playhead_ms = info.duration_ms.saturating_sub(1);
+                }
             }
         }
 
@@ -264,7 +270,7 @@ impl VideoStickerEditor {
             }
         }
 
-        if !self.is_playing {
+        if !self.is_playing && self.playback_worker.is_none() {
             if let (Some(path), Some(info)) = (self.path.clone(), self.info) {
                 if self.frame_pending.is_none() && self.texture_time != Some(self.playhead_ms) {
                     let at = self.playhead_ms.min(info.duration_ms.saturating_sub(1));
@@ -451,7 +457,7 @@ impl VideoStickerEditor {
             } else if self.playback_worker.is_some() {
                 "Stopping…"
             } else {
-                "▶  Play preview"
+                "▶  Play source"
             };
             let enabled = self.is_playing || can_start;
             if ui
