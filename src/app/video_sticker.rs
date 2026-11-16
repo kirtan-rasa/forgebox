@@ -1149,7 +1149,6 @@ fn time_label(ms: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::{crop_rect_for_preview, VideoInfo};
-    use crate::engine::VideoStickerFit;
     use eframe::egui;
 
     #[test]
