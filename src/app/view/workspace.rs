@@ -627,7 +627,7 @@ impl ForgeApp {
                     }
                     1 => {
                         if self.selected_tool == ToolId::VideoSticker {
-                            section_header(ui, "02", "Edit video sticker", "Trim the clip and position the square frame");
+                            section_header(ui, "02", "Edit video sticker", "");
                         } else {
                             section_header(ui, "02", "Configure task", "Only options relevant to the selected tool");
                         }
