@@ -459,7 +459,7 @@ impl VideoStickerEditor {
                     let button_width = ((left.available_width() - 16.0) * 0.5).max(1.0);
                     left.horizontal(|left| {
                         let source_active = self.is_playing && !self.show_sticker_preview;
-                        let sticker_active = self.is_playing && self.show_sticker_preview;
+                        let sticker_active = (self.is_playing || self.playback_restart_pending) && self.show_sticker_preview;
                         let worker_busy = self.playback_worker.is_some();
                         let source_label = if source_active { "Ⅱ  Pause source" } else if worker_busy && !source_active { "Stopping…" } else { "▶  Play source" };
                         if left.add_enabled(
@@ -524,6 +524,7 @@ impl VideoStickerEditor {
                                 right.label(RichText::new(format!("OUT  {}", time_label(self.end_ms))).monospace().size(10.5).color(CYAN));
                             });
                         });
+                        right.label(RichText::new(format!("PLAYHEAD  {}", time_label(self.playhead_ms))).monospace().size(10.0).color(TEXT_MUTED));
                         right.add_space(9.0);
                         right.separator();
                         right.add_space(7.0);
