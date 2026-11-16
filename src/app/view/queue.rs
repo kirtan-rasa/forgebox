@@ -1,6 +1,7 @@
 use super::super::{ForgeApp, QueueStatus};
 use crate::catalog::ToolId;
 use super::widgets::reorder_arrow_button;
+use super::super::theme::*;
 use eframe::egui::{self, Color32, RichText};
 
 impl ForgeApp {
@@ -12,7 +13,7 @@ impl ForgeApp {
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("Task queue").strong().size(13.0));
-            ui.label(RichText::new(format!("{} task(s)", self.queue.len())).size(11.0).color(Color32::GRAY));
+            ui.label(RichText::new(format!("{} task(s)", self.queue.len())).size(11.0).color(MUTED));
         });
         ui.add_space(6.0);
 
@@ -20,11 +21,11 @@ impl ForgeApp {
         let mut move_request = None;
         for (index, entry) in self.queue.iter().enumerate() {
             let (label, tint) = match entry.status {
-                QueueStatus::Pending => ("Queued", Color32::from_rgb(145, 164, 180)),
-                QueueStatus::Running => ("Running", Color32::from_rgb(70, 180, 220)),
-                QueueStatus::Completed => ("Done", Color32::from_rgb(80, 190, 145)),
-                QueueStatus::Failed => ("Failed", Color32::from_rgb(220, 100, 120)),
-                QueueStatus::Cancelled => ("Cancelled", Color32::from_rgb(190, 150, 90)),
+                QueueStatus::Pending => ("Queued", MUTED),
+                QueueStatus::Running => ("Running", CYAN),
+                QueueStatus::Completed => ("Done", GREEN),
+                QueueStatus::Failed => ("Failed", RED),
+                QueueStatus::Cancelled => ("Cancelled", WARNING),
             };
 
             egui::Frame::none()
@@ -42,7 +43,7 @@ impl ForgeApp {
                             } else {
                                 format!("{} input files", entry.file_count)
                             };
-                            ui.label(RichText::new(entry.summary.as_deref().unwrap_or(&input_label)).size(10.5).color(Color32::GRAY));
+                            ui.label(RichText::new(entry.summary.as_deref().unwrap_or(&input_label)).size(10.5).color(MUTED));
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(RichText::new(label).size(10.5).color(tint));
@@ -71,7 +72,7 @@ impl ForgeApp {
             if ui.add_sized(
                 [ui.available_width(), 40.0],
                 egui::Button::new(RichText::new(format!("▶  Run queue ({pending_count})")).strong())
-                    .fill(Color32::from_rgb(15, 73, 85)),
+                    .fill(ACCENT),
             ).clicked() {
                 self.start_queue();
             }
@@ -84,7 +85,7 @@ impl ForgeApp {
                     self.clear_queue();
                 }
                 if self.queue.iter().any(|entry| entry.status == QueueStatus::Pending) {
-                    ui.label(RichText::new("Tasks run in order. Failed tasks do not stop the rest of the queue.").size(10.5).color(Color32::GRAY));
+                    ui.label(RichText::new("Tasks run in order. Failed tasks do not stop the rest of the queue.").size(10.5).color(MUTED));
                 }
             });
         }
