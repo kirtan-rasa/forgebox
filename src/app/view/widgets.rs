@@ -46,7 +46,7 @@ pub(super) fn reorder_arrow_button(ui: &mut egui::Ui, enabled: bool, up: bool, t
 
 pub(super) fn square_nav_button(ui: &mut egui::Ui, enabled: bool, right: bool, tooltip: &str) -> bool {
     let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(34.0), sense);
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(36.0), sense);
     let center = rect.center();
     let fill = if !enabled { DISABLED_BG } else if response.is_pointer_button_down_on() { ACTIVE_BG } else if response.hovered() { HOVER_BG } else { CARD };
     let border = if response.hovered() && enabled { ACCENT } else { BORDER };

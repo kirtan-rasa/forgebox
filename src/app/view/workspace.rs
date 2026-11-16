@@ -86,10 +86,10 @@ impl ForgeApp {
                     let small_controls = compact_ui || full_width < 680.0;
                     // Preserve full step names on narrow layouts by placing navigation
                     // on a separate row instead of crushing the progress buttons.
-                    let controls_width = 82.0;
+                    let controls_width = 96.0;
                     // Allocate the whole row, then position the stepper and navigation
                     // explicitly. No implicit horizontal spacing can push Back/Next inward.
-                    let nav_gap = 22.0_f32;
+                    let nav_gap = 34.0_f32;
                     let flow_width = (full_width - controls_width - nav_gap).max(0.0);
                     // Hide labels only when the stepper itself has too little room.
                     // This keeps numbered steps readable instead of squeezing their captions.
@@ -185,7 +185,7 @@ impl ForgeApp {
                                     self.wizard_step = *next_step;
                                 }
                             }
-                            ui.add_space(12.0);
+                            ui.add_space(14.0);
                             if square_nav_button(ui, back_enabled, false, "Previous step") {
                                 if current_index > 0 {
                                     self.wizard_step = visible_steps[current_index - 1];

@@ -13,6 +13,7 @@ use std::time::Duration;
 
 const PLAYBACK_MAX_SIDE: u32 = 512;
 const PLAYBACK_FPS: u32 = 24;
+const STICKER_PREVIEW_FPS: u32 = 30;
 const CROP_HANDLE_SIZE: f32 = 22.0;
 
 #[derive(Clone, Copy)]
@@ -79,7 +80,6 @@ pub(super) struct VideoStickerEditor {
     start_ms: u32,
     end_ms: u32,
     playhead_ms: u32,
-    fit: VideoStickerFit,
     left: u16,
     top: u16,
     zoom: f32,
@@ -100,6 +100,8 @@ pub(super) struct VideoStickerEditor {
     preview_generation: u64,
     is_playing: bool,
     show_sticker_preview: bool,
+    playback_is_sticker: bool,
+    playback_restart_pending: bool,
 }
 
 impl Default for VideoStickerEditor {
@@ -115,7 +117,6 @@ impl Default for VideoStickerEditor {
             start_ms: 0,
             end_ms: 0,
             playhead_ms: 0,
-            fit: VideoStickerFit::Crop,
             left: 500,
             top: 500,
             zoom: 1.0,
@@ -136,6 +137,8 @@ impl Default for VideoStickerEditor {
             preview_generation: 0,
             is_playing: false,
             show_sticker_preview: false,
+            playback_is_sticker: false,
+            playback_restart_pending: false,
         }
     }
 }
@@ -157,7 +160,6 @@ impl VideoStickerEditor {
         self.start_ms = 0;
         self.end_ms = 0;
         self.playhead_ms = 0;
-        self.fit = VideoStickerFit::Crop;
         self.left = 500;
         self.top = 500;
         self.zoom = 1.0;
@@ -168,6 +170,8 @@ impl VideoStickerEditor {
         self.frame_pending = None;
         self.timeline_drag = None;
         self.show_sticker_preview = false;
+        self.playback_is_sticker = false;
+        self.playback_restart_pending = false;
         if let Some(path) = path {
             self.metadata_pending = Some(path.clone());
             let tx = self.tx.clone();
@@ -222,7 +226,7 @@ impl VideoStickerEditor {
             match message {
                 PlaybackMessage::Frame { generation, time_ms, pixels } if generation == self.playback_generation && self.is_playing => {
                     if let Some(info) = self.info {
-                        let (width, height) = playback_dimensions(info);
+                        let (width, height) = if self.playback_is_sticker { (512, 512) } else { playback_dimensions(info) };
                         let image = egui::ColorImage::from_rgba_unmultiplied(
                             [width as usize, height as usize],
                             &pixels,
@@ -237,13 +241,19 @@ impl VideoStickerEditor {
                 }
                 PlaybackMessage::Finished { generation } if generation == self.playback_generation => {
                     self.is_playing = false;
-                    self.playback_texture = None;
-                    if let Some(info) = self.info {
-                        self.playhead_ms = info.duration_ms.saturating_sub(1);
+                    if self.playback_is_sticker {
+                        self.playhead_ms = self.start_ms;
+                        self.playback_restart_pending = true;
+                    } else {
+                        self.playback_texture = None;
+                        if let Some(info) = self.info {
+                            self.playhead_ms = info.duration_ms.saturating_sub(1);
+                        }
                     }
                 }
                 PlaybackMessage::Error { generation, message } if generation == self.playback_generation => {
                     self.is_playing = false;
+                    self.playback_restart_pending = false;
                     self.playback_texture = None;
                     self.playback_error = Some(message);
                 }
@@ -256,10 +266,16 @@ impl VideoStickerEditor {
             self.playback_control = None;
             if self.is_playing {
                 self.is_playing = false;
+                self.playback_restart_pending = false;
                 self.playback_texture = None;
                 if let Some(info) = self.info {
                     self.playhead_ms = info.duration_ms.saturating_sub(1);
                 }
+            }
+            let restart_sticker = self.playback_restart_pending && self.show_sticker_preview;
+            self.playback_restart_pending = false;
+            if restart_sticker {
+                self.start_playback();
             }
         }
 
@@ -307,7 +323,7 @@ impl VideoStickerEditor {
         Ok(JobOptions::VideoSticker {
             start_ms: self.start_ms,
             end_ms: self.end_ms,
-            fit: self.fit,
+            fit: VideoStickerFit::Crop,
             crop_left: self.left,
             crop_top: self.top,
             zoom_milli: (self.zoom.clamp(1.0, 4.0) * 1_000.0).round() as u16,
@@ -316,6 +332,7 @@ impl VideoStickerEditor {
 
     fn stop_playback(&mut self) {
         self.is_playing = false;
+        self.playback_restart_pending = false;
         if let Some(control) = &self.playback_control {
             control.stop.store(true, Ordering::Relaxed);
             let pid = control.pid.load(Ordering::Relaxed);
@@ -324,38 +341,54 @@ impl VideoStickerEditor {
         self.playback_texture = None;
     }
 
+    fn pause_playback(&mut self) {
+        self.is_playing = false;
+        self.playback_restart_pending = false;
+        if let Some(control) = &self.playback_control {
+            control.stop.store(true, Ordering::Relaxed);
+            let pid = control.pid.load(Ordering::Relaxed);
+            if pid > 0 { terminate_preview_process(pid); }
+        }
+    }
+
     fn start_playback(&mut self) {
         if self.playback_worker.is_some() { return; }
         let (Some(path), Some(info)) = (self.path.clone(), self.info) else { return; };
-        self.show_sticker_preview = false;
-
-        // Playback is for inspecting the original clip, not rendering the
-        // sticker crop. The playhead spans the complete source duration.
-        if self.playhead_ms >= info.duration_ms.saturating_sub(1) {
-            self.playhead_ms = 0;
+        let sticker_mode = self.show_sticker_preview;
+        let (width, height, fps, start_ms, duration_ms, filter) = if sticker_mode {
+            let start_ms = if self.playhead_ms < self.start_ms || self.playhead_ms >= self.end_ms {
+                self.start_ms
+            } else {
+                self.playhead_ms
+            };
+            let duration_ms = self.end_ms.saturating_sub(start_ms);
+            if duration_ms == 0 { return; }
+            let filter = sticker_preview_filter(info, self.left, self.top, self.zoom);
+            (512, 512, STICKER_PREVIEW_FPS, start_ms, duration_ms, filter)
+        } else {
+            if self.playhead_ms >= info.duration_ms.saturating_sub(1) { self.playhead_ms = 0; }
+            let duration_ms = info.duration_ms.saturating_sub(self.playhead_ms);
+            if duration_ms == 0 { return; }
+            let (width, height) = playback_dimensions(info);
+            let filter = source_playback_filter(width, height, PLAYBACK_FPS);
+            (width, height, PLAYBACK_FPS, self.playhead_ms, duration_ms, filter)
+        };
+        self.playback_is_sticker = sticker_mode;
+        self.playback_restart_pending = false;
+        if self.playback_texture.is_some() && !sticker_mode {
+            self.playback_texture = None;
         }
-        let duration_ms = info.duration_ms.saturating_sub(self.playhead_ms);
-        if duration_ms == 0 { return; }
-
-        // Invalidate an outstanding still-frame request before streaming source frames.
-        self.preview_generation = self.preview_generation.wrapping_add(1);
-        for worker in &self.workers { worker.cancel(); }
-        self.frame_pending = None;
-
+        self.playhead_ms = start_ms;
         self.playback_error = None;
-        self.playback_texture = None;
         self.playback_generation = self.playback_generation.wrapping_add(1);
         let generation = self.playback_generation;
-        let (width, height) = playback_dimensions(info);
-        let filter = source_playback_filter(width, height, PLAYBACK_FPS);
         let stop = Arc::new(AtomicBool::new(false));
         let pid = Arc::new(AtomicI32::new(0));
         self.playback_control = Some(PlaybackControl { stop: stop.clone(), pid: pid.clone() });
         let tx = self.playback_tx.clone();
         self.is_playing = true;
-        let start_ms = self.playhead_ms;
         self.playback_worker = Some(thread::spawn(move || {
-            stream_preview(path, width, height, PLAYBACK_FPS, start_ms, duration_ms, filter, generation, stop, pid, tx);
+            stream_preview(path, width, height, fps, start_ms, duration_ms, filter, generation, stop, pid, tx);
         }));
     }
 
@@ -378,228 +411,141 @@ impl VideoStickerEditor {
     }
 
     fn render_editor_contents(&mut self, ui: &mut egui::Ui) {
-        ui.label(
-            RichText::new("Play and scrub the source, move the selected range, then position the square sticker frame.")
-                .size(12.5)
-                .color(TEXT_SECONDARY),
-        );
-        ui.add_space(9.0);
-
         if let Some(error) = &self.error {
             ui.colored_label(RED, error);
             return;
         }
         let Some(info) = self.info else {
             ui.vertical_centered(|ui| {
-                ui.add_space(24.0);
+                ui.add_space(18.0);
                 ui.spinner();
                 ui.label("Analyzing video with FFprobe…");
-                ui.add_space(24.0);
+                ui.add_space(18.0);
             });
             return;
         };
 
-        egui::Frame::none()
-            .fill(PANEL)
-            .stroke(Stroke::new(1.0_f32, BORDER))
-            .rounding(8.0)
-            .inner_margin(egui::Margin::symmetric(12.0, 9.0))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        RichText::new(format!("{} × {}", info.width, info.height))
-                            .size(11.5)
-                            .color(TEXT_SECONDARY),
-                    );
-                    ui.separator();
-                    ui.label(
-                        RichText::new(format!("Source {}", time_label(info.duration_ms)))
-                            .size(11.5)
-                            .color(TEXT_SECONDARY),
-                    );
-                    ui.separator();
-                    ui.label(
-                        RichText::new("Live source preview · Space to play/pause")
-                            .size(11.5)
-                            .color(CYAN),
-                    );
-                });
-            });
+        ui.label(RichText::new("Trim the source, preview the animated sticker, and move the crop directly on the video.")
+            .size(11.5).color(TEXT_SECONDARY));
+        ui.add_space(6.0);
 
-        ui.add_space(9.0);
-        egui::Frame::none()
-            .fill(PREVIEW)
-            .stroke(Stroke::new(1.0_f32, BORDER))
-            .rounding(10.0)
-            .inner_margin(egui::Margin::symmetric(10.0, 10.0))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                self.draw_preview(ui, info);
-            });
+        let available_width = ui.available_width();
+        let left_width = (available_width - 12.0).max(1.0) * 0.53;
+        let height = ui.available_height().max(1.0);
+        ui.horizontal(|ui| {
+            ui.allocate_ui_with_layout(
+                Vec2::new(left_width, height),
+                egui::Layout::top_down(egui::Align::Min),
+                |left| {
+                    left.horizontal_wrapped(|left| {
+                        left.label(RichText::new(format!("{} × {}", info.width, info.height)).size(10.5).color(TEXT_SECONDARY));
+                        left.separator();
+                        left.label(RichText::new(format!("Source {}", time_label(info.duration_ms))).size(10.5).color(TEXT_SECONDARY));
+                        left.separator();
+                        left.label(RichText::new("512 × 512 · VP9 · 30 FPS").size(10.5).color(CYAN));
+                    });
+                    left.add_space(5.0);
+                    egui::Frame::none()
+                        .fill(PREVIEW)
+                        .stroke(Stroke::new(1.0_f32, BORDER))
+                        .rounding(8.0)
+                        .inner_margin(egui::Margin::symmetric(8.0, 8.0))
+                        .show(left, |preview_ui| {
+                            preview_ui.set_width(preview_ui.available_width());
+                            self.draw_preview(preview_ui, info);
+                        });
 
-        // Space toggles playback like a conventional video editor.
-        // Do not steal the key while another widget is accepting text input.
+                    left.add_space(7.0);
+                    let button_width = ((left.available_width() - 8.0) * 0.5).max(1.0);
+                    left.horizontal(|left| {
+                        let source_active = self.is_playing && !self.show_sticker_preview;
+                        let sticker_active = self.is_playing && self.show_sticker_preview;
+                        let worker_busy = self.playback_worker.is_some();
+                        let source_label = if source_active { "Ⅱ  Pause source" } else if worker_busy && !source_active { "Stopping…" } else { "▶  Play source" };
+                        if left.add_enabled(
+                            source_active || (!worker_busy && !self.is_playing),
+                            egui::Button::new(RichText::new(source_label).strong())
+                                .min_size(Vec2::new(button_width, 36.0))
+                                .fill(if source_active { ACTIVE_BG } else { CARD }),
+                        ).clicked() {
+                            if source_active {
+                                self.pause_playback();
+                            } else {
+                                self.show_sticker_preview = false;
+                                self.start_playback();
+                            }
+                        }
+                        left.add_space(8.0);
+                        let sticker_label = if sticker_active { "Ⅱ  Pause sticker" } else if worker_busy && !sticker_active { "Stopping…" } else { "▶  Preview sticker" };
+                        if left.add_enabled(
+                            sticker_active || (!worker_busy && !self.is_playing),
+                            egui::Button::new(RichText::new(sticker_label).strong())
+                                .min_size(Vec2::new(button_width, 36.0))
+                                .fill(if sticker_active { ACTIVE_BG } else { ACCENT }),
+                        ).clicked() {
+                            if sticker_active {
+                                self.pause_playback();
+                            } else {
+                                self.show_sticker_preview = true;
+                                self.start_playback();
+                            }
+                        }
+                    });
+                    left.add_space(4.0);
+                    left.label(RichText::new("Space: play / pause").size(10.5).color(TEXT_MUTED));
+                    if let Some(error) = &self.playback_error {
+                        left.colored_label(RED, error);
+                    }
+                },
+            );
+
+            ui.add_space(12.0);
+            ui.vertical(|right| {
+                egui::Frame::none()
+                    .fill(PANEL)
+                    .stroke(Stroke::new(1.0_f32, BORDER))
+                    .rounding(8.0)
+                    .inner_margin(egui::Margin::symmetric(11.0, 10.0))
+                    .show(right, |right| {
+                        right.set_width(right.available_width());
+                        right.horizontal(|right| {
+                            right.label(RichText::new("TRIM CLIP").strong().size(11.0).color(CYAN));
+                            right.with_layout(egui::Layout::right_to_left(egui::Align::Center), |right| {
+                                right.label(RichText::new(format!("{:.2}s / 3.00s max", (self.end_ms - self.start_ms) as f32 / 1_000.0))
+                                    .monospace().size(10.5).color(TEXT_SECONDARY));
+                            });
+                        });
+                        right.add_space(5.0);
+                        self.draw_timeline(right, info);
+                        right.add_space(5.0);
+                        right.horizontal(|right| {
+                            right.label(RichText::new(format!("IN  {}", time_label(self.start_ms))).monospace().size(10.5).color(CYAN));
+                            right.with_layout(egui::Layout::right_to_left(egui::Align::Center), |right| {
+                                right.label(RichText::new(format!("OUT  {}", time_label(self.end_ms))).monospace().size(10.5).color(CYAN));
+                            });
+                        });
+                        right.add_space(9.0);
+                        right.separator();
+                        right.add_space(7.0);
+                        right.label(RichText::new("CROP").strong().size(10.5).color(CYAN));
+                        right.label(RichText::new("Drag the square on the source video to reposition it. Drag a corner to zoom and reframe.")
+                            .size(11.0).color(TEXT_SECONDARY).wrap());
+                        right.add_space(8.0);
+                        right.label(RichText::new("Sticker output · 512 × 512 · VP9 · no audio · 256 KB limit")
+                            .size(10.5).color(TEXT_MUTED).wrap());
+                    });
+            });
+        });
+
         if !ui.ctx().wants_keyboard_input()
             && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Space))
         {
             if self.is_playing {
-                self.stop_playback();
+                self.pause_playback();
             } else if self.playback_worker.is_none() {
                 self.start_playback();
             }
         }
-
-        ui.add_space(9.0);
-        let controls_width = 420.0_f32.min(ui.available_width());
-        ui.horizontal(|ui| {
-            let row_width = ui.available_width();
-            ui.add_space(((row_width - controls_width) * 0.5).max(0.0));
-            let can_start = self.playback_worker.is_none() && !self.is_playing;
-            let label = if self.is_playing {
-                "Ⅱ  Pause"
-            } else if self.playback_worker.is_some() {
-                "Stopping…"
-            } else {
-                "▶  Play source"
-            };
-            let enabled = self.is_playing || can_start;
-            if ui
-                .add_enabled(
-                    enabled,
-                    egui::Button::new(RichText::new(label).strong())
-                        .min_size(Vec2::new(136.0, 36.0))
-                        .fill(ACCENT),
-                )
-                .clicked()
-            {
-                if self.is_playing {
-                    self.stop_playback();
-                } else {
-                    self.start_playback();
-                }
-            }
-            ui.add_space(8.0);
-            let preview_label = if self.show_sticker_preview { "Source" } else { "Preview sticker" };
-            if ui.add_enabled(
-                self.playback_worker.is_none() && !self.is_playing,
-                egui::Button::new(RichText::new(preview_label).strong())
-                    .min_size(Vec2::new(136.0, 36.0))
-                    .fill(if self.show_sticker_preview { CARD } else { ACTIVE_BG }),
-            ).clicked() {
-                self.show_sticker_preview = !self.show_sticker_preview;
-                if self.show_sticker_preview {
-                    self.playhead_ms = self.playhead_ms.clamp(self.start_ms, self.end_ms.saturating_sub(1));
-                    self.texture_time = None;
-                }
-            }
-            ui.label(
-                RichText::new(format!(
-                    "{} / {}",
-                    time_label(self.playhead_ms),
-                    time_label(info.duration_ms)
-                ))
-                .monospace()
-                .size(12.0)
-                .color(TEXT_SECONDARY),
-            );
-        });
-        if let Some(error) = &self.playback_error {
-            ui.vertical_centered(|ui| {
-                ui.colored_label(RED, error);
-            });
-        }
-
-        ui.add_space(14.0);
-        egui::Frame::none()
-            .fill(PANEL)
-            .stroke(Stroke::new(1.0_f32, BORDER))
-            .rounding(8.0)
-            .inner_margin(egui::Margin::symmetric(12.0, 10.0))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("TRIM CLIP")
-                            .strong()
-                            .size(11.0)
-                            .color(CYAN),
-                    );
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            ui.label(
-                                RichText::new(format!(
-                                    "{:.2}s selected · 3.00s maximum",
-                                    (self.end_ms - self.start_ms) as f32 / 1_000.0
-                                ))
-                                .monospace()
-                                .size(11.0)
-                                .color(TEXT_SECONDARY),
-                            );
-                        },
-                    );
-                });
-                ui.add_space(5.0);
-                self.draw_timeline(ui, info);
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(format!("IN  {}", time_label(self.start_ms)))
-                            .monospace()
-                            .size(11.0)
-                            .color(CYAN),
-                    );
-                    ui.separator();
-                    ui.label(
-                        RichText::new(format!("OUT  {}", time_label(self.end_ms)))
-                            .monospace()
-                            .size(11.0)
-                            .color(CYAN),
-                    );
-                });
-            });
-
-        ui.add_space(10.0);
-        egui::Frame::none()
-            .fill(PANEL)
-            .stroke(Stroke::new(1.0_f32, BORDER))
-            .rounding(8.0)
-            .inner_margin(egui::Margin::symmetric(12.0, 10.0))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.label(
-                    RichText::new("FRAME")
-                        .strong()
-                        .size(11.0)
-                        .color(CYAN),
-                );
-                ui.add_space(5.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.selectable_value(&mut self.fit, VideoStickerFit::Crop, "Fill · Crop");
-                    ui.selectable_value(&mut self.fit, VideoStickerFit::Fit, "Fit whole frame");
-                });
-                ui.add_space(4.0);
-                if self.fit == VideoStickerFit::Crop {
-                    ui.label(
-                        RichText::new("Drag the square to move it. Drag any corner to resize it while keeping the square shape.")
-                            .size(11.0)
-                            .color(TEXT_MUTED),
-                    );
-                } else {
-                    ui.label(
-                        RichText::new("The entire source frame remains visible; empty space is transparent.")
-                            .size(11.0)
-                            .color(TEXT_MUTED),
-                    );
-                }
-                ui.add_space(6.0);
-                ui.label(
-                    RichText::new("Telegram constraints are checked on export: 3 seconds, 30 FPS, no audio, maximum 256 KB.")
-                        .size(11.0)
-                        .color(TEXT_MUTED),
-                );
-            });
     }
 
     fn draw_preview(&mut self, ui: &mut egui::Ui, info: VideoInfo) {
@@ -607,29 +553,25 @@ impl VideoStickerEditor {
             self.draw_sticker_preview(ui, info);
             return;
         }
-        let texture_data = if self.is_playing {
-            self.playback_texture.as_ref()
+        let texture_data = if !self.playback_is_sticker {
+            self.playback_texture.as_ref().or(self.texture.as_ref())
         } else {
             self.texture.as_ref()
         }.map(|texture| (texture.id(), texture.size_vec2()));
 
         let Some((texture_id, source_size)) = texture_data else {
             let (preview_width, preview_height) = playback_dimensions(info);
-            let max_width = ui.available_width().min(680.0);
-            let scale = (max_width / preview_width as f32).min(370.0 / preview_height as f32);
+            let max_width = ui.available_width().min(460.0);
+            let scale = (max_width / preview_width as f32).min(280.0 / preview_height as f32);
             let display_size = Vec2::new(preview_width as f32, preview_height as f32) * scale;
             let row_width = ui.available_width();
             ui.horizontal(|ui| {
                 ui.add_space(((row_width - display_size.x) * 0.5).max(0.0));
                 let (rect, _) = ui.allocate_exact_size(display_size, Sense::hover());
                 ui.painter().rect_filled(rect, 7.0, PREVIEW);
-                ui.painter().text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
+                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER,
                     if self.is_playing { "Starting playback…" } else { "Loading source frame…" },
-                    FontId::proportional(13.0),
-                    TEXT_MUTED,
-                );
+                    FontId::proportional(13.0), TEXT_MUTED);
             });
             if !self.is_playing {
                 if let Some(error) = &self.frame_error {
@@ -639,42 +581,29 @@ impl VideoStickerEditor {
             return;
         };
 
-        let max_width = ui.available_width().min(680.0);
-        let scale = (max_width / source_size.x).min(370.0 / source_size.y);
+        let max_width = ui.available_width().min(460.0);
+        let scale = (max_width / source_size.x).min(280.0 / source_size.y);
         let display_size = source_size * scale;
         let row_width = ui.available_width();
         ui.horizontal(|ui| {
             ui.add_space(((row_width - display_size.x) * 0.5).max(0.0));
             let (image_rect, _) = ui.allocate_exact_size(display_size, Sense::hover());
             ui.painter().rect_filled(image_rect, 5.0, PREVIEW);
-            ui.painter().image(
-                texture_id,
-                image_rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
+            ui.painter().image(texture_id, image_rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
 
-            if self.fit == VideoStickerFit::Crop {
-                let crop = crop_rect_for_preview(info, image_rect, self.left, self.top, self.zoom);
-                let shade = Color32::from_black_alpha(145);
-                for r in [
-                    egui::Rect::from_min_max(image_rect.min, egui::pos2(image_rect.right(), crop.top())),
-                    egui::Rect::from_min_max(egui::pos2(image_rect.left(), crop.bottom()), image_rect.max),
-                    egui::Rect::from_min_max(egui::pos2(image_rect.left(), crop.top()), egui::pos2(crop.left(), crop.bottom())),
-                    egui::Rect::from_min_max(egui::pos2(crop.right(), crop.top()), egui::pos2(image_rect.right(), crop.bottom())),
-                ] {
-                    if r.is_positive() { ui.painter().rect_filled(r, 0.0, shade); }
-                }
-                ui.painter().rect_stroke(crop, 2.0, Stroke::new(2.0_f32, CYAN));
-                self.draw_crop_handles(ui, image_rect, crop, info);
-            } else {
-                let fitted = egui::Rect::from_center_size(
-                    image_rect.center(),
-                    Vec2::splat(image_rect.width().min(image_rect.height())),
-                );
-                ui.painter().rect_stroke(fitted, 2.0, Stroke::new(2.0_f32, CYAN));
-                ui.painter().text(fitted.center(), egui::Align2::CENTER_CENTER, "FIT", FontId::proportional(10.0), CYAN);
+            let crop = crop_rect_for_preview(info, image_rect, self.left, self.top, self.zoom);
+            let shade = Color32::from_black_alpha(145);
+            for r in [
+                egui::Rect::from_min_max(image_rect.min, egui::pos2(image_rect.right(), crop.top())),
+                egui::Rect::from_min_max(egui::pos2(image_rect.left(), crop.bottom()), image_rect.max),
+                egui::Rect::from_min_max(egui::pos2(image_rect.left(), crop.top()), egui::pos2(crop.left(), crop.bottom())),
+                egui::Rect::from_min_max(egui::pos2(crop.right(), crop.top()), egui::pos2(image_rect.right(), crop.bottom())),
+            ] {
+                if r.is_positive() { ui.painter().rect_filled(r, 0.0, shade); }
             }
+            ui.painter().rect_stroke(crop, 2.0, Stroke::new(2.0_f32, CYAN));
+            self.draw_crop_handles(ui, image_rect, crop, info);
         });
         if !self.is_playing {
             if let Some(error) = &self.frame_error {
@@ -684,15 +613,24 @@ impl VideoStickerEditor {
     }
 
     fn draw_sticker_preview(&mut self, ui: &mut egui::Ui, info: VideoInfo) {
-        let texture_data = self.texture.as_ref().map(|texture| (texture.id(), texture.size_vec2()));
-        let side = ui.available_width().min(420.0).min(370.0);
+        let texture_data = if self.playback_is_sticker {
+            self.playback_texture.as_ref().or(self.texture.as_ref())
+        } else {
+            self.texture.as_ref()
+        }.map(|texture| (texture.id(), texture.size_vec2()));
+        let side = ui.available_width().min(360.0).min(300.0);
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
         ui.painter().rect_filled(rect, 8.0, Color32::BLACK);
         let Some((texture_id, source_size)) = texture_data else {
-            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Loading sticker preview…", FontId::proportional(13.0), TEXT_MUTED);
+            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER,
+                "Preparing sticker preview…", FontId::proportional(13.0), TEXT_MUTED);
             return;
         };
-        if self.fit == VideoStickerFit::Crop {
+
+        if self.playback_is_sticker && self.playback_texture.is_some() {
+            ui.painter().image(texture_id, rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+        } else {
             let source_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, source_size);
             let crop = crop_rect_for_preview(info, source_rect, self.left, self.top, self.zoom);
             let uv = egui::Rect::from_min_max(
@@ -700,16 +638,10 @@ impl VideoStickerEditor {
                 egui::pos2(crop.right() / source_size.x, crop.bottom() / source_size.y),
             );
             ui.painter().image(texture_id, rect, uv, Color32::WHITE);
-        } else {
-            let scale = (side / source_size.x).min(side / source_size.y);
-            let fitted = source_size * scale;
-            let image_rect = egui::Rect::from_center_size(rect.center(), fitted);
-            ui.painter().image(texture_id, image_rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
         }
         ui.painter().rect_stroke(rect, 8.0, Stroke::new(1.0_f32, BORDER));
         ui.painter().text(egui::pos2(rect.center().x, rect.bottom() - 9.0), egui::Align2::CENTER_BOTTOM,
-            format!("Sticker preview · {}", time_label(self.playhead_ms)), FontId::proportional(10.5), Color32::from_white_alpha(190));
+            format!("Sticker · {}", time_label(self.playhead_ms)), FontId::proportional(10.5), Color32::from_white_alpha(190));
     }
 
     fn draw_crop_handles(&mut self, ui: &mut egui::Ui, image_rect: egui::Rect, crop: egui::Rect, info: VideoInfo) {
@@ -967,6 +899,14 @@ fn playback_dimensions(info: VideoInfo) -> (u32, u32) {
 
 fn source_playback_filter(width: u32, height: u32, fps: u32) -> String {
     format!("scale={width}:{height}:flags=fast_bilinear,setsar=1,fps={fps},format=rgba")
+}
+
+fn sticker_preview_filter(info: VideoInfo, left: u16, top: u16, zoom: f32) -> String {
+    let minimum_side = (info.width.min(info.height) & !1).max(2);
+    let crop_side = ((minimum_side as f32 / zoom.clamp(1.0, 4.0)) as u32 & !1).max(2);
+    let x = ((info.width.saturating_sub(crop_side) as u64 * u64::from(left.min(1_000))) / 1_000) as u32 & !1;
+    let y = ((info.height.saturating_sub(crop_side) as u64 * u64::from(top.min(1_000))) / 1_000) as u32 & !1;
+    format!("crop={crop_side}:{crop_side}:{x}:{y},scale=512:512:flags=fast_bilinear,setsar=1,fps={STICKER_PREVIEW_FPS},format=rgba")
 }
 
 fn move_selection(
