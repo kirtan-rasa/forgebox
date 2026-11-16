@@ -44,6 +44,33 @@ pub(super) fn reorder_arrow_button(ui: &mut egui::Ui, enabled: bool, up: bool, t
     response.on_hover_text(tooltip).clicked()
 }
 
+pub(super) fn circular_nav_button(ui: &mut egui::Ui, enabled: bool, right: bool, tooltip: &str) -> bool {
+    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(34.0), sense);
+    let center = rect.center();
+    let fill = if !enabled {
+        DISABLED_BG
+    } else if response.is_pointer_button_down_on() {
+        ACTIVE_BG
+    } else if response.hovered() {
+        HOVER_BG
+    } else {
+        CARD
+    };
+    let border = if response.hovered() && enabled { ACCENT } else { BORDER };
+    let glyph = if enabled { TEXT } else { MUTED };
+    ui.painter().circle_filled(center, 17.0, fill);
+    ui.painter().circle_stroke(center, 17.0, Stroke::new(1.0_f32, border));
+    let direction = if right { 1.0 } else { -1.0 };
+    let tip = center + Vec2::new(direction * 4.0, 0.0);
+    let upper = center + Vec2::new(-direction * 3.5, -5.0);
+    let lower = center + Vec2::new(-direction * 3.5, 5.0);
+    let stroke = Stroke::new(1.8_f32, glyph);
+    ui.painter().line_segment([upper, tip], stroke);
+    ui.painter().line_segment([lower, tip], stroke);
+    response.on_hover_text(tooltip).clicked()
+}
+
 pub(super) fn paint_check_mark(painter: &egui::Painter, center: egui::Pos2, stroke_width: f32, color: Color32) {
     let start = center + Vec2::new(-5.0, 0.5);
     let joint = center + Vec2::new(-1.5, 4.0);

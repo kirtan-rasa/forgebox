@@ -3,7 +3,7 @@ use super::super::theme::*;
 use super::files::{file_glyph, reorder_item, reorder_item_to_index};
 use super::icons::{glyph_text, icon_font};
 use super::parameters::parameter_ui;
-use super::widgets::{paint_check_mark, reorder_arrow_button, section_header};
+use super::widgets::{circular_nav_button, paint_check_mark, reorder_arrow_button, section_header};
 use crate::catalog::{info, ToolId};
 use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Stroke, Vec2};
 use std::path::PathBuf;
@@ -86,7 +86,7 @@ impl ForgeApp {
                     let small_controls = compact_ui || full_width < 680.0;
                     // Preserve full step names on narrow layouts by placing navigation
                     // on a separate row instead of crushing the progress buttons.
-                    let controls_width = if small_controls { 94.0 } else { 206.0 };
+                    let controls_width = 76.0;
                     // Allocate the whole row, then position the stepper and navigation
                     // explicitly. No implicit horizontal spacing can push Back/Next inward.
                     let nav_gap = 16.0_f32;
@@ -188,19 +188,15 @@ impl ForgeApp {
                             let current_index = visible_steps.iter().position(|step_id| *step_id == self.wizard_step).unwrap_or(0);
                             let back_enabled = current_index > 0 && !self.running;
                             let next_enabled = current_index + 1 < visible_steps.len() && can_next && !self.running;
-                            if small_controls {
-                                if ui.add_enabled(next_enabled, egui::Button::new("›").fill(if next_enabled { ACCENT } else { Color32::from_rgb(15, 35, 52) }).min_size(Vec2::new(36.0, 34.0))).on_hover_text("Next").clicked() {
-                                    if let Some(next_step) = visible_steps.get(current_index + 1) { self.wizard_step = *next_step; }
+                            if circular_nav_button(ui, next_enabled, true, "Next step") {
+                                if let Some(next_step) = visible_steps.get(current_index + 1) {
+                                    self.wizard_step = *next_step;
                                 }
-                                if ui.add_enabled(back_enabled, egui::Button::new("‹").min_size(Vec2::new(36.0, 34.0))).on_hover_text("Back").clicked() {
-                                    if current_index > 0 { self.wizard_step = visible_steps[current_index - 1]; }
-                                }
-                            } else {
-                                if ui.add_enabled(next_enabled, egui::Button::new(RichText::new("Next  ›").size(13.0)).fill(if next_enabled { ACCENT } else { Color32::from_rgb(15, 35, 52) }).min_size(Vec2::new(88.0, 34.0))).clicked() {
-                                    if let Some(next_step) = visible_steps.get(current_index + 1) { self.wizard_step = *next_step; }
-                                }
-                                if ui.add_enabled(back_enabled, egui::Button::new(RichText::new("‹  Back").size(13.0)).min_size(Vec2::new(88.0, 34.0))).clicked() {
-                                    if current_index > 0 { self.wizard_step = visible_steps[current_index - 1]; }
+                            }
+                            ui.add_space(6.0);
+                            if circular_nav_button(ui, back_enabled, false, "Previous step") {
+                                if current_index > 0 {
+                                    self.wizard_step = visible_steps[current_index - 1];
                                 }
                             }
                         });
@@ -694,9 +690,22 @@ impl ForgeApp {
                         }).size(11.0).color(MUTED));
                         ui.add_space(6.0);
                         let can_run = self.can_run();
-                        let action_label = if self.queue_mode { "Add to queue" } else { "Convert now" };
+                        let completed_successfully = !self.running
+                            && !self.queue_mode
+                            && self.logs.iter().any(|(ok, message)| *ok && message.starts_with("Done:"));
+                        let action_label = if self.queue_mode {
+                            "Add to queue"
+                        } else if self.logs.iter().any(|(ok, _)| !ok) {
+                            "Try again"
+                        } else {
+                            "Convert now"
+                        };
                         let action_glyph = if self.queue_mode { "󰐕" } else { "󰄬" };
-                        if !self.running && ui.add_enabled(can_run, egui::Button::new(RichText::new(format!("{}  {action_label}", glyph_text(self.icons_loaded, action_glyph))).font(icon_font(16.0)).strong()).fill(if can_run { ACCENT } else { Color32::from_rgb(15, 35, 52) }).min_size(Vec2::new(ui.available_width(), 44.0))).clicked() {
+                        // On success, the completion card replaces the primary action.
+                        // A single "Convert again" action lives inside that card.
+                        if !self.running && !completed_successfully
+                            && ui.add_enabled(can_run, egui::Button::new(RichText::new(format!("{}  {action_label}", glyph_text(self.icons_loaded, action_glyph))).font(icon_font(16.0)).strong()).fill(if can_run { ACCENT } else { Color32::from_rgb(15, 35, 52) }).min_size(Vec2::new(ui.available_width(), 44.0))).clicked()
+                        {
                             self.start_job();
                         }
                         if !self.running && !can_run {
@@ -820,6 +829,9 @@ impl ForgeApp {
 
                                         }
                                         if !self.running {
+                                            if completed_successfully && ui.button("Convert again").clicked() {
+                                                self.start_job();
+                                            }
                                             if let Some(output_dir) = self.last_output_dir.clone() {
                                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                                     if ui.button("Open folder").clicked() {
