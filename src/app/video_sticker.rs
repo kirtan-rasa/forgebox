@@ -377,7 +377,7 @@ impl VideoStickerEditor {
 
         egui::Frame::none()
             .fill(PANEL)
-            .stroke(Stroke::new(1.0, BORDER))
+            .stroke(Stroke::new(1.0_f32, BORDER))
             .rounding(8.0)
             .inner_margin(egui::Margin::symmetric(12.0, 9.0))
             .show(ui, |ui| {
@@ -406,7 +406,7 @@ impl VideoStickerEditor {
         ui.add_space(9.0);
         egui::Frame::none()
             .fill(PREVIEW)
-            .stroke(Stroke::new(1.0, BORDER))
+            .stroke(Stroke::new(1.0_f32, BORDER))
             .rounding(10.0)
             .inner_margin(egui::Margin::symmetric(10.0, 10.0))
             .show(ui, |ui| {
@@ -463,7 +463,7 @@ impl VideoStickerEditor {
         ui.add_space(14.0);
         egui::Frame::none()
             .fill(PANEL)
-            .stroke(Stroke::new(1.0, BORDER))
+            .stroke(Stroke::new(1.0_f32, BORDER))
             .rounding(8.0)
             .inner_margin(egui::Margin::symmetric(12.0, 10.0))
             .show(ui, |ui| {
@@ -513,7 +513,7 @@ impl VideoStickerEditor {
         ui.add_space(10.0);
         egui::Frame::none()
             .fill(PANEL)
-            .stroke(Stroke::new(1.0, BORDER))
+            .stroke(Stroke::new(1.0_f32, BORDER))
             .rounding(8.0)
             .inner_margin(egui::Margin::symmetric(12.0, 10.0))
             .show(ui, |ui| {
@@ -661,7 +661,7 @@ impl VideoStickerEditor {
                 ui.painter().rect_stroke(
                     crop,
                     2.0,
-                    Stroke::new(2.0, CYAN),
+                    Stroke::new(2.0_f32, CYAN),
                 );
                 self.draw_crop_handles(ui, image_rect, crop, info);
             } else {
@@ -672,7 +672,7 @@ impl VideoStickerEditor {
                 ui.painter().rect_stroke(
                     fitted,
                     2.0,
-                    Stroke::new(2.0, CYAN),
+                    Stroke::new(2.0_f32, CYAN),
                 );
                 ui.painter().text(
                     fitted.center(),
@@ -727,7 +727,7 @@ impl VideoStickerEditor {
             ui.painter().rect_stroke(
                 egui::Rect::from_center_size(point, Vec2::splat(10.0)),
                 2.0,
-                Stroke::new(1.0, Color32::WHITE),
+                Stroke::new(1.0_f32, Color32::WHITE),
             );
             if response.hovered() || response.dragged() {
                 ui.ctx().set_cursor_icon(if index == 0 || index == 3 { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
@@ -783,7 +783,7 @@ impl VideoStickerEditor {
     fn draw_timeline(&mut self, ui: &mut egui::Ui, info: VideoInfo) {
         egui::Frame::none()
             .fill(INPUT)
-            .stroke(Stroke::new(1.0, BORDER))
+            .stroke(Stroke::new(1.0_f32, BORDER))
             .rounding(7.0)
             .inner_margin(egui::Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
@@ -798,7 +798,7 @@ impl VideoStickerEditor {
                     let x = track_left + track_width * tick as f32 / 4.0;
                     ui.painter().line_segment(
                         [egui::pos2(x, ruler_y + 2.0), egui::pos2(x, ruler_y + 9.0)],
-                        Stroke::new(1.0, BORDER_MUTED),
+                        Stroke::new(1.0_f32, BORDER_MUTED),
                     );
                     let time = info.duration_ms.saturating_mul(tick) / 4;
                     ui.painter().text(
@@ -820,21 +820,21 @@ impl VideoStickerEditor {
                     egui::pos2(x_at(self.end_ms), track.bottom()),
                 );
                 ui.painter().rect_filled(selected, 3.0, BORDER);
-                ui.painter().rect_stroke(selected, 3.0, Stroke::new(1.0, CYAN_SOFT));
+                ui.painter().rect_stroke(selected, 3.0, Stroke::new(1.0_f32, CYAN_SOFT));
 
                 for x in [x_at(self.start_ms), x_at(self.end_ms)] {
                     ui.painter().line_segment(
                         [egui::pos2(x, track.top() - 5.0), egui::pos2(x, track.bottom() + 5.0)],
-                        Stroke::new(2.0, CYAN_SOFT),
+                        Stroke::new(2.0_f32, CYAN_SOFT),
                     );
                     ui.painter().circle_filled(egui::pos2(x, track.center().y), 5.0, CYAN_SOFT);
-                    ui.painter().circle_stroke(egui::pos2(x, track.center().y), 5.0, Stroke::new(1.0, Color32::WHITE));
+                    ui.painter().circle_stroke(egui::pos2(x, track.center().y), 5.0, Stroke::new(1.0_f32, Color32::WHITE));
                 }
 
                 let play_x = x_at(self.playhead_ms);
                 ui.painter().line_segment(
                     [egui::pos2(play_x, rect.top() + 12.0), egui::pos2(play_x, rect.bottom() - 3.0)],
-                    Stroke::new(2.0, WARNING),
+                    Stroke::new(2.0_f32, WARNING),
                 );
                 ui.painter().circle_filled(egui::pos2(play_x, rect.top() + 13.0), 4.0, WARNING);
 
