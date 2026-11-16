@@ -373,11 +373,11 @@ impl VideoStickerEditor {
             let filter = source_playback_filter(width, height, PLAYBACK_FPS);
             (width, height, PLAYBACK_FPS, self.playhead_ms, duration_ms, filter)
         };
-        self.playback_is_sticker = sticker_mode;
-        self.playback_restart_pending = false;
-        if self.playback_texture.is_some() && !sticker_mode {
+        if self.playback_is_sticker != sticker_mode {
             self.playback_texture = None;
         }
+        self.playback_is_sticker = sticker_mode;
+        self.playback_restart_pending = false;
         self.playhead_ms = start_ms;
         self.playback_error = None;
         self.playback_generation = self.playback_generation.wrapping_add(1);
@@ -456,7 +456,7 @@ impl VideoStickerEditor {
                         });
 
                     left.add_space(7.0);
-                    let button_width = ((left.available_width() - 8.0) * 0.5).max(1.0);
+                    let button_width = ((left.available_width() - 16.0) * 0.5).max(1.0);
                     left.horizontal(|left| {
                         let source_active = self.is_playing && !self.show_sticker_preview;
                         let sticker_active = self.is_playing && self.show_sticker_preview;
@@ -1147,7 +1147,7 @@ fn time_label(ms: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{crop_rect_for_preview, VideoInfo};
+    use super::{crop_rect_for_preview, sticker_preview_filter, VideoInfo};
     use eframe::egui;
 
     #[test]
@@ -1176,6 +1176,15 @@ mod tests {
         let filter = super::source_playback_filter(512, 288, 24);
         assert_eq!(filter, "scale=512:288:flags=fast_bilinear,setsar=1,fps=24,format=rgba");
         assert!(!filter.contains("crop="));
+    }
+
+    #[test]
+    fn sticker_preview_filter_matches_the_export_crop_geometry_and_output() {
+        let info = VideoInfo { width: 1_920, height: 1_080, duration_ms: 10_000 };
+        assert_eq!(
+            sticker_preview_filter(info, 500, 500, 2.0),
+            "crop=540:540:690:270,scale=512:512:flags=fast_bilinear,setsar=1,fps=30,format=rgba"
+        );
     }
 
     #[test]
