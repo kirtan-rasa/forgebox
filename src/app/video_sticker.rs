@@ -607,6 +607,82 @@ impl VideoStickerEditor {
             self.draw_sticker_preview(ui, info);
             return;
         }
+        let texture_data = if self.is_playing {
+            self.playback_texture.as_ref()
+        } else {
+            self.texture.as_ref()
+        }.map(|texture| (texture.id(), texture.size_vec2()));
+
+        let Some((texture_id, source_size)) = texture_data else {
+            let (preview_width, preview_height) = playback_dimensions(info);
+            let max_width = ui.available_width().min(680.0);
+            let scale = (max_width / preview_width as f32).min(370.0 / preview_height as f32);
+            let display_size = Vec2::new(preview_width as f32, preview_height as f32) * scale;
+            let row_width = ui.available_width();
+            ui.horizontal(|ui| {
+                ui.add_space(((row_width - display_size.x) * 0.5).max(0.0));
+                let (rect, _) = ui.allocate_exact_size(display_size, Sense::hover());
+                ui.painter().rect_filled(rect, 7.0, PREVIEW);
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    if self.is_playing { "Starting playback…" } else { "Loading source frame…" },
+                    FontId::proportional(13.0),
+                    TEXT_MUTED,
+                );
+            });
+            if !self.is_playing {
+                if let Some(error) = &self.frame_error {
+                    ui.vertical_centered(|ui| { ui.colored_label(RED, error); });
+                }
+            }
+            return;
+        };
+
+        let max_width = ui.available_width().min(680.0);
+        let scale = (max_width / source_size.x).min(370.0 / source_size.y);
+        let display_size = source_size * scale;
+        let row_width = ui.available_width();
+        ui.horizontal(|ui| {
+            ui.add_space(((row_width - display_size.x) * 0.5).max(0.0));
+            let (image_rect, _) = ui.allocate_exact_size(display_size, Sense::hover());
+            ui.painter().rect_filled(image_rect, 5.0, PREVIEW);
+            ui.painter().image(
+                texture_id,
+                image_rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+
+            if self.fit == VideoStickerFit::Crop {
+                let crop = crop_rect_for_preview(info, image_rect, self.left, self.top, self.zoom);
+                let shade = Color32::from_black_alpha(145);
+                for r in [
+                    egui::Rect::from_min_max(image_rect.min, egui::pos2(image_rect.right(), crop.top())),
+                    egui::Rect::from_min_max(egui::pos2(image_rect.left(), crop.bottom()), image_rect.max),
+                    egui::Rect::from_min_max(egui::pos2(image_rect.left(), crop.top()), egui::pos2(crop.left(), crop.bottom())),
+                    egui::Rect::from_min_max(egui::pos2(crop.right(), crop.top()), egui::pos2(image_rect.right(), crop.bottom())),
+                ] {
+                    if r.is_positive() { ui.painter().rect_filled(r, 0.0, shade); }
+                }
+                ui.painter().rect_stroke(crop, 2.0, Stroke::new(2.0_f32, CYAN));
+                self.draw_crop_handles(ui, image_rect, crop, info);
+            } else {
+                let fitted = egui::Rect::from_center_size(
+                    image_rect.center(),
+                    Vec2::splat(image_rect.width().min(image_rect.height())),
+                );
+                ui.painter().rect_stroke(fitted, 2.0, Stroke::new(2.0_f32, CYAN));
+                ui.painter().text(fitted.center(), egui::Align2::CENTER_CENTER, "FIT", FontId::proportional(10.0), CYAN);
+            }
+        });
+        if !self.is_playing {
+            if let Some(error) = &self.frame_error {
+                ui.vertical_centered(|ui| { ui.colored_label(RED, error); });
+            }
+        }
+    }
+
     fn draw_sticker_preview(&mut self, ui: &mut egui::Ui, info: VideoInfo) {
         let texture_data = self.texture.as_ref().map(|texture| (texture.id(), texture.size_vec2()));
         let side = ui.available_width().min(420.0).min(370.0);
