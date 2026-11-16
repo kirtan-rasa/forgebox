@@ -46,31 +46,30 @@ pub(super) fn apply(ctx: &egui::Context) {
         style.visuals.error_fg_color = RED;
         style.visuals.window_rounding = egui::Rounding::same(8.0);
         style.visuals.menu_rounding = egui::Rounding::same(6.0);
-        style.visuals.window_stroke = Stroke::new(1.0, BORDER);
+        style.visuals.window_stroke = Stroke::new(1.0_f32, BORDER);
 
         style.visuals.widgets.noninteractive.bg_fill = PANEL;
-        style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, BORDER_SUBTLE);
+        style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, BORDER_SUBTLE);
         style.visuals.widgets.noninteractive.fg_stroke.color = TEXT_SECONDARY;
         style.visuals.widgets.noninteractive.rounding = egui::Rounding::same(5.0);
 
         style.visuals.widgets.inactive.bg_fill = INPUT;
-        style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, BORDER);
+        style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, BORDER);
         style.visuals.widgets.inactive.fg_stroke.color = TEXT;
         style.visuals.widgets.inactive.rounding = egui::Rounding::same(5.0);
 
         style.visuals.widgets.hovered.bg_fill = HOVER_BG;
-        style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, CYAN);
+        style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, CYAN);
         style.visuals.widgets.hovered.fg_stroke.color = TEXT;
         style.visuals.widgets.hovered.rounding = egui::Rounding::same(5.0);
 
         style.visuals.widgets.active.bg_fill = ACTIVE_BG;
-        style.visuals.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
+        style.visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, ACCENT);
         style.visuals.widgets.active.fg_stroke.color = TEXT;
         style.visuals.widgets.active.rounding = egui::Rounding::same(5.0);
 
         style.visuals.selection.bg_fill = ACCENT.linear_multiply(0.42);
-        style.visuals.selection.stroke = Stroke::new(1.0, CYAN);
-        style.visuals.text_cursor = Stroke::new(1.5, CYAN);
+        style.visuals.selection.stroke = Stroke::new(1.0_f32, CYAN);
 
         style.spacing.item_spacing = Vec2::new(9.0, 7.0);
         style.spacing.button_padding = Vec2::new(11.0, 7.0);
