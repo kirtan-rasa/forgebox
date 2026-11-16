@@ -425,96 +425,88 @@ impl VideoStickerEditor {
             return;
         };
 
-        let available_width = ui.available_width();
-        let left_width = (available_width - 12.0).max(1.0) * 0.60;
-        let height = ui.available_height().max(1.0);
-        ui.horizontal(|ui| {
-            ui.allocate_ui_with_layout(
-                Vec2::new(left_width, height),
-                egui::Layout::top_down(egui::Align::Min),
-                |left| {
-                    egui::Frame::none()
-                        .fill(PREVIEW)
-                        .stroke(Stroke::new(1.0_f32, BORDER))
-                        .rounding(8.0)
-                        .inner_margin(egui::Margin::symmetric(8.0, 8.0))
-                        .show(left, |preview_ui| {
-                            preview_ui.set_width(preview_ui.available_width());
-                            self.draw_preview(preview_ui, info);
-                        });
+        // Size the preview from the actual window, not the remaining height of a
+        // nested ScrollArea child UI. In that context available_height can be tiny.
+        let preview_max_height = (ui.ctx().screen_rect().height() * 0.52).clamp(420.0, 520.0);
+        ui.vertical(|ui| {
+            egui::Frame::none()
+                .fill(PREVIEW)
+                .stroke(Stroke::new(1.0_f32, BORDER))
+                .rounding(8.0)
+                .inner_margin(egui::Margin::symmetric(8.0, 8.0))
+                .show(ui, |preview_ui| {
+                    preview_ui.set_width(preview_ui.available_width());
+                    self.draw_preview(preview_ui, info, preview_max_height);
+                });
 
-                    left.add_space(7.0);
-                    let button_width = ((left.available_width() - 16.0) * 0.5).max(1.0);
-                    left.horizontal(|left| {
-                        let source_active = self.is_playing && !self.show_sticker_preview;
-                        let sticker_active = (self.is_playing || self.playback_restart_pending) && self.show_sticker_preview;
-                        let worker_busy = self.playback_worker.is_some();
-                        let source_label = if source_active { "Ⅱ  Pause source" } else if worker_busy && !source_active { "Stopping…" } else { "▶  Play source" };
-                        if left.add_enabled(
-                            source_active || (!worker_busy && !self.is_playing),
-                            egui::Button::new(RichText::new(source_label).strong())
-                                .min_size(Vec2::new(button_width, 36.0))
-                                .fill(if source_active { ACTIVE_BG } else { CARD }),
-                        ).clicked() {
-                            if source_active {
-                                self.pause_playback();
-                            } else {
-                                self.show_sticker_preview = false;
-                                self.start_playback();
-                            }
-                        }
-                        left.add_space(8.0);
-                        let sticker_label = if sticker_active { "Ⅱ  Pause sticker" } else if worker_busy && !sticker_active { "Stopping…" } else { "▶  Preview sticker" };
-                        if left.add_enabled(
-                            sticker_active || (!worker_busy && !self.is_playing),
-                            egui::Button::new(RichText::new(sticker_label).strong())
-                                .min_size(Vec2::new(button_width, 36.0))
-                                .fill(if sticker_active { ACTIVE_BG } else { ACCENT }),
-                        ).clicked() {
-                            if sticker_active {
-                                self.pause_playback();
-                            } else {
-                                self.show_sticker_preview = true;
-                                self.start_playback();
-                            }
-                        }
-                    });
-                    left.add_space(4.0);
-                    left.label(RichText::new("Space: play / pause").size(10.5).color(TEXT_MUTED));
-                    if let Some(error) = &self.playback_error {
-                        left.colored_label(RED, error);
+            ui.add_space(8.0);
+            let button_width = ((ui.available_width() - 8.0) * 0.5).max(1.0);
+            ui.horizontal(|ui| {
+                let source_active = self.is_playing && !self.show_sticker_preview;
+                let sticker_active = (self.is_playing || self.playback_restart_pending) && self.show_sticker_preview;
+                let worker_busy = self.playback_worker.is_some();
+                let source_label = if source_active { "Ⅱ  Pause source" } else if worker_busy && !source_active { "Stopping…" } else { "▶  Play source" };
+                if ui.add_enabled(
+                    source_active || (!worker_busy && !self.is_playing),
+                    egui::Button::new(RichText::new(source_label).strong())
+                        .min_size(Vec2::new(button_width, 38.0))
+                        .fill(if source_active { ACTIVE_BG } else { CARD }),
+                ).clicked() {
+                    if source_active {
+                        self.pause_playback();
+                    } else {
+                        self.show_sticker_preview = false;
+                        self.start_playback();
                     }
-                },
-            );
+                }
 
-            ui.add_space(12.0);
-            ui.vertical(|right| {
-                egui::Frame::none()
-                    .fill(PANEL)
-                    .stroke(Stroke::new(1.0_f32, BORDER))
-                    .rounding(8.0)
-                    .inner_margin(egui::Margin::symmetric(11.0, 10.0))
-                    .show(right, |right| {
-                        right.set_width(right.available_width());
-                        right.horizontal(|right| {
-                            right.label(RichText::new("TRIM CLIP").strong().size(11.0).color(CYAN));
-                            right.with_layout(egui::Layout::right_to_left(egui::Align::Center), |right| {
-                                right.label(RichText::new(format!("{:.2}s / 3.00s max", (self.end_ms - self.start_ms) as f32 / 1_000.0))
-                                    .monospace().size(10.5).color(TEXT_SECONDARY));
-                            });
-                        });
-                        right.add_space(5.0);
-                        self.draw_timeline(right, info);
-                        right.add_space(5.0);
-                        right.horizontal(|right| {
-                            right.label(RichText::new(format!("IN  {}", time_label(self.start_ms))).monospace().size(10.5).color(CYAN));
-                            right.with_layout(egui::Layout::right_to_left(egui::Align::Center), |right| {
-                                right.label(RichText::new(format!("OUT  {}", time_label(self.end_ms))).monospace().size(10.5).color(CYAN));
-                            });
-                        });
-                        right.label(RichText::new(format!("PLAYHEAD  {}", time_label(self.playhead_ms))).monospace().size(10.0).color(TEXT_MUTED));
-                    });
+                let sticker_label = if sticker_active { "Ⅱ  Pause sticker" } else if worker_busy && !sticker_active { "Stopping…" } else { "▶  Preview sticker" };
+                if ui.add_enabled(
+                    sticker_active || (!worker_busy && !self.is_playing),
+                    egui::Button::new(RichText::new(sticker_label).strong())
+                        .min_size(Vec2::new(button_width, 38.0))
+                        .fill(if sticker_active { ACTIVE_BG } else { ACCENT }),
+                ).clicked() {
+                    if sticker_active {
+                        self.pause_playback();
+                    } else {
+                        self.show_sticker_preview = true;
+                        self.start_playback();
+                    }
+                }
             });
+            ui.add_space(4.0);
+            ui.label(RichText::new("Space: play / pause").size(10.5).color(TEXT_MUTED));
+            if let Some(error) = &self.playback_error {
+                ui.colored_label(RED, error);
+            }
+
+            ui.add_space(8.0);
+            egui::Frame::none()
+                .fill(PANEL)
+                .stroke(Stroke::new(1.0_f32, BORDER))
+                .rounding(8.0)
+                .inner_margin(egui::Margin::symmetric(11.0, 10.0))
+                .show(ui, |timeline_ui| {
+                    timeline_ui.set_width(timeline_ui.available_width());
+                    timeline_ui.horizontal(|timeline_ui| {
+                        timeline_ui.label(RichText::new("TRIM CLIP").strong().size(11.0).color(CYAN));
+                        timeline_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |timeline_ui| {
+                            timeline_ui.label(RichText::new(format!("{:.2}s / 3.00s max", (self.end_ms - self.start_ms) as f32 / 1_000.0))
+                                .monospace().size(10.5).color(TEXT_SECONDARY));
+                        });
+                    });
+                    timeline_ui.add_space(5.0);
+                    self.draw_timeline(timeline_ui, info);
+                    timeline_ui.add_space(5.0);
+                    timeline_ui.horizontal(|timeline_ui| {
+                        timeline_ui.label(RichText::new(format!("IN  {}", time_label(self.start_ms))).monospace().size(10.5).color(CYAN));
+                        timeline_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |timeline_ui| {
+                            timeline_ui.label(RichText::new(format!("OUT  {}", time_label(self.end_ms))).monospace().size(10.5).color(CYAN));
+                        });
+                    });
+                    timeline_ui.label(RichText::new(format!("PLAYHEAD  {}", time_label(self.playhead_ms))).monospace().size(10.0).color(TEXT_MUTED));
+                });
         });
 
         if !ui.ctx().wants_keyboard_input()
@@ -528,9 +520,9 @@ impl VideoStickerEditor {
         }
     }
 
-    fn draw_preview(&mut self, ui: &mut egui::Ui, info: VideoInfo) {
+    fn draw_preview(&mut self, ui: &mut egui::Ui, info: VideoInfo, max_height: f32) {
         if self.show_sticker_preview {
-            self.draw_sticker_preview(ui, info);
+            self.draw_sticker_preview(ui, info, max_height);
             return;
         }
         let texture_data = if !self.playback_is_sticker {
@@ -541,8 +533,7 @@ impl VideoStickerEditor {
 
         let Some((texture_id, source_size)) = texture_data else {
             let (preview_width, preview_height) = playback_dimensions(info);
-            let max_width = ui.available_width().min(600.0);
-            let max_height = ui.available_height().min(460.0);
+            let max_width = ui.available_width().min(1_000.0);
             let scale = (max_width / preview_width as f32).min(max_height / preview_height as f32);
             let display_size = Vec2::new(preview_width as f32, preview_height as f32) * scale;
             let row_width = ui.available_width();
@@ -562,8 +553,7 @@ impl VideoStickerEditor {
             return;
         };
 
-        let max_width = ui.available_width().min(600.0);
-        let max_height = ui.available_height().min(460.0);
+        let max_width = ui.available_width().min(1_000.0);
         let scale = (max_width / source_size.x).min(max_height / source_size.y);
         let display_size = source_size * scale;
         let row_width = ui.available_width();
@@ -594,13 +584,13 @@ impl VideoStickerEditor {
         }
     }
 
-    fn draw_sticker_preview(&mut self, ui: &mut egui::Ui, info: VideoInfo) {
+    fn draw_sticker_preview(&mut self, ui: &mut egui::Ui, info: VideoInfo, max_height: f32) {
         let texture_data = if self.playback_is_sticker {
             self.playback_texture.as_ref().or(self.texture.as_ref())
         } else {
             self.texture.as_ref()
         }.map(|texture| (texture.id(), texture.size_vec2()));
-        let side = ui.available_width().min(ui.available_height()).min(460.0);
+        let side = ui.available_width().min(max_height).min(500.0);
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
         ui.painter().rect_filled(rect, 8.0, Color32::BLACK);
         let Some((texture_id, source_size)) = texture_data else {
