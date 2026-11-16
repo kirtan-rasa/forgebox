@@ -529,11 +529,15 @@ impl VideoStickerEditor {
                         right.separator();
                         right.add_space(7.0);
                         right.label(RichText::new("CROP").strong().size(10.5).color(CYAN));
-                        right.label(RichText::new("Drag the square on the source video to reposition it. Drag a corner to zoom and reframe.")
-                            .size(11.0).color(TEXT_SECONDARY).wrap());
+                        right.add(egui::Label::new(
+                            RichText::new("Drag the square on the source video to reposition it. Drag a corner to zoom and reframe.")
+                                .size(11.0).color(TEXT_SECONDARY)
+                        ).wrap());
                         right.add_space(8.0);
-                        right.label(RichText::new("Sticker output · 512 × 512 · VP9 · no audio · 256 KB limit")
-                            .size(10.5).color(TEXT_MUTED).wrap());
+                        right.add(egui::Label::new(
+                            RichText::new("Sticker output · 512 × 512 · VP9 · no audio · 256 KB limit")
+                                .size(10.5).color(TEXT_MUTED)
+                        ).wrap());
                     });
             });
         });
