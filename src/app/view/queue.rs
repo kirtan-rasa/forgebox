@@ -2,7 +2,7 @@ use super::super::{ForgeApp, QueueStatus};
 use crate::catalog::ToolId;
 use super::widgets::reorder_arrow_button;
 use super::super::theme::*;
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 
 impl ForgeApp {
     pub(super) fn render_queue(&mut self, ui: &mut egui::Ui) {
@@ -62,6 +62,7 @@ impl ForgeApp {
                     });
                 });
             ui.add_space(4.0);
+            ui.separator();
         }
 
         let pending_count = self.queue.iter()
