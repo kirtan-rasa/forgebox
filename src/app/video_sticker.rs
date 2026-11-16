@@ -396,7 +396,7 @@ impl VideoStickerEditor {
         // Keep the editor at a comfortable reading width and center it in the
         // workspace instead of letting the preview hug the left edge.
         let available_width = ui.available_width();
-        let editor_width = available_width.min(900.0);
+        let editor_width = available_width.min(1_080.0);
         let side_padding = ((available_width - editor_width) * 0.5).max(0.0);
 
         ui.horizontal(|ui| {
@@ -425,26 +425,14 @@ impl VideoStickerEditor {
             return;
         };
 
-        ui.label(RichText::new("Trim the source, preview the animated sticker, and move the crop directly on the video.")
-            .size(11.5).color(TEXT_SECONDARY));
-        ui.add_space(6.0);
-
         let available_width = ui.available_width();
-        let left_width = (available_width - 12.0).max(1.0) * 0.53;
+        let left_width = (available_width - 12.0).max(1.0) * 0.60;
         let height = ui.available_height().max(1.0);
         ui.horizontal(|ui| {
             ui.allocate_ui_with_layout(
                 Vec2::new(left_width, height),
                 egui::Layout::top_down(egui::Align::Min),
                 |left| {
-                    left.horizontal_wrapped(|left| {
-                        left.label(RichText::new(format!("{} × {}", info.width, info.height)).size(10.5).color(TEXT_SECONDARY));
-                        left.separator();
-                        left.label(RichText::new(format!("Source {}", time_label(info.duration_ms))).size(10.5).color(TEXT_SECONDARY));
-                        left.separator();
-                        left.label(RichText::new("512 × 512 · VP9 · 30 FPS").size(10.5).color(CYAN));
-                    });
-                    left.add_space(5.0);
                     egui::Frame::none()
                         .fill(PREVIEW)
                         .stroke(Stroke::new(1.0_f32, BORDER))
@@ -525,19 +513,6 @@ impl VideoStickerEditor {
                             });
                         });
                         right.label(RichText::new(format!("PLAYHEAD  {}", time_label(self.playhead_ms))).monospace().size(10.0).color(TEXT_MUTED));
-                        right.add_space(9.0);
-                        right.separator();
-                        right.add_space(7.0);
-                        right.label(RichText::new("CROP").strong().size(10.5).color(CYAN));
-                        right.add(egui::Label::new(
-                            RichText::new("Drag the square on the source video to reposition it. Drag a corner to zoom and reframe.")
-                                .size(11.0).color(TEXT_SECONDARY)
-                        ).wrap());
-                        right.add_space(8.0);
-                        right.add(egui::Label::new(
-                            RichText::new("Sticker output · 512 × 512 · VP9 · no audio · 256 KB limit")
-                                .size(10.5).color(TEXT_MUTED)
-                        ).wrap());
                     });
             });
         });
@@ -566,8 +541,9 @@ impl VideoStickerEditor {
 
         let Some((texture_id, source_size)) = texture_data else {
             let (preview_width, preview_height) = playback_dimensions(info);
-            let max_width = ui.available_width().min(460.0);
-            let scale = (max_width / preview_width as f32).min(280.0 / preview_height as f32);
+            let max_width = ui.available_width().min(600.0);
+            let max_height = ui.available_height().min(460.0);
+            let scale = (max_width / preview_width as f32).min(max_height / preview_height as f32);
             let display_size = Vec2::new(preview_width as f32, preview_height as f32) * scale;
             let row_width = ui.available_width();
             ui.horizontal(|ui| {
@@ -586,8 +562,9 @@ impl VideoStickerEditor {
             return;
         };
 
-        let max_width = ui.available_width().min(460.0);
-        let scale = (max_width / source_size.x).min(280.0 / source_size.y);
+        let max_width = ui.available_width().min(600.0);
+        let max_height = ui.available_height().min(460.0);
+        let scale = (max_width / source_size.x).min(max_height / source_size.y);
         let display_size = source_size * scale;
         let row_width = ui.available_width();
         ui.horizontal(|ui| {
@@ -623,7 +600,7 @@ impl VideoStickerEditor {
         } else {
             self.texture.as_ref()
         }.map(|texture| (texture.id(), texture.size_vec2()));
-        let side = ui.available_width().min(360.0).min(300.0);
+        let side = ui.available_width().min(ui.available_height()).min(460.0);
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
         ui.painter().rect_filled(rect, 8.0, Color32::BLACK);
         let Some((texture_id, source_size)) = texture_data else {
