@@ -1,6 +1,6 @@
 use super::{
     display_io, first_file, os, reserve_output_for_input, reserve_unique_path, require_files,
-    run_magick_owned, run_ok, sort_numbered_paths, temp_dir, Job,
+    run_magick_owned, run_ok, sort_numbered_paths, temp_dir_in, Job,
 };
 use std::fs;
 use std::ffi::OsString;
@@ -27,7 +27,7 @@ pub(super) fn images_to_pdf(job: &Job, combine: bool, compress: bool, quality: u
         }
     }
 
-    let temp = temp_dir("images-pdf")?;
+    let temp = temp_dir_in(&job.output_dir, "images-pdf")?;
     let result = (|| -> Result<Vec<PathBuf>, String> {
         let mut normalized: Vec<PathBuf> = Vec::with_capacity(job.files.len());
         for (index, input) in job.files.iter().enumerate() {
