@@ -40,7 +40,7 @@ pub(super) fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
             ui.label(RichText::new(format!("Quality: {}%", app.quality)).size(12.0));
             let mut quality = app.quality.parse::<f32>().unwrap_or(82.0).clamp(1.0, 100.0);
             if ui.add(egui::Slider::new(&mut quality, 1.0..=100.0).integer()).changed() { app.quality = (quality as i32).to_string(); }
-            ui.label(RichText::new("For JPEG/WebP, lower values usually produce smaller files.").size(11.0).color(MUTED));
+            ui.label(RichText::new("JPEG/WebP use lossy quality. PNG stays lossless; this slider changes compression effort, not image quality.").size(11.0).color(MUTED));
         }
         ToolId::ImageOcr => {
             ui.label(RichText::new("Tesseract language").size(12.0));
