@@ -24,7 +24,9 @@ impl eframe::App for ForgeApp {
         self.queue_thumbnails();
         let dropped = ctx.input(|input| input.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>());
         if !dropped.is_empty() {
-            if self.running {
+            if self.selected_tool == crate::catalog::ToolId::GenerateQr {
+                self.selection_notice = Some("QR Code Generator accepts text, not files.".into());
+            } else if self.running {
                 self.deferred_dropped_files.extend(dropped);
             } else {
                 self.add_files(dropped);
