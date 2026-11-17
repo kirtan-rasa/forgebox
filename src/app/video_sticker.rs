@@ -1089,23 +1089,25 @@ fn rational_value(value: &str) -> Option<f64> {
     Some(numerator / denominator)
 }
 
+fn numeric_value(value: &Value) -> Option<f64> {
+    value.as_f64()
+        .or_else(|| value.as_str().and_then(|text| text.parse::<f64>().ok()))
+        .filter(|number| number.is_finite())
+}
+
 fn stream_duration_seconds(stream: &Value) -> Option<f64> {
     stream.get("duration")
-        .and_then(Value::as_str)
-        .and_then(|value| value.parse::<f64>().ok())
-        .filter(|value| value.is_finite() && *value > 0.0)
+        .and_then(numeric_value)
+        .filter(|value| *value > 0.0)
         .or_else(|| {
-            let ticks = stream.get("duration_ts")
-                .and_then(Value::as_i64)? as f64;
+            let ticks = numeric_value(stream.get("duration_ts")?)?;
             let time_base = stream.get("time_base").and_then(Value::as_str)?;
             let seconds_per_tick = rational_value(time_base)?;
             let duration = ticks * seconds_per_tick;
             (duration.is_finite() && duration > 0.0).then_some(duration)
         })
         .or_else(|| {
-            let frames = stream.get("nb_frames")
-                .and_then(Value::as_str)?
-                .parse::<f64>().ok()?;
+            let frames = numeric_value(stream.get("nb_frames")?)?;
             let frame_rate = stream.get("avg_frame_rate").and_then(Value::as_str)?;
             let frames_per_second = rational_value(frame_rate)?;
             if frames_per_second <= 0.0 { return None; }
