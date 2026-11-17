@@ -41,6 +41,21 @@ fn image_first_frame_arg(input: &Path) -> OsString {
     argument
 }
 
+fn image_source_args(input: &Path, preserve_gif_animation: bool) -> Vec<OsString> {
+    let is_gif = input.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("gif"));
+
+    if is_gif && preserve_gif_animation {
+        // GIF frames are stored as partial updates. Coalesce them before applying
+        // transformations so every frame has a complete canvas.
+        vec![os(input), os("-coalesce")]
+    } else {
+        // Static outputs must not unexpectedly fan out into name-0, name-1, ...
+        vec![image_first_frame_arg(input)]
+    }
+}
+
 thread_local! {
     static EXECUTION_WARNINGS: RefCell<Vec<String>> = RefCell::new(Vec::new());
     static EXECUTION_CONTROL: RefCell<Option<ExecutionControl>> = const { RefCell::new(None) };
@@ -146,7 +161,8 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
             images_to_pdf(&job, *combine, *compress, *quality)
         }
         (Tool::ImageConvert, Options::ImageConvert { format }) => process_each(&job, |input, out| {
-            let mut args = vec![image_first_frame_arg(input), os("-auto-orient")];
+            let mut args = image_source_args(input, matches!(format, ImageFormat::Webp));
+            args.extend([os("-auto-orient"), os("-strip")]);
             if matches!(format, ImageFormat::Jpeg) {
                 args.extend([os("-background"), os("white"), os("-alpha"), os("remove"), os("-alpha"), os("off")]);
             }
@@ -155,14 +171,20 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
         }),
         (Tool::ImageResize, Options::ImageResize { width, height }) => process_each(&job, |input, out| {
             let size = format!("{width}x{height}");
-            run_magick_owned(vec![image_first_frame_arg(input), os("-auto-orient"), os("-resize"), os(&size), os(out)])
+            let mut args = image_source_args(input, true);
+            args.extend([os("-auto-orient"), os("-strip"), os("-resize"), os(&size), os(out)]);
+            run_magick_owned(args)
         }),
         (Tool::ImageCompress, Options::ImageCompress { quality }) => process_each(&job, |input, out| {
             let quality = quality.to_string();
-            run_magick_owned(vec![image_first_frame_arg(input), os("-auto-orient"), os("-quality"), os(&quality), os(out)])
+            let mut args = image_source_args(input, true);
+            args.extend([os("-auto-orient"), os("-strip"), os("-quality"), os(&quality), os(out)]);
+            run_magick_owned(args)
         }),
         (Tool::ImageGrayscale, Options::None) => process_each(&job, |input, out| {
-            run_magick_owned(vec![image_first_frame_arg(input), os("-auto-orient"), os("-colorspace"), os("Gray"), os(out)])
+            let mut args = image_source_args(input, true);
+            args.extend([os("-auto-orient"), os("-strip"), os("-colorspace"), os("Gray"), os(out)]);
+            run_magick_owned(args)
         }),
         (Tool::RemoveBackground, Options::None) => process_each(&job, |input, out| {
             run_ok("rembg", vec![os("i"), os(input), os(out)]).map(|_| ())
@@ -776,5 +798,44 @@ mod ghostscript_path_tests {
         ]
         .concat();
         assert_eq!(argument.as_os_str().as_bytes(), expected);
+    }
+}
+
+
+#[cfg(test)]
+mod image_sequence_input_tests {
+    use super::{image_first_frame_arg, image_source_args};
+    use std::path::Path;
+
+    fn strings(args: Vec<std::ffi::OsString>) -> Vec<String> {
+        args.into_iter().map(|value| value.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn gif_transformations_coalesce_animation_instead_of_selecting_one_frame() {
+        assert_eq!(
+            strings(image_source_args(Path::new("animation.GIF"), true)),
+            vec!["animation.GIF", "-coalesce"]
+        );
+    }
+
+    #[test]
+    fn static_image_outputs_select_the_first_frame() {
+        assert_eq!(
+            image_first_frame_arg(Path::new("pages.tiff")).to_string_lossy(),
+            "pages.tiff[0]"
+        );
+        assert_eq!(
+            strings(image_source_args(Path::new("animation.gif"), false)),
+            vec!["animation.gif[0]"]
+        );
+    }
+
+    #[test]
+    fn non_gif_sources_do_not_receive_gif_animation_options() {
+        assert_eq!(
+            strings(image_source_args(Path::new("photo.tif"), true)),
+            vec!["photo.tif[0]"]
+        );
     }
 }
