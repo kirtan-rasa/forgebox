@@ -313,7 +313,7 @@ impl ForgeApp {
             }
         }
         supported.sort();
-        let mut paths = supported;
+        let paths = supported;
         let mut notices = Vec::new();
         if unreadable_directories > 0 {
             notices.push(format!("Could not read {unreadable_directories} dropped folder(s)."));
