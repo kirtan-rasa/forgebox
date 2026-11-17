@@ -587,3 +587,25 @@ mod prefix_reservation_tests {
 
 
 
+
+
+#[cfg(test)]
+mod temp_dir_in_tests {
+    use super::temp_dir_in;
+    use std::fs;
+
+    #[test]
+    fn private_workspace_can_be_created_under_destination_directory() {
+        let base = std::env::temp_dir().join(format!("forgebox-temp-in-test-{}", std::process::id()));
+        fs::create_dir_all(&base).unwrap();
+        let workspace = temp_dir_in(&base, "images-pdf").unwrap();
+        assert_eq!(workspace.parent(), Some(base.as_path()));
+        assert!(workspace.file_name().unwrap().to_string_lossy().starts_with(".forgebox-images-pdf-"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&workspace).unwrap().permissions().mode() & 0o077, 0);
+        }
+        fs::remove_dir_all(&base).unwrap();
+    }
+}
