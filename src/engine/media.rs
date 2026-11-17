@@ -14,7 +14,9 @@ pub(super) fn convert_video(input: &Path, output: &Path, target_format: &str, pr
     };
     let mut args = vec![
         os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"),
-        os("-i"), os(input), os("-map"), os("0:v:0"), os("-map"), os("0:a?"),
+        os("-i"), os(input),
+        os("-vf"), os("scale=trunc(iw/2)*2:trunc(ih/2)*2"),
+        os("-map"), os("0:v:0"), os("-map"), os("0:a?"),
         os("-map_metadata"), os("0"), os("-threads"), os("2"),
     ];
     match format.as_str() {
@@ -134,7 +136,7 @@ fn sticker_video_info(input: &Path) -> Result<StickerVideoInfo, String> {
     let output = run_ok("ffprobe", vec![
         os("-v"), os("error"),
         os("-select_streams"), os("v:0"),
-        os("-show_entries"), os("stream=width,height"),
+        os("-show_entries"), os("stream=width,height:stream_side_data=rotation"),
         os("-of"), os("json"),
         os(input),
     ]).map_err(|error| format!("Could not inspect the source video: {error}"))?;
@@ -146,10 +148,19 @@ fn sticker_video_info(input: &Path) -> Result<StickerVideoInfo, String> {
         .ok_or_else(|| "No video stream was found in the selected file.".to_string())?;
     let width = stream.get("width").and_then(Value::as_u64).unwrap_or(0) as u32;
     let height = stream.get("height").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let rotation = stream.get("side_data_list")
+        .and_then(Value::as_array)
+        .and_then(|items| items.iter().find_map(|item| item.get("rotation").and_then(Value::as_f64)));
+    let (width, height) = display_oriented_dimensions(width, height, rotation);
     if width < 2 || height < 2 {
         return Err("The selected video has invalid dimensions.".into());
     }
     Ok(StickerVideoInfo { width, height })
+}
+
+fn display_oriented_dimensions(width: u32, height: u32, rotation: Option<f64>) -> (u32, u32) {
+    let rotation = rotation.unwrap_or(0.0).round() as i32;
+    if rotation.rem_euclid(180) == 90 { (height, width) } else { (width, height) }
 }
 
 fn sticker_video_filter(
@@ -198,8 +209,8 @@ fn encode_sticker_pass(
     let duration = format!("{:.3}", duration_ms as f64 / 1_000.0);
     let mut args = vec![
         os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"),
-        os("-i"), os(input),
         os("-ss"), os(&seek),
+        os("-i"), os(input),
         os("-t"), os(&duration),
         os("-map"), os("0:v:0"),
         os("-vf"), os(filter),
@@ -390,12 +401,30 @@ fn pixel_format_has_alpha(pixel_format: &str) -> bool {
 }
 
 fn inferred_pixel_depth(pixel_format: &str) -> u8 {
+    let format = pixel_format.to_ascii_lowercase();
+
+    // Packed RGB formats encode total bits per pixel in the suffix.
+    if ["rgb48", "bgr48", "rgba64", "bgra64", "argb64", "abgr64"]
+        .iter()
+        .any(|prefix| format.starts_with(prefix))
+    {
+        return 16;
+    }
+
+    // Planar high-bit-depth formats carry component depth after p,
+    // e.g. yuv420p10le, yuva444p12be, gbrp16le.
+    if format.contains("p010") {
+        return 10;
+    }
     for depth in [16_u8, 14, 12, 10, 9] {
-        if pixel_format.contains(&depth.to_string()) {
+        if format.contains(&format!("p{depth}")) {
             return depth;
         }
     }
-    if pixel_format.contains("p010") { 10 } else { 8 }
+    if format.starts_with("gray16") || format.starts_with("ya16") {
+        return 16;
+    }
+    8
 }
 
 fn probe_video(input: &Path) -> Result<VideoProbe, String> {
@@ -499,27 +528,33 @@ fn video_sync_args_from_help(help: &str) -> Result<Vec<&'static str>, String> {
 }
 
 fn ffmpeg_video_sync_args() -> Result<Vec<std::ffi::OsString>, String> {
-    static CACHED_ARGS: OnceLock<Result<Vec<std::ffi::OsString>, String>> = OnceLock::new();
+    static CACHED_ARGS: OnceLock<Vec<std::ffi::OsString>> = OnceLock::new();
+    if let Some(args) = CACHED_ARGS.get() {
+        return Ok(args.clone());
+    }
 
-    CACHED_ARGS.get_or_init(|| {
-        let output = Command::new("ffmpeg")
-            .args(["-hide_banner", "-h", "full"])
-            .output()
-            .map_err(|error| format!("Could not inspect FFmpeg options: {error}"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "FFmpeg could not report its supported options: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
-        let help = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let options = video_sync_args_from_help(&help)?;
-        Ok(options.into_iter().map(os).collect())
-    }).clone()
+    // Cache only success: FFmpeg may be installed or repaired while ForgeBox is open.
+    let output = Command::new("ffmpeg")
+        .args(["-hide_banner", "-h", "full"])
+        .output()
+        .map_err(|error| format!("Could not inspect FFmpeg options: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "FFmpeg could not report its supported options: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let help = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let options = video_sync_args_from_help(&help)?
+        .into_iter()
+        .map(os)
+        .collect::<Vec<_>>();
+    let _ = CACHED_ARGS.set(options.clone());
+    Ok(CACHED_ARGS.get().cloned().unwrap_or(options))
 }
 
 fn ffmpeg_color_space_tag(source: &VideoProbe) -> Option<&str> {
@@ -648,13 +683,30 @@ pub(super) fn convert_davinci_resolve(input: &Path, output: &Path, requested_pro
         }
     })?;
 
-    verify_resolve_output(output, source.has_audio, encoding.label, encoding.pixel_format)?;
+    if let Err(error) = verify_resolve_output(output, source.has_audio, encoding.label, encoding.pixel_format) {
+        record_execution_warning(format!(
+            "The DNxHR MOV was encoded but could not be fully verified: {error}. The output was retained for inspection."
+        ));
+    }
     Ok(())
 }
 
 #[cfg(test)]
+mod sticker_orientation_tests {
+    use super::display_oriented_dimensions;
+
+    #[test]
+    fn portrait_display_matrix_swaps_encoded_dimensions() {
+        assert_eq!(display_oriented_dimensions(1920, 1080, Some(90.0)), (1080, 1920));
+        assert_eq!(display_oriented_dimensions(1920, 1080, Some(-90.0)), (1080, 1920));
+        assert_eq!(display_oriented_dimensions(1920, 1080, Some(180.0)), (1920, 1080));
+        assert_eq!(display_oriented_dimensions(1920, 1080, None), (1920, 1080));
+    }
+}
+
+#[cfg(test)]
 mod davinci_tests {
-    use super::{ffmpeg_color_space_tag, is_rgb_pixel_format, pixel_format_has_alpha, select_resolve_encoding, video_sync_args_from_help, ResolveProfile, VideoProbe};
+    use super::{ffmpeg_color_space_tag, inferred_pixel_depth, is_rgb_pixel_format, pixel_format_has_alpha, select_resolve_encoding, video_sync_args_from_help, ResolveProfile, VideoProbe};
 
     fn source(pixel_format: &str, bit_depth: u8) -> VideoProbe {
         VideoProbe {
@@ -675,6 +727,21 @@ mod davinci_tests {
         }
     }
 
+    #[test]
+    fn pixel_depth_ignores_chroma_subsampling_digits() {
+        assert_eq!(inferred_pixel_depth("nv12"), 8);
+        assert_eq!(inferred_pixel_depth("yuv410p"), 8);
+        assert_eq!(inferred_pixel_depth("yuv420p"), 8);
+    }
+
+    #[test]
+    fn pixel_depth_detects_component_depth_and_packed_rgb() {
+        assert_eq!(inferred_pixel_depth("yuv420p10le"), 10);
+        assert_eq!(inferred_pixel_depth("yuva444p12be"), 12);
+        assert_eq!(inferred_pixel_depth("gbrp16le"), 16);
+        assert_eq!(inferred_pixel_depth("rgb48le"), 16);
+        assert_eq!(inferred_pixel_depth("rgba64le"), 16);
+    }
     #[test]
     fn modern_ffmpeg_uses_fps_mode_passthrough() {
         let help = "  -fps_mode[:stream_specifier]  set framerate mode\n  -vsync parameter  legacy sync mode";
