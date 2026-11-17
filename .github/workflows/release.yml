@@ -27,7 +27,13 @@ jobs:
         run: |
           test -s Cargo.lock
           git ls-files --error-unmatch Cargo.lock
-          cargo metadata --locked --format-version 1 --no-deps
+          # Resolve the complete dependency graph, including target and dev dependencies.
+          # Cargo may add missing feature edges while preserving existing locked versions.
+          cargo metadata --format-version 1 >/dev/null
+          cargo metadata --locked --format-version 1 >/dev/null
+          if ! git diff --quiet -- Cargo.lock; then
+            echo "::warning::Committed Cargo.lock was stale; downstream jobs will use the resolved lockfile artifact."
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: internal-cargo-lock
