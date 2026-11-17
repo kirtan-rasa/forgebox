@@ -10,16 +10,13 @@ mod control;
 mod job;
 
 pub(crate) use self::command::{image_magick_program, image_magick_thread_limit};
-use self::command::{
-    command_version_succeeds, configure_command_environment, recommended_image_magick_threads,
-    run_capture, run_magick_owned, run_ok, run_ok_with_timeout, run_qpdf,
-};
+use self::command::{run_capture, run_magick_owned, run_ok, run_ok_with_timeout, run_qpdf};
 use self::common::{
     display_io, files_with_prefix, first_file, normalized_ext, os, reserve_output_for_input,
     reserve_unique_path, positive, process_each, process_each_capture, process_each_convert,
     require_files, sort_numbered_paths, temp_dir, reserve_unique_prefix,
 };
-use self::data::{csv_to_json, data_convert, encode_file_url_path, pdf_to_docx, soffice_convert};
+use self::data::{data_convert, pdf_to_docx, soffice_convert};
 use self::images::{images_to_pdf, long_png_to_pdf};
 use self::media::{convert_audio, convert_davinci_resolve, convert_video, convert_video_sticker, extract_audio};
 use self::pdf::{parse_pdf_page_order, parse_pdf_page_range, pdf_page_count};
@@ -604,7 +601,7 @@ mod pdf_page_tests {
 
 #[cfg(test)]
 mod file_url_tests {
-    use super::encode_file_url_path;
+    use super::data::encode_file_url_path;
 
     #[test]
     fn file_url_paths_escape_spaces_and_uri_delimiters() {
@@ -621,7 +618,8 @@ mod file_url_tests {
 
 #[cfg(test)]
 mod csv_conversion_tests {
-    use super::{csv_to_json, temp_dir};
+    use super::temp_dir;
+    use super::data::csv_to_json;
     use serde_json::Value;
     use std::fs;
 
@@ -712,7 +710,7 @@ mod video_tests {
 
 #[cfg(test)]
 mod image_magick_resource_tests {
-    use super::recommended_image_magick_threads;
+    use super::command::recommended_image_magick_threads;
 
     #[test]
     fn image_magick_reserves_a_thread_and_caps_parallelism() {
@@ -725,7 +723,7 @@ mod image_magick_resource_tests {
 
 #[cfg(test)]
 mod command_detection_tests {
-    use super::command_version_succeeds;
+    use super::command::command_version_succeeds;
     use std::ffi::OsStr;
 
     #[test]
@@ -741,7 +739,7 @@ mod command_detection_tests {
 
 #[cfg(test)]
 mod subprocess_environment_tests {
-    use super::configure_command_environment;
+    use super::command::configure_command_environment;
     use std::ffi::OsStr;
     use std::process::Command;
 
