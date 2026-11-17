@@ -88,7 +88,7 @@ pub(super) fn is_video_file(path: &Path) -> bool {
 
 pub(super) fn is_image_file(path: &Path) -> bool {
     matches!(file_extension(path).as_str(),
-        "png" | "jpg" | "jpeg" | "webp" | "tif" | "tiff" | "bmp" | "heic" | "avif" | "gif")
+        "png" | "jpg" | "jpeg" | "webp" | "tif" | "tiff" | "bmp" | "heic" | "heif" | "avif" | "gif")
 }
 
 pub(super) fn is_audio_file(path: &Path) -> bool {
@@ -135,7 +135,7 @@ pub(in crate::app) fn accepted_input_description(tool: ToolId) -> &'static str {
 pub(super) fn file_glyph(path: &PathBuf) -> &'static str {
     match path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase().as_str() {
         "pdf" => "󰈙",
-        "png" | "jpg" | "jpeg" | "webp" | "tif" | "tiff" | "heic" | "avif" | "gif" | "bmp" => "󰋩",
+        "png" | "jpg" | "jpeg" | "webp" | "tif" | "tiff" | "heic" | "heif" | "avif" | "gif" | "bmp" => "󰋩",
         "mp4" | "mov" | "mkv" | "webm" | "avi" | "m4v" | "mpeg" | "mpg" | "3gp" | "ogv" | "flv" | "mts" | "m2ts" => "▶",
         "mp3" | "wav" | "flac" | "m4a" | "ogg" | "aac" | "opus" | "aif" | "aiff" | "wma" | "amr" | "ac3" => "♫",
         "csv" | "json" | "xlsx" => "󰘦",
