@@ -4,6 +4,40 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
 
+fn is_hdr_transfer(transfer: Option<&str>) -> bool {
+    matches!(transfer, Some("smpte2084" | "arib-std-b67"))
+}
+
+fn probe_video_conversion(input: &Path) -> Result<(u8, Option<String>), String> {
+    let output = run_ok("ffprobe", vec![
+        os("-v"), os("error"),
+        os("-select_streams"), os("v:0"),
+        os("-show_entries"), os("stream=pix_fmt,bits_per_raw_sample,color_transfer"),
+        os("-of"), os("json"),
+        os(input),
+    ]).map_err(|error| format!("Could not inspect the video bit depth and HDR transfer: {error}"))?;
+    let json: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("FFprobe returned invalid video metadata: {error}"))?;
+    let stream = json.get("streams").and_then(Value::as_array)
+        .and_then(|streams| streams.first())
+        .ok_or_else(|| "FFprobe did not find a video stream in the selected file.".to_string())?;
+    let pixel_format = value_string(stream, "pix_fmt").unwrap_or("unknown");
+    let raw_depth = stream.get("bits_per_raw_sample")
+        .and_then(|value| value.as_str().and_then(|text| text.parse::<u8>().ok())
+            .or_else(|| value.as_u64().map(|number| number as u8)))
+        .unwrap_or(0);
+    let bit_depth = raw_depth.max(inferred_pixel_depth(pixel_format));
+    Ok((bit_depth, parse_optional_string(stream, "color_transfer")))
+}
+
+fn ffmpeg_supports_filter(filter: &str) -> bool {
+    Command::new("ffmpeg")
+        .args(["-hide_banner", "-h", &format!("filter={filter}")])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
 pub(super) fn convert_video(input: &Path, output: &Path, target_format: &str, preset: &str, quality: &str) -> Result<(), String> {
     let format = normalized_ext(target_format);
     let crf = positive(quality, 23).clamp(18, 30).to_string();
@@ -12,10 +46,35 @@ pub(super) fn convert_video(input: &Path, output: &Path, target_format: &str, pr
         "smaller" => ("smaller", "slow", "2"),
         _ => ("fast", "veryfast", "6"),
     };
+    let (source_bit_depth, source_transfer) = probe_video_conversion(input)?;
+    let source_is_hdr = is_hdr_transfer(source_transfer.as_deref());
+    if source_is_hdr && !ffmpeg_supports_filter("zscale") {
+        return Err(
+            "The source uses HDR (PQ/HLG), but this FFmpeg build does not include the zscale filter.              Install an FFmpeg build with libzimg support; conversion was stopped to avoid damaging HDR highlights."
+                .into()
+        );
+    }
+    if source_bit_depth > 8 && !source_is_hdr && format != "webm" {
+        record_execution_warning(format!(
+            "The source is {source_bit_depth}-bit SDR, while the selected H.264 output is 8-bit. Some source precision will be reduced."
+        ));
+    }
+    if source_is_hdr {
+        record_execution_warning(
+            "The HDR source was tone-mapped to SDR BT.709 for compatibility with the selected output format."
+                .into()
+        );
+    }
+
+    let video_filter = if source_is_hdr {
+        "zscale=transfer=linear:npl=100,format=gbrpf32le,tonemap=tonemap=hable:desat=0,zscale=transfer=bt709:primaries=bt709:matrix=bt709,scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"
+    } else {
+        "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+    };
     let mut args = vec![
         os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"),
         os("-i"), os(input),
-        os("-vf"), os("scale=trunc(iw/2)*2:trunc(ih/2)*2"),
+        os("-vf"), os(video_filter),
         os("-map"), os("0:v:0"), os("-map"), os("0:a?"),
         // Conversion is privacy-first: do not carry source metadata (including GPS).
         os("-map_metadata"), os("-1"),
@@ -24,6 +83,13 @@ pub(super) fn convert_video(input: &Path, output: &Path, target_format: &str, pr
         os("-map_chapters"), os("-1"),
         os("-threads"), os("2"),
     ];
+    if source_is_hdr {
+        args.extend([
+            os("-color_primaries"), os("bt709"),
+            os("-color_trc"), os("bt709"),
+            os("-colorspace"), os("bt709"),
+        ]);
+    }
     match format.as_str() {
         "mp4" | "mov" | "mkv" => {
             args.extend([
@@ -37,10 +103,15 @@ pub(super) fn convert_video(input: &Path, output: &Path, target_format: &str, pr
         }
         "webm" => {
             let vp9_crf = (positive(quality, 23) + 9).clamp(24, 39).to_string();
+            let pixel_format = if source_bit_depth > 8 && !source_is_hdr {
+                "yuv420p10le"
+            } else {
+                "yuv420p"
+            };
             args.extend([
                 os("-c:v"), os("libvpx-vp9"), os("-deadline"), os("good"),
                 os("-cpu-used"), os(vp9_cpu_used), os("-crf"), os(&vp9_crf), os("-b:v"), os("0"),
-                os("-pix_fmt"), os("yuv420p"),
+                os("-pix_fmt"), os(pixel_format),
                 os("-c:a"), os("libopus"), os("-b:a"), os("128k"),
             ]);
         }
@@ -803,5 +874,20 @@ mod davinci_tests {
         assert_eq!(bgr.pixel_format, "gbrp10le");
         assert!(source("bgra", 8).has_alpha);
         assert!(source("yuva420p", 8).has_alpha);
+    }
+}
+
+
+#[cfg(test)]
+mod hdr_transfer_tests {
+    use super::is_hdr_transfer;
+
+    #[test]
+    fn recognizes_hdr_transfer_functions_only() {
+        assert!(is_hdr_transfer(Some("smpte2084")));
+        assert!(is_hdr_transfer(Some("arib-std-b67")));
+        assert!(!is_hdr_transfer(Some("bt709")));
+        assert!(!is_hdr_transfer(Some("unknown")));
+        assert!(!is_hdr_transfer(None));
     }
 }
