@@ -141,7 +141,9 @@ pub(super) fn convert_audio(
         os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"),
         os("-i"), os(input),
         os("-map"), os("0:a:0"),
-        os("-map_metadata"), os("0"),
+        // Avoid carrying source tags (including location metadata) into the audio output.
+        os("-map_metadata"), os("-1"),
+        os("-map_chapters"), os("-1"),
         os("-vn"), os("-sn"), os("-dn"),
         os("-threads"), os("2"),
     ];
@@ -304,6 +306,8 @@ fn encode_sticker_pass(
         os("-b:v"), os(&format!("{bitrate_kbps}k")),
         os("-pass"), os(pass.to_string()),
         os("-passlogfile"), os(passlog),
+        os("-map_metadata"), os("-1"),
+        os("-map_chapters"), os("-1"),
     ];
 
     if pass == 1 {
@@ -420,7 +424,12 @@ pub(super) fn convert_video_sticker(
 
 pub(super) fn extract_audio(input: &Path, output: &Path, target_format: &str) -> Result<(), String> {
     let format = normalized_ext(target_format);
-    let mut args = vec![os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"), os("-i"), os(input), os("-map"), os("0:a:0"), os("-vn")];
+    let mut args = vec![
+        os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"),
+        os("-i"), os(input), os("-map"), os("0:a:0"),
+        os("-map_metadata"), os("-1"), os("-map_chapters"), os("-1"),
+        os("-vn"),
+    ];
     match format.as_str() {
         "mp3" => args.extend([os("-c:a"), os("libmp3lame"), os("-b:a"), os("192k")]),
         "wav" => args.extend([os("-c:a"), os("pcm_s16le")]),
@@ -733,8 +742,9 @@ pub(super) fn convert_davinci_resolve(input: &Path, output: &Path, requested_pro
         os("-i"), os(input),
         os("-map"), os("0:v:0"),
         os("-map"), os("0:a?"),
-        os("-map_metadata"), os("0"),
-        os("-map_chapters"), os("0"),
+        // Copy only the explicit color tags below, not arbitrary source metadata.
+        os("-map_metadata"), os("-1"),
+        os("-map_chapters"), os("-1"),
         os("-c:v"), os("dnxhd"),
         os("-profile:v"), os(encoding.profile),
         os("-pix_fmt"), os(encoding.pixel_format),
