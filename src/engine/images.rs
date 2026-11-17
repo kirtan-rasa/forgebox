@@ -25,7 +25,10 @@ pub(super) fn images_to_pdf(job: &Job, combine: bool, compress: bool, quality: u
             // page dimensions remain consistent with the source image.
             let page = temp.join(format!("page-{:05}.png", index + 1));
             let mut input_arg = input.as_os_str().to_os_string();
-            if input.extension().and_then(|ext| ext.to_str()).map(|ext| ext.eq_ignore_ascii_case("gif")).unwrap_or(false) {
+            let extension = input.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+            if ["gif", "tif", "tiff"].iter().any(|value| extension.eq_ignore_ascii_case(value)) {
+                // Each selected source file contributes exactly one PDF page.
+                // GIF and multi-page TIFF inputs must not fan out into extra files.
                 input_arg.push("[0]");
             }
             if let Err(error) = run_magick_owned(vec![input_arg, os("-auto-orient"), os("+repage"), os(&page)]) {
@@ -115,4 +118,38 @@ pub(super) fn long_png_to_pdf(job: &Job) -> Result<Vec<PathBuf>, String> {
     })();
     let _ = fs::remove_dir_all(&temp);
     result
+}
+
+
+#[cfg(test)]
+mod first_frame_input_tests {
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    fn first_frame_argument(path: &Path) -> OsString {
+        let mut argument = path.as_os_str().to_os_string();
+        let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+        if ["gif", "tif", "tiff"].iter().any(|value| extension.eq_ignore_ascii_case(value)) {
+            argument.push("[0]");
+        }
+        argument
+    }
+
+    #[test]
+    fn multi_frame_sources_are_limited_to_one_pdf_page() {
+        for path in ["animation.gif", "scan.tif", "archive.TIFF"] {
+            assert_eq!(
+                first_frame_argument(Path::new(path)).to_string_lossy(),
+                format!("{path}[0]")
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_images_keep_their_original_path() {
+        assert_eq!(
+            first_frame_argument(Path::new("photo.png")).to_string_lossy(),
+            "photo.png"
+        );
+    }
 }
