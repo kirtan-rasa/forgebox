@@ -324,7 +324,11 @@ pub(super) fn files_with_prefix(dir: &Path, prefix: &str) -> Vec<PathBuf> {
 }
 
 pub(super) fn temp_dir(prefix: &str) -> Result<PathBuf, String> {
-    let base = std::env::temp_dir();
+    temp_dir_in(&std::env::temp_dir(), prefix)
+}
+
+pub(super) fn temp_dir_in(base: &Path, prefix: &str) -> Result<PathBuf, String> {
+    fs::create_dir_all(base).map_err(display_io)?;
 
     // A millisecond timestamp alone can collide when two conversions create
     // temporary directories at nearly the same time. Use an in-process
@@ -333,7 +337,7 @@ pub(super) fn temp_dir(prefix: &str) -> Result<PathBuf, String> {
     for _ in 0..128 {
         let sequence = TEMP_DIR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path = base.join(format!(
-            "forgebox-{prefix}-{}-{}-{sequence}",
+            ".forgebox-{prefix}-{}-{}-{sequence}",
             std::process::id(),
             timestamp()
         ));
