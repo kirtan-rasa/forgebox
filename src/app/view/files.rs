@@ -182,7 +182,7 @@ pub(in crate::app) fn default_output_dir() -> PathBuf {
 
 #[cfg(test)]
 mod natural_sort_tests {
-    use super::{append_image_paths, sort_image_paths_naturally};
+    use super::sort_image_paths_naturally;
     use std::path::PathBuf;
 
     #[test]
