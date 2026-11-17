@@ -72,7 +72,7 @@ install_russian_ocr() {
     case "$PACKAGE_FAMILY" in
         fedora) run_privileged dnf install --assumeyes tesseract-langpack-rus ;;
         debian)
-            run_privileged apt-get update </dev/null </dev/null || return 1
+            run_privileged apt-get update </dev/null || return 1
             run_privileged apt-get install --yes tesseract-ocr-rus </dev/null
             ;;
         arch) run_privileged pacman -S --needed --noconfirm tesseract-data-rus ;;
@@ -88,8 +88,8 @@ install_rembg_backend() {
             return 0
             ;;
         debian)
-            run_privileged apt-get update </dev/null </dev/null || return 1
-            run_privileged apt-get install --yes python3 </dev/null-venv </dev/null || return 1
+            run_privileged apt-get update </dev/null || return 1
+            run_privileged apt-get install --yes python3-venv </dev/null || return 1
             ;;
         arch) run_privileged pacman -S --needed --noconfirm python || return 1 ;;
     esac
