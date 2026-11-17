@@ -10,6 +10,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static TEMP_DIR_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+fn processed_image_extension(input: &Path) -> String {
+    let extension = input.extension().and_then(|value| value.to_str()).unwrap_or("png");
+    match extension.to_ascii_lowercase().as_str() {
+        // ImageMagick can decode HEIC/HEIF on supported builds, but HEIF
+        // encoders are commonly absent. Produce a portable PNG instead.
+        "heic" | "heif" => "png".into(),
+        other => other.into(),
+    }
+}
+
 fn output_details(job: &Job, input: &Path) -> (&'static str, String) {
     use super::JobOptions as Options;
     use crate::catalog::ToolId as Tool;
@@ -19,9 +29,9 @@ fn output_details(job: &Job, input: &Path) -> (&'static str, String) {
     };
     match (&job.tool, &job.options) {
         (Tool::ImageConvert, Options::ImageConvert { format }) => ("converted", format.as_str().to_owned()),
-        (Tool::ImageResize, Options::ImageResize { .. }) => ("resized", source_extension()),
-        (Tool::ImageCompress, Options::ImageCompress { .. }) => ("compressed", source_extension()),
-        (Tool::ImageGrayscale, Options::None) => ("grayscale", source_extension()),
+        (Tool::ImageResize, Options::ImageResize { .. }) => ("resized", processed_image_extension(input)),
+        (Tool::ImageCompress, Options::ImageCompress { .. }) => ("compressed", processed_image_extension(input)),
+        (Tool::ImageGrayscale, Options::None) => ("grayscale", processed_image_extension(input)),
         (Tool::RemoveBackground, Options::None) => ("no-background", "png".into()),
         (Tool::ExtractExif, Options::None) => ("exif", "json".into()),
         (Tool::PdfToDoc, Options::None) => ("converted", "docx".into()),
@@ -607,5 +617,24 @@ mod temp_dir_in_tests {
             assert_eq!(fs::metadata(&workspace).unwrap().permissions().mode() & 0o077, 0);
         }
         fs::remove_dir_all(&base).unwrap();
+    }
+}
+
+
+#[cfg(test)]
+mod processed_image_extension_tests {
+    use super::processed_image_extension;
+    use std::path::Path;
+
+    #[test]
+    fn heif_sources_are_saved_as_portable_png_for_in_place_image_tools() {
+        assert_eq!(processed_image_extension(Path::new("photo.heic")), "png");
+        assert_eq!(processed_image_extension(Path::new("photo.HEIF")), "png");
+    }
+
+    #[test]
+    fn other_image_formats_keep_their_extension() {
+        assert_eq!(processed_image_extension(Path::new("photo.jpg")), "jpg");
+        assert_eq!(processed_image_extension(Path::new("scan.tiff")), "tiff");
     }
 }
