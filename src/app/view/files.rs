@@ -143,32 +143,30 @@ pub(super) fn file_glyph(path: &PathBuf) -> &'static str {
     }
 }
 
+fn configured_download_dir(home: &Path, config_dir: &Path) -> Option<PathBuf> {
+    let contents = fs::read_to_string(config_dir.join("user-dirs.dirs")).ok()?;
+    let value = contents.lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("XDG_DOWNLOAD_DIR="))?;
+    let value = value.trim().trim_matches('"').trim_matches('\'');
+    let home_text = home.to_string_lossy();
+    let expanded = value
+        .replace("${HOME}", home_text.as_ref())
+        .replace("$HOME", home_text.as_ref());
+    let configured = PathBuf::from(expanded);
+    (configured.is_absolute() && configured.is_dir()).then_some(configured)
+}
+
 pub(super) fn output_dir_for_home(home: &Path) -> PathBuf {
     let config_dir = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
         .unwrap_or_else(|| home.join(".config"));
-    let user_dirs_file = config_dir.join("user-dirs.dirs");
 
-    if let Ok(contents) = fs::read_to_string(user_dirs_file) {
-        if let Some(value) = contents.lines()
-            .map(str::trim)
-            .find_map(|line| line.strip_prefix("XDG_DOWNLOAD_DIR="))
-        {
-            let value = value.trim().trim_matches('"').trim_matches('\'');
-            let home_text = home.to_string_lossy();
-            let expanded = value
-                .replace("${HOME}", home_text.as_ref())
-                .replace("$HOME", home_text.as_ref());
-            let configured = PathBuf::from(expanded);
-            if configured.is_absolute() && configured.is_dir() {
-                return configured;
-            }
-        }
-    }
-
-    let downloads = home.join("Downloads");
-    if downloads.is_dir() { downloads } else { home.to_path_buf() }
+    configured_download_dir(home, &config_dir).unwrap_or_else(|| {
+        let downloads = home.join("Downloads");
+        if downloads.is_dir() { downloads } else { home.to_path_buf() }
+    })
 }
 
 pub(in crate::app) fn default_output_dir() -> PathBuf {
@@ -278,5 +276,60 @@ mod incremental_image_import_tests {
                 PathBuf::from("/pages/PDF5.png"),
             ]
         );
+    }
+}
+
+
+#[cfg(test)]
+mod localized_download_dir_tests {
+    use super::{configured_download_dir, output_dir_for_home};
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn test_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("forgebox-{label}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn reads_localized_download_path_from_xdg_user_dirs() {
+        let root = test_root("localized-downloads");
+        let home = root.join("home");
+        let config = root.join("config");
+        let downloads = home.join("Загрузки");
+        fs::create_dir_all(&downloads).unwrap();
+        fs::create_dir_all(&config).unwrap();
+        fs::write(
+            config.join("user-dirs.dirs"),
+            "XDG_DOWNLOAD_DIR=\"$HOME/Загрузки\"\n",
+        ).unwrap();
+
+        assert_eq!(configured_download_dir(&home, &config), Some(downloads));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn falls_back_when_configured_download_directory_is_missing() {
+        let root = test_root("missing-configured-downloads");
+        let home = root.join("home");
+        let config = root.join("config");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&config).unwrap();
+        fs::write(
+            config.join("user-dirs.dirs"),
+            "XDG_DOWNLOAD_DIR=\"$HOME/Загрузки\"\n",
+        ).unwrap();
+
+        assert_eq!(configured_download_dir(&home, &config), None);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn uses_existing_downloads_folder_when_no_xdg_entry_exists() {
+        let root = test_root("downloads-fallback");
+        let home = root.join("home");
+        let downloads = home.join("Downloads");
+        fs::create_dir_all(&downloads).unwrap();
+        assert_eq!(output_dir_for_home(&home), downloads);
+        let _ = fs::remove_dir_all(root);
     }
 }
