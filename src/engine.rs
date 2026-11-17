@@ -32,6 +32,13 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+fn resize_geometry(width: u32, height: u32) -> String {
+    let width = if width == 0 { String::new() } else { width.to_string() };
+    let height = if height == 0 { String::new() } else { height.to_string() };
+    // The trailing '>' is ImageMagick's no-upscale modifier.
+    format!("{width}x{height}>")
+}
+
 fn image_first_frame_arg(input: &Path) -> OsString {
     let mut argument = input.as_os_str().to_os_string();
     argument.push("[0]");
@@ -167,7 +174,7 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
             run_magick_owned(args)
         }),
         (Tool::ImageResize, Options::ImageResize { width, height }) => process_each(&job, |input, out| {
-            let size = format!("{width}x{height}");
+            let size = resize_geometry(*width, *height);
             let mut args = image_source_args(input, true);
             args.extend([os("-auto-orient"), os("-strip"), os("-resize"), os(&size), os(out)]);
             run_magick_owned(args)
@@ -835,5 +842,18 @@ mod image_sequence_input_tests {
             strings(image_source_args(Path::new("photo.tif"), true)),
             vec!["photo.tif[0]"]
         );
+    }
+}
+
+
+#[cfg(test)]
+mod resize_geometry_tests {
+    use super::resize_geometry;
+
+    #[test]
+    fn supports_width_only_and_height_only_resize() {
+        assert_eq!(resize_geometry(1600, 0), "1600x>");
+        assert_eq!(resize_geometry(0, 1200), "x1200>");
+        assert_eq!(resize_geometry(1600, 1200), "1600x1200>");
     }
 }
