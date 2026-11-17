@@ -32,6 +32,9 @@ pub(super) fn data_convert(job: &Job, target_format: &str) -> Result<Vec<PathBuf
         ("csv", "json") => record_execution_warning(
             "CSV has no built-in data types; ForgeBox imports its cell values as strings.".into()
         ),
+        ("json", "csv") => record_execution_warning(
+            "Nested JSON arrays and objects are written as JSON text inside one CSV cell. CSV cannot reconstruct that nesting automatically.".into()
+        ),
         ("csv", "xlsx") | ("json", "xlsx") => record_execution_warning(
             "LibreOffice may infer spreadsheet cell types. Check identifiers with leading zeroes, long numbers, and date-like text after conversion.".into()
         ),
