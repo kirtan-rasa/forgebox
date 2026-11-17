@@ -35,10 +35,13 @@ ensure_fedora_ffmpeg() {
     fi
 
     if rpm -q ffmpeg-free >/dev/null 2>&1; then
-        printf 'Switching from Fedora ffmpeg-free to the full RPM Fusion FFmpeg build...\n'
-        run_privileged dnf swap --assumeyes ffmpeg-free ffmpeg --allowerasing
+        printf 'Fedora ffmpeg-free is installed. Replacing it may remove conflicting packages.\n'
+        if ! prompt_yes_no "Switch to the full RPM Fusion FFmpeg build?"; then
+            fail "FFmpeg replacement was cancelled. No package changes were made."
+        fi
+        run_privileged dnf swap ffmpeg-free ffmpeg --allowerasing </dev/tty
     else
-        run_privileged dnf install --assumeyes ffmpeg --allowerasing
+        run_privileged dnf install --assumeyes ffmpeg
     fi
 }
 
@@ -69,8 +72,8 @@ install_russian_ocr() {
     case "$PACKAGE_FAMILY" in
         fedora) run_privileged dnf install --assumeyes tesseract-langpack-rus ;;
         debian)
-            run_privileged apt-get update || return 1
-            run_privileged apt-get install --yes tesseract-ocr-rus
+            run_privileged apt-get update </dev/null </dev/null || return 1
+            run_privileged apt-get install --yes tesseract-ocr-rus </dev/null
             ;;
         arch) run_privileged pacman -S --needed --noconfirm tesseract-data-rus ;;
     esac
@@ -85,8 +88,8 @@ install_rembg_backend() {
             return 0
             ;;
         debian)
-            run_privileged apt-get update || return 1
-            run_privileged apt-get install --yes python3-venv || return 1
+            run_privileged apt-get update </dev/null </dev/null || return 1
+            run_privileged apt-get install --yes python3 </dev/null-venv </dev/null || return 1
             ;;
         arch) run_privileged pacman -S --needed --noconfirm python || return 1 ;;
     esac
@@ -211,8 +214,8 @@ if ! command -v python3 >/dev/null 2>&1; then
             run_privileged dnf install --assumeyes python3
             ;;
         debian)
-            run_privileged apt-get update
-            run_privileged apt-get install --yes python3
+            run_privileged apt-get update </dev/null
+            run_privileged apt-get install --yes python3 </dev/null
             ;;
         arch)
             run_privileged pacman -S --needed --noconfirm python
@@ -333,8 +336,8 @@ case "$PACKAGE_FAMILY" in
         run_privileged dnf install --assumeyes "$PACKAGE_PATH"
         ;;
     debian)
-        run_privileged apt-get update
-        run_privileged apt-get install --yes "$PACKAGE_PATH"
+        run_privileged apt-get update </dev/null
+        run_privileged apt-get install --yes "$PACKAGE_PATH" </dev/null
         ;;
     arch)
         if ! run_privileged pacman -U --noconfirm "$PACKAGE_PATH"; then
