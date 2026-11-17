@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Fixed
+- Correct Images to PDF move-down indexing and preserve manual ordering after arrow-button reorders.
+- Make wizard step buttons navigable, reset per-tool quality defaults, and trim text before generating QR codes.
+- Preserve JSON object key order and completed batch outputs after later failures or cancellation; verify that converters created their expected output files.
+- Preserve animated GIFs during Resize, Compress, and Grayscale by coalescing frames; limit GIF and multi-page TIFF inputs to one PDF page per selected source.
+- Account for display-matrix rotation in Video Sticker crop geometry and align odd-sized video frames for H.264 output.
+- Tone-map PQ/HLG HDR video to SDR BT.709 when FFmpeg's zscale filter is available; refuse unsafe fallback conversion otherwise.
+- Retain files dropped during active conversions and resolve the configured XDG Downloads folder, including localized paths.
+- Remove source metadata from ordinary video conversions and set the WebM output pixel format explicitly.
+- Re-detect ImageMagick binaries after installation and cache FFmpeg frame-sync options only after successful detection.
+- Add time limits and stronger cleanup for external conversion commands; preserve completed outputs when a batch fails.
+
+### Improved
+- Extend Rust tests for page ordering, GIF/TIFF frame selection, localized Downloads paths, image sequence handling, HDR detection, and video orientation.
+- Validate the complete Cargo dependency graph in CI and keep the committed lockfile synchronized with enabled features.
+
 ## 0.5.1
 
 ### Fixed
