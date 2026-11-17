@@ -1079,10 +1079,50 @@ fn display_oriented_dimensions(width: u32, height: u32, rotation: Option<f64>) -
     if rotation.rem_euclid(180) == 90 { (height, width) } else { (width, height) }
 }
 
+fn rational_value(value: &str) -> Option<f64> {
+    let (numerator, denominator) = value.split_once('/')?;
+    let numerator = numerator.trim().parse::<f64>().ok()?;
+    let denominator = denominator.trim().parse::<f64>().ok()?;
+    if !numerator.is_finite() || !denominator.is_finite() || denominator == 0.0 {
+        return None;
+    }
+    Some(numerator / denominator)
+}
+
+fn stream_duration_seconds(stream: &Value) -> Option<f64> {
+    stream.get("duration")
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .or_else(|| {
+            let ticks = stream.get("duration_ts")
+                .and_then(Value::as_i64)? as f64;
+            let time_base = stream.get("time_base").and_then(Value::as_str)?;
+            let seconds_per_tick = rational_value(time_base)?;
+            let duration = ticks * seconds_per_tick;
+            (duration.is_finite() && duration > 0.0).then_some(duration)
+        })
+        .or_else(|| {
+            let frames = stream.get("nb_frames")
+                .and_then(Value::as_str)?
+                .parse::<f64>().ok()?;
+            let frame_rate = stream.get("avg_frame_rate").and_then(Value::as_str)?;
+            let frames_per_second = rational_value(frame_rate)?;
+            if frames_per_second <= 0.0 { return None; }
+            let duration = frames / frames_per_second;
+            (duration.is_finite() && duration > 0.0).then_some(duration)
+        })
+}
+
 fn inspect_video(path: &Path, cancelled: &AtomicBool) -> Result<VideoInfo, String> {
     let mut command = Command::new("ffprobe");
-    command.args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,duration:stream_side_data=rotation:format=duration", "-of", "json"])
-        .arg(path);
+    command.args([
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries",
+        "stream=width,height,duration,duration_ts,time_base,nb_frames,avg_frame_rate:stream_side_data=rotation:format=duration",
+        "-of", "json",
+    ]).arg(path);
     let output = run_preview_command(command, cancelled)
         .map_err(|e| format!("Could not inspect the selected video: {e}. Install FFmpeg and FFprobe if they are missing."))?;
     if !output.status.success() {
@@ -1091,12 +1131,16 @@ fn inspect_video(path: &Path, cancelled: &AtomicBool) -> Result<VideoInfo, Strin
     }
     let value: Value = serde_json::from_slice(&output.stdout).map_err(|e| format!("FFprobe returned invalid metadata: {e}"))?;
     let stream = value["streams"].as_array().and_then(|s| s.first()).ok_or("The selected file does not contain a video stream.")?;
-    let duration = value["format"]["duration"].as_str().and_then(|s| s.parse::<f64>().ok())
-        .or_else(|| stream["duration"].as_str().and_then(|s| s.parse::<f64>().ok())).unwrap_or(0.0);
+    let duration = value["format"]["duration"].as_str()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .or_else(|| stream_duration_seconds(stream))
+        .unwrap_or(0.0);
     let width = stream["width"].as_u64().unwrap_or(0) as u32;
     let height = stream["height"].as_u64().unwrap_or(0) as u32;
     let rotation = stream["side_data_list"].as_array()
-        .and_then(|items| items.iter().find_map(|item| item["rotation"].as_f64()));
+        .and_then(|items| items.iter().find_map(|item| item["rotation"].as_f64()))
+        .or_else(|| stream["tags"]["rotate"].as_str().and_then(|value| value.parse::<f64>().ok()));
     let (width, height) = display_oriented_dimensions(width, height, rotation);
     if width < 2 || height < 2 || !duration.is_finite() || duration <= 0.0 {
         return Err("FFprobe could not determine the video dimensions or duration.".into());
@@ -1219,5 +1263,41 @@ mod display_orientation_tests {
         assert_eq!(display_oriented_dimensions(1920, 1080, Some(270.0)), (1080, 1920));
         assert_eq!(display_oriented_dimensions(1920, 1080, Some(180.0)), (1920, 1080));
         assert_eq!(display_oriented_dimensions(1920, 1080, None), (1920, 1080));
+    }
+}
+
+
+#[cfg(test)]
+mod duration_metadata_tests {
+    use super::{rational_value, stream_duration_seconds};
+    use serde_json::json;
+
+    #[test]
+    fn parses_ffprobe_rational_values() {
+        assert_eq!(rational_value("1/1000"), Some(0.001));
+        assert_eq!(rational_value("30000/1001"), Some(30000.0 / 1001.0));
+        assert_eq!(rational_value("1/0"), None);
+        assert_eq!(rational_value("N/A"), None);
+    }
+
+    #[test]
+    fn calculates_duration_from_stream_timestamps_when_webm_format_duration_is_missing() {
+        let stream = json!({
+            "duration": "N/A",
+            "duration_ts": 90000,
+            "time_base": "1/90000"
+        });
+        assert_eq!(stream_duration_seconds(&stream), Some(1.0));
+    }
+
+    #[test]
+    fn falls_back_to_frame_count_and_average_frame_rate() {
+        let stream = json!({
+            "duration": "N/A",
+            "duration_ts": "N/A",
+            "nb_frames": "60",
+            "avg_frame_rate": "30/1"
+        });
+        assert_eq!(stream_duration_seconds(&stream), Some(2.0));
     }
 }
