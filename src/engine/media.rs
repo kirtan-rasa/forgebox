@@ -17,7 +17,12 @@ pub(super) fn convert_video(input: &Path, output: &Path, target_format: &str, pr
         os("-i"), os(input),
         os("-vf"), os("scale=trunc(iw/2)*2:trunc(ih/2)*2"),
         os("-map"), os("0:v:0"), os("-map"), os("0:a?"),
-        os("-map_metadata"), os("0"), os("-threads"), os("2"),
+        // Conversion is privacy-first: do not carry source metadata (including GPS).
+        os("-map_metadata"), os("-1"),
+        os("-map_metadata:s:v"), os("-1"),
+        os("-map_metadata:s:a"), os("-1"),
+        os("-map_chapters"), os("-1"),
+        os("-threads"), os("2"),
     ];
     match format.as_str() {
         "mp4" | "mov" | "mkv" => {
@@ -35,6 +40,7 @@ pub(super) fn convert_video(input: &Path, output: &Path, target_format: &str, pr
             args.extend([
                 os("-c:v"), os("libvpx-vp9"), os("-deadline"), os("good"),
                 os("-cpu-used"), os(vp9_cpu_used), os("-crf"), os(&vp9_crf), os("-b:v"), os("0"),
+                os("-pix_fmt"), os("yuv420p"),
                 os("-c:a"), os("libopus"), os("-b:a"), os("128k"),
             ]);
         }
