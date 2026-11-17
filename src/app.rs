@@ -869,7 +869,7 @@ impl ForgeApp {
                         self.add_files(dropped);
                         self.wizard_step = 0;
                         let notice = format!(
-                            "Added {dropped_count} dropped item(s) after the active conversion finished."
+                            "Processed {dropped_count} item(s) dropped during the active conversion."
                         );
                         self.selection_notice = Some(match self.selection_notice.take() {
                             Some(existing) => format!("{existing} {notice}"),
