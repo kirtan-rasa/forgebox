@@ -19,7 +19,7 @@ fn first_frame_input_arg(input: &Path) -> OsString {
 
 pub(super) fn images_to_pdf(job: &Job, combine: bool, compress: bool, quality: u8) -> Result<Vec<PathBuf>, String> {
     require_files(job, 1, "Add at least one image to create a PDF.")?;
-    let allowed = ["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "heic", "avif", "gif"];
+    let allowed = ["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "heic", "heif", "avif", "gif"];
     for input in &job.files {
         let ext = input.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
         if !allowed.contains(&ext.as_str()) {
