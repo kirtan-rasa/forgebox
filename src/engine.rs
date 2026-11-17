@@ -221,39 +221,51 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
         (Tool::ImageOcr, Options::ImageOcr { language }) => process_each(&job, |input, out| {
             let base = out.with_extension("");
             let lang = if language.trim().is_empty() { "eng" } else { language.trim() };
-            run_ok("tesseract", vec![os(input), os(&base), os("-l"), os(lang), os("txt")])
-                .map(|_| ())
-                .map_err(|error| {
-                    if error.contains("Error opening data file")
-                        || error.contains("Failed loading language")
-                    {
-                        let languages = lang
-                            .split('+')
-                            .map(str::trim)
-                            .filter(|language| !language.is_empty())
-                            .collect::<Vec<_>>();
-                        let fedora_packages = languages
-                            .iter()
-                            .map(|language| format!("tesseract-langpack-{language}"))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        let debian_packages = languages
-                            .iter()
-                            .map(|language| format!("tesseract-ocr-{language}"))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        let arch_packages = languages
-                            .iter()
-                            .map(|language| format!("tesseract-data-{language}"))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        format!(
-                            "Tesseract language data for `{lang}` is missing. Install the matching language package and try again. Examples: Fedora: `sudo dnf install {fedora_packages}`; Debian/Ubuntu: `sudo apt install {debian_packages}`; Arch: `sudo pacman -S {arch_packages}`."
-                        )
-                    } else {
-                        error
-                    }
-                })
+            let temp = temp_dir_in(&job.output_dir, "ocr")?;
+            let oriented = temp.join("oriented.png");
+            let result = (|| {
+                run_magick_owned(vec![
+                    image_first_frame_arg(input),
+                    os("-auto-orient"),
+                    os("-strip"),
+                    os(&oriented),
+                ])?;
+                run_ok("tesseract", vec![os(&oriented), os(&base), os("-l"), os(lang), os("txt")])
+                    .map(|_| ())
+                    .map_err(|error| {
+                        if error.contains("Error opening data file")
+                            || error.contains("Failed loading language")
+                        {
+                            let languages = lang
+                                .split('+')
+                                .map(str::trim)
+                                .filter(|language| !language.is_empty())
+                                .collect::<Vec<_>>();
+                            let fedora_packages = languages
+                                .iter()
+                                .map(|language| format!("tesseract-langpack-{language}"))
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            let debian_packages = languages
+                                .iter()
+                                .map(|language| format!("tesseract-ocr-{language}"))
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            let arch_packages = languages
+                                .iter()
+                                .map(|language| format!("tesseract-data-{language}"))
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            format!(
+                                "Tesseract language data for {lang} is missing. Install the matching language package and try again. Examples: Fedora: sudo dnf install {fedora_packages}; Debian/Ubuntu: sudo apt install {debian_packages}; Arch: sudo pacman -S {arch_packages}."
+                            )
+                        } else {
+                            error
+                        }
+                    })
+            })();
+            let _ = fs::remove_dir_all(&temp);
+            result
         }),
         (Tool::GenerateQr, Options::GenerateQr { text }) => {
             let text = text.trim();
