@@ -318,6 +318,35 @@ impl Job {
                 return Err("Audio bitrate must be between 64 and 320 kb/s.".into());
             }
         }
+        if let JobOptions::ImageCompress { quality } = &options {
+            if !(1..=100).contains(quality) {
+                return Err("Image quality must be between 1 and 100.".into());
+            }
+        }
+        if let JobOptions::ImagesToPdf { quality, .. } = &options {
+            if !(20..=100).contains(quality) {
+                return Err("PDF image quality must be between 20 and 100.".into());
+            }
+        }
+        if let JobOptions::PdfToImages { dpi, .. } = &options {
+            if !(36..=600).contains(dpi) {
+                return Err("PDF image DPI must be between 36 and 600.".into());
+            }
+        }
+        if let JobOptions::VideoConvert { quality, .. } = &options {
+            if !(18..=30).contains(quality) {
+                return Err("Video quality must be between 18 and 30.".into());
+            }
+        }
+        if let JobOptions::VideoToGif { width, fps } = &options {
+            if !(64..=1280).contains(width) {
+                return Err("GIF width must be between 64 and 1280 pixels.".into());
+            }
+            if !(1..=30).contains(fps) {
+                return Err("GIF frame rate must be between 1 and 30 FPS.".into());
+            }
+        }
+
 
         if let JobOptions::ImageResize { width, height } = &options {
             let requested_pixels = u64::from(*width) * u64::from(*height);
