@@ -70,6 +70,7 @@ struct ForgeApp {
     files: Vec<PathBuf>,
     images_order_manually_edited: bool,
     selection_notice: Option<String>,
+    deferred_dropped_files: Vec<PathBuf>,
     secondary_file: Option<PathBuf>,
     output_dir: PathBuf,
     target_format: String,
@@ -141,6 +142,7 @@ impl ForgeApp {
             files: Vec::new(),
             images_order_manually_edited: false,
             selection_notice: None,
+            deferred_dropped_files: Vec::new(),
             secondary_file: None,
             output_dir: view::default_output_dir(),
             target_format: "png".into(),
@@ -860,6 +862,20 @@ impl ForgeApp {
                         self.logs.drain(0..self.logs.len() - 200);
                     }
                     self.queue_run_indices.clear();
+
+                    if !self.deferred_dropped_files.is_empty() {
+                        let dropped = std::mem::take(&mut self.deferred_dropped_files);
+                        let dropped_count = dropped.len();
+                        self.add_files(dropped);
+                        self.wizard_step = 0;
+                        let notice = format!(
+                            "Added {dropped_count} dropped item(s) after the active conversion finished."
+                        );
+                        self.selection_notice = Some(match self.selection_notice.take() {
+                            Some(existing) => format!("{existing} {notice}"),
+                            None => notice,
+                        });
+                    }
                 }
             }
         }
