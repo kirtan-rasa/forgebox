@@ -209,7 +209,8 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
                 })
         }),
         (Tool::GenerateQr, Options::GenerateQr { text }) => {
-            if text.trim().is_empty() {
+            let text = text.trim();
+            if text.is_empty() {
                 return Err("Enter text or a URL for the QR code.".into());
             }
             let reservation = reserve_unique_path(&job.output_dir, "qr-code", "png")?;
