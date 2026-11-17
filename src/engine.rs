@@ -32,6 +32,26 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+fn image_compression_args(input: &Path, quality: u8) -> Vec<OsString> {
+    let extension = input.extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    match extension.as_str() {
+        "png" => {
+            // PNG remains lossless. The slider controls zlib compression effort,
+            // not visual quality, and must not be passed as ImageMagick -quality.
+            let level = (u16::from(quality) * 9 / 100).min(9);
+            vec![os("-define"), os(&format!("png:compression-level={level}"))]
+        }
+        "jpg" | "jpeg" | "webp" | "heic" | "heif" => {
+            vec![os("-quality"), os(&quality.to_string())]
+        }
+        _ => Vec::new(),
+    }
+}
+
 fn resize_geometry(width: u32, height: u32) -> String {
     let width = if width == 0 { String::new() } else { width.to_string() };
     let height = if height == 0 { String::new() } else { height.to_string() };
@@ -180,9 +200,10 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
             run_magick_owned(args)
         }),
         (Tool::ImageCompress, Options::ImageCompress { quality }) => process_each(&job, |input, out| {
-            let quality = quality.to_string();
             let mut args = image_source_args(input, true);
-            args.extend([os("-auto-orient"), os("-strip"), os("-quality"), os(&quality), os(out)]);
+            args.extend([os("-auto-orient"), os("-strip")]);
+            args.extend(image_compression_args(input, *quality));
+            args.push(os(out));
             run_magick_owned(args)
         }),
         (Tool::ImageGrayscale, Options::None) => process_each(&job, |input, out| {
@@ -855,5 +876,38 @@ mod resize_geometry_tests {
         assert_eq!(resize_geometry(1600, 0), "1600x>");
         assert_eq!(resize_geometry(0, 1200), "x1200>");
         assert_eq!(resize_geometry(1600, 1200), "1600x1200>");
+    }
+}
+
+
+#[cfg(test)]
+mod image_compression_args_tests {
+    use super::image_compression_args;
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    fn strings(values: Vec<OsString>) -> Vec<String> {
+        values.into_iter().map(|value| value.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn png_uses_lossless_compression_level_instead_of_quality() {
+        assert_eq!(
+            strings(image_compression_args(Path::new("input.png"), 82)),
+            vec!["-define", "png:compression-level=7"]
+        );
+    }
+
+    #[test]
+    fn lossy_formats_receive_quality_and_other_formats_use_defaults() {
+        assert_eq!(
+            strings(image_compression_args(Path::new("input.jpg"), 82)),
+            vec!["-quality", "82"]
+        );
+        assert_eq!(
+            strings(image_compression_args(Path::new("input.webp"), 70)),
+            vec!["-quality", "70"]
+        );
+        assert!(image_compression_args(Path::new("input.tiff"), 82).is_empty());
     }
 }
