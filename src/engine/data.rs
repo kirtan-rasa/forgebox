@@ -87,15 +87,36 @@ enum CsvEncoding {
 }
 
 fn detect_csv_encoding(input: &Path) -> Result<CsvEncoding, String> {
-    // Excel's Russian regional defaults commonly use Windows-1251. Inspect a
-    // bounded prefix; the actual conversion remains streaming.
+    // Validate the entire file in bounded chunks, keeping only an incomplete
+    // UTF-8 code point between reads. The actual conversion is also streaming.
     let file = fs::File::open(input).map_err(display_io)?;
-    let mut sample = vec![0u8; 64 * 1024];
-    let count = file.take(sample.len() as u64).read(&mut sample).map_err(display_io)?;
-    match std::str::from_utf8(&sample[..count]) {
-        Ok(_) => Ok(CsvEncoding::Utf8),
-        Err(error) if error.error_len().is_none() => Ok(CsvEncoding::Utf8),
-        Err(_) => Ok(CsvEncoding::Windows1251),
+    let mut reader = BufReader::new(file);
+    let mut incomplete = Vec::new();
+
+    loop {
+        let chunk = reader.fill_buf().map_err(display_io)?;
+        if chunk.is_empty() {
+            return Ok(if incomplete.is_empty() {
+                CsvEncoding::Utf8
+            } else {
+                CsvEncoding::Windows1251
+            });
+        }
+
+        let consumed = chunk.len();
+        let mut bytes = Vec::with_capacity(incomplete.len() + consumed);
+        bytes.extend_from_slice(&incomplete);
+        bytes.extend_from_slice(chunk);
+
+        match std::str::from_utf8(&bytes) {
+            Ok(_) => incomplete.clear(),
+            Err(error) if error.error_len().is_none() => {
+                incomplete.clear();
+                incomplete.extend_from_slice(&bytes[error.valid_up_to()..]);
+            }
+            Err(_) => return Ok(CsvEncoding::Windows1251),
+        }
+        reader.consume(consumed);
     }
 }
 
@@ -607,6 +628,44 @@ mod tests {
             .contains("Extra fields would be lost"));
         assert!(!output.exists());
 
+        fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+
+#[cfg(test)]
+mod windows_1251_tests {
+    use super::{csv_to_json, CsvEncoding, Windows1251Reader};
+    use std::fs;
+    use std::io::{Cursor, Read};
+
+    #[test]
+    fn decodes_common_cyrillic_windows_1251_bytes() {
+        // "Привет" in Windows-1251.
+        let bytes = [0xCF, 0xF0, 0xE8, 0xE2, 0xE5, 0xF2];
+        let mut reader = Windows1251Reader::new(Cursor::new(bytes));
+        let mut decoded = String::new();
+        reader.read_to_string(&mut decoded).unwrap();
+        assert_eq!(decoded, "Привет");
+    }
+
+    #[test]
+    fn converts_semicolon_delimited_windows_1251_csv() {
+        let directory = super::temp_dir("csv-json-windows-1251-test").unwrap();
+        let input = directory.join("input.csv");
+        let output = directory.join("output.json");
+        let bytes = [
+            0xE8,0xEC,0xFF,b';',0xE3,0xEE,0xF0,0xEE,0xE4,b'\n',
+            0xC0,0xE4,0xE0,b';',0xCC,0xEE,0xF1,0xEA,0xE2,0xE0,b'\n'
+        ];
+        fs::write(&input, bytes).unwrap();
+
+        assert_eq!(super::detect_csv_encoding(&input).unwrap(), CsvEncoding::Windows1251);
+        csv_to_json(&input, &output).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+        assert_eq!(value[0]["имя"], "Ада");
+        assert_eq!(value[0]["город"], "Москва");
         fs::remove_dir_all(directory).unwrap();
     }
 }
