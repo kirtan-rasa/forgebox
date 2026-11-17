@@ -349,18 +349,18 @@ impl Job {
 
 
         if let JobOptions::ImageResize { width, height } = &options {
-            let requested_pixels = u64::from(*width) * u64::from(*height);
-            if *width == 0 || *height == 0 {
-                return Err("Image resize width and height must be greater than zero.".into());
+            if *width == 0 && *height == 0 {
+                return Err("Image resize requires at least one non-zero dimension.".into());
             }
-            if *width > MAX_IMAGE_RESIZE_DIMENSION
-                || *height > MAX_IMAGE_RESIZE_DIMENSION
-                || requested_pixels > MAX_IMAGE_RESIZE_PIXELS
+            if (*width > 0 && *width > MAX_IMAGE_RESIZE_DIMENSION)
+                || (*height > 0 && *height > MAX_IMAGE_RESIZE_DIMENSION)
             {
-                return Err(
-                    "Image resize bounds are limited to 16,384 px per side and 64 megapixels in total."
-                        .into(),
-                );
+                return Err("Image resize dimensions are limited to 16,384 px per side.".into());
+            }
+            if *width > 0 && *height > 0
+                && u64::from(*width) * u64::from(*height) > MAX_IMAGE_RESIZE_PIXELS
+            {
+                return Err("Image resize bounds are limited to 64 megapixels in total.".into());
             }
         }
 
@@ -433,10 +433,12 @@ mod tests {
             )
         };
 
-        assert!(make_job(0, 100).is_err());
-        assert!(make_job(16_385, 1).is_err());
+        assert!(make_job(0, 0).is_err());
+        assert!(make_job(16_385, 0).is_err());
         assert!(make_job(8_001, 8_000).is_err());
         assert!(make_job(8_000, 8_000).is_ok());
+        assert!(make_job(0, 1_200).is_ok());
+        assert!(make_job(1_600, 0).is_ok());
     }
 
     #[test]
