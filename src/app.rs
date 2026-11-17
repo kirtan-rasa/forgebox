@@ -502,10 +502,22 @@ impl ForgeApp {
                 format: ImageFormat::parse(&self.target_format)?,
             },
             ToolId::ImageResize => {
-                let width = self.width.trim().parse::<u32>()
-                    .map_err(|_| "Enter a valid whole-number image width.".to_string())?;
-                let height = self.height.trim().parse::<u32>()
-                    .map_err(|_| "Enter a valid whole-number image height.".to_string())?;
+                let parse_dimension = |value: &str, label: &str| -> Result<u32, String> {
+                    if value.trim().is_empty() {
+                        return Ok(0);
+                    }
+                    let parsed = value.trim().parse::<u32>()
+                        .map_err(|_| format!("Enter a valid whole-number image {label}."))?;
+                    if parsed == 0 || parsed > 16_384 {
+                        return Err(format!("Image {label} must be between 1 and 16,384 px."));
+                    }
+                    Ok(parsed)
+                };
+                let width = parse_dimension(&self.width, "width")?;
+                let height = parse_dimension(&self.height, "height")?;
+                if width == 0 && height == 0 {
+                    return Err("Enter a width or height. Leave the other field blank to calculate it automatically.".into());
+                }
                 JobOptions::ImageResize { width, height }
             },
             ToolId::ImageCompress => JobOptions::ImageCompress {
