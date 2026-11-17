@@ -1,5 +1,6 @@
 use crate::catalog::ToolId;
 use std::cmp::Ordering;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 
@@ -143,12 +144,31 @@ pub(super) fn file_glyph(path: &PathBuf) -> &'static str {
 }
 
 pub(super) fn output_dir_for_home(home: &Path) -> PathBuf {
-    let downloads = home.join("Downloads");
-    if downloads.is_dir() {
-        downloads
-    } else {
-        home.to_path_buf()
+    let config_dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| home.join(".config"));
+    let user_dirs_file = config_dir.join("user-dirs.dirs");
+
+    if let Ok(contents) = fs::read_to_string(user_dirs_file) {
+        if let Some(value) = contents.lines()
+            .map(str::trim)
+            .find_map(|line| line.strip_prefix("XDG_DOWNLOAD_DIR="))
+        {
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            let home_text = home.to_string_lossy();
+            let expanded = value
+                .replace("${HOME}", home_text.as_ref())
+                .replace("$HOME", home_text.as_ref());
+            let configured = PathBuf::from(expanded);
+            if configured.is_absolute() && configured.is_dir() {
+                return configured;
+            }
+        }
     }
+
+    let downloads = home.join("Downloads");
+    if downloads.is_dir() { downloads } else { home.to_path_buf() }
 }
 
 pub(in crate::app) fn default_output_dir() -> PathBuf {
