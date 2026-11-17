@@ -213,7 +213,7 @@ fn sticker_video_info(input: &Path) -> Result<StickerVideoInfo, String> {
     let output = run_ok("ffprobe", vec![
         os("-v"), os("error"),
         os("-select_streams"), os("v:0"),
-        os("-show_entries"), os("stream=width,height:stream_side_data=rotation"),
+        os("-show_entries"), os("stream=width,height:stream_side_data=rotation:stream_tags=rotate"),
         os("-of"), os("json"),
         os(input),
     ]).map_err(|error| format!("Could not inspect the source video: {error}"))?;
@@ -227,7 +227,9 @@ fn sticker_video_info(input: &Path) -> Result<StickerVideoInfo, String> {
     let height = stream.get("height").and_then(Value::as_u64).unwrap_or(0) as u32;
     let rotation = stream.get("side_data_list")
         .and_then(Value::as_array)
-        .and_then(|items| items.iter().find_map(|item| item.get("rotation").and_then(Value::as_f64)));
+        .and_then(|items| items.iter().find_map(|item| item.get("rotation").and_then(Value::as_f64)))
+        .or_else(|| stream.get("tags").and_then(|tags| tags.get("rotate"))
+            .and_then(Value::as_str).and_then(|value| value.parse::<f64>().ok()));
     let (width, height) = display_oriented_dimensions(width, height, rotation);
     if width < 2 || height < 2 {
         return Err("The selected video has invalid dimensions.".into());
