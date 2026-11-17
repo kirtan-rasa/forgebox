@@ -3,7 +3,19 @@ use super::{
     run_magick_owned, run_ok, sort_numbered_paths, temp_dir, Job,
 };
 use std::fs;
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+
+fn first_frame_input_arg(input: &Path) -> OsString {
+    let mut argument = input.as_os_str().to_os_string();
+    let extension = input.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+    if ["gif", "tif", "tiff"].iter().any(|value| extension.eq_ignore_ascii_case(value)) {
+        // Each selected source file contributes exactly one PDF page.
+        // GIF and multi-page TIFF inputs must not fan out into extra files.
+        argument.push("[0]");
+    }
+    argument
+}
 
 pub(super) fn images_to_pdf(job: &Job, combine: bool, compress: bool, quality: u8) -> Result<Vec<PathBuf>, String> {
     require_files(job, 1, "Add at least one image to create a PDF.")?;
@@ -24,13 +36,7 @@ pub(super) fn images_to_pdf(job: &Job, combine: bool, compress: bool, quality: u
             // cannot be applied again by the PDF encoder. Preserve density metadata so physical
             // page dimensions remain consistent with the source image.
             let page = temp.join(format!("page-{:05}.png", index + 1));
-            let mut input_arg = input.as_os_str().to_os_string();
-            let extension = input.extension().and_then(|ext| ext.to_str()).unwrap_or("");
-            if ["gif", "tif", "tiff"].iter().any(|value| extension.eq_ignore_ascii_case(value)) {
-                // Each selected source file contributes exactly one PDF page.
-                // GIF and multi-page TIFF inputs must not fan out into extra files.
-                input_arg.push("[0]");
-            }
+            let input_arg = first_frame_input_arg(input);
             if let Err(error) = run_magick_owned(vec![input_arg, os("-auto-orient"), os("+repage"), os(&page)]) {
                 let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("image");
                 return Err(format!(r#"Failed to prepare "{name}": {error}"#));
@@ -123,23 +129,14 @@ pub(super) fn long_png_to_pdf(job: &Job) -> Result<Vec<PathBuf>, String> {
 
 #[cfg(test)]
 mod first_frame_input_tests {
-    use std::ffi::OsString;
+    use super::first_frame_input_arg;
     use std::path::Path;
-
-    fn first_frame_argument(path: &Path) -> OsString {
-        let mut argument = path.as_os_str().to_os_string();
-        let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
-        if ["gif", "tif", "tiff"].iter().any(|value| extension.eq_ignore_ascii_case(value)) {
-            argument.push("[0]");
-        }
-        argument
-    }
 
     #[test]
     fn multi_frame_sources_are_limited_to_one_pdf_page() {
         for path in ["animation.gif", "scan.tif", "archive.TIFF"] {
             assert_eq!(
-                first_frame_argument(Path::new(path)).to_string_lossy(),
+                first_frame_input_arg(Path::new(path)).to_string_lossy(),
                 format!("{path}[0]")
             );
         }
@@ -148,7 +145,7 @@ mod first_frame_input_tests {
     #[test]
     fn ordinary_images_keep_their_original_path() {
         assert_eq!(
-            first_frame_argument(Path::new("photo.png")).to_string_lossy(),
+            first_frame_input_arg(Path::new("photo.png")).to_string_lossy(),
             "photo.png"
         );
     }
