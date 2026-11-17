@@ -147,12 +147,26 @@ impl ForgeApp {
                                 } else {
                                     (visible_index + 1).to_string()
                                 };
-                                ui.add_sized(
+                                let step_button = ui.add_sized(
                                     [node_width(step_id), 34.0],
                                     egui::Button::new(RichText::new(caption).font(egui::FontId::monospace(if small_controls { 10.5 } else { 11.5 })).strong().color(if active { CYAN } else if complete { GREEN } else { MUTED }))
                                         .fill(fill)
                                         .stroke(Stroke::new(1.0_f32, edge)),
                                 );
+                                if step_button.clicked() && !self.running {
+                                    if visible_index <= current_index {
+                                        self.wizard_step = step_id;
+                                    } else if visible_index == current_index + 1 {
+                                        let can_advance = match self.wizard_step {
+                                            0 => self.can_advance_from_files(),
+                                            1 => self.selected_tool != ToolId::GenerateQr || !self.text.trim().is_empty(),
+                                            _ => false,
+                                        };
+                                        if can_advance {
+                                            self.wizard_step = step_id;
+                                        }
+                                    }
+                                }
                                 if visible_index + 1 < visible_steps.len() {
                                     let arrow_color = if current_index > visible_index { GREEN } else { BORDER };
                                     let (rect, _) = ui.allocate_exact_size(Vec2::new(arrow_width, 24.0), egui::Sense::hover());
@@ -403,7 +417,7 @@ impl ForgeApp {
                                                                     }
                                                                     if ui.add_enabled(!self.running && self.dragging_file.is_none(), egui::Button::new("Remove").min_size(Vec2::new((inner_width - 104.0).max(64.0), 34.0))).clicked() { remove_index = Some(current); }
                                                                     if reorder_arrow_button(ui, current + 1 < self.files.len() && !self.running && self.dragging_file.is_none(), false, "Move page down") {
-                                                                        reorder_request = Some((current, current + 1));
+                                                                        reorder_request = Some((current, current + 2));
                                                                     }
                                                                 });
                                                                 controls_rect = Some(controls_row.response.rect);
@@ -599,7 +613,12 @@ impl ForgeApp {
                                 }
                             }
                             if let Some((from, insertion_index)) = reorder_request {
-                                if !self.running { reorder_item(&mut self.files, from, insertion_index); }
+                                if !self.running && from < self.files.len() {
+                                    reorder_item(&mut self.files, from, insertion_index);
+                                    if self.selected_tool == ToolId::ImagesToPdf {
+                                        self.images_order_manually_edited = true;
+                                    }
+                                }
                             }
                             if let Some(index) = remove_index {
                                 if index < self.files.len() && !self.running {
