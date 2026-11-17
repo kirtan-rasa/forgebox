@@ -128,7 +128,7 @@ fn detect_csv_delimiter(input: &Path) -> Result<u8, String> {
     let file = fs::File::open(input).map_err(display_io)?;
     let mut reader = BufReader::new(file);
     let mut header = Vec::new();
-    reader.read_until(b'\\n', &mut header).map_err(display_io)?;
+    reader.read_until(b'\n', &mut header).map_err(display_io)?;
 
     let mut commas = 0usize;
     let mut semicolons = 0usize;
@@ -211,9 +211,9 @@ fn windows1251_character(byte: u8) -> char {
 
     match byte {
         0x00..=0x7F => byte as char,
-        0x80..=0xBF => char::from_u32(EXTENDED[usize::from(byte - 0x80)]).unwrap_or('\\u{FFFD}'),
-        0xC0..=0xDF => char::from_u32(0x0410 + u32::from(byte - 0xC0)).unwrap_or('\\u{FFFD}'),
-        0xE0..=0xFF => char::from_u32(0x0430 + u32::from(byte - 0xE0)).unwrap_or('\\u{FFFD}'),
+        0x80..=0xBF => char::from_u32(EXTENDED[usize::from(byte - 0x80)]).unwrap_or('\u{FFFD}'),
+        0xC0..=0xDF => char::from_u32(0x0410 + u32::from(byte - 0xC0)).unwrap_or('\u{FFFD}'),
+        0xE0..=0xFF => char::from_u32(0x0430 + u32::from(byte - 0xE0)).unwrap_or('\u{FFFD}'),
     }
 }
 
