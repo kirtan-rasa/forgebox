@@ -462,9 +462,13 @@ impl ForgeApp {
             }
         }
 
+        // Build the active-file index once per repaint. Calling Vec::contains
+        // from each retain/receive operation makes large page sets quadratic.
+        let active_files: HashSet<PathBuf> = self.files.iter().cloned().collect();
+
         while let Ok((path, result)) = self.thumbnail_rx.try_recv() {
             self.thumbnail_pending.remove(&path);
-            if !self.files.contains(&path) { continue; }
+            if !active_files.contains(&path) { continue; }
             match result {
                 Ok(image) => {
                     let texture = ctx.load_texture(
@@ -477,8 +481,8 @@ impl ForgeApp {
                 Err(_) => { self.thumbnail_errors.insert(path); }
             }
         }
-        self.thumbnails.retain(|path, _| self.files.contains(path));
-        self.thumbnail_errors.retain(|path| self.files.contains(path));
+        self.thumbnails.retain(|path, _| active_files.contains(path));
+        self.thumbnail_errors.retain(|path| active_files.contains(path));
         // Keep in-flight entries for removed files until their worker returns so rapid
         // edits cannot accidentally launch unlimited thumbnail decoders in parallel.
     }
