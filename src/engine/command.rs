@@ -10,12 +10,10 @@ fn os<T: AsRef<OsStr>>(value: T) -> OsString {
     value.as_ref().to_os_string()
 }
 
-static IMAGEMAGICK_PROGRAM: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
-
 pub(crate) fn image_magick_program() -> &'static str {
-    *IMAGEMAGICK_PROGRAM.get_or_init(|| {
-        if has_command("magick") { "magick" } else { "convert" }
-    })
+    // Probe each time so an installation or repair made while ForgeBox is
+    // running is picked up without requiring an application restart.
+    if has_command("magick") { "magick" } else { "convert" }
 }
 
 /// Reserve at least one available CPU thread for the desktop UI and the rest
