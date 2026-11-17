@@ -47,7 +47,7 @@ replace_one(package_pattern, replacement, "package()")
 # FFmpeg is required by ForgeBox's media tools and must remain in depends.
 # Cargo.toml is the source of truth for native package dependencies.
 depends_match = re.search(r"(?ms)^depends=\((.*?)\)", text)
-if not depends_match or not re.search(r"(?<![\\w-])ffmpeg(?![\\w-])", depends_match.group(1)):
+if not depends_match or not re.search(r"(?<![\w-])ffmpeg(?![\w-])", depends_match.group(1)):
     raise SystemExit("Generated PKGBUILD is missing the required ffmpeg dependency.")
 
 path.write_text(text, encoding="utf-8")
