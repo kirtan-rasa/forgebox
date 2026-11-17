@@ -9,6 +9,7 @@ use serde::{Deserializer, Serializer};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::fmt;
+use std::io;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -79,37 +80,132 @@ pub(super) fn data_convert(job: &Job, target_format: &str) -> Result<Vec<PathBuf
     Ok(vec![out])
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CsvEncoding {
+    Utf8,
+    Windows1251,
+}
+
+fn detect_csv_encoding(input: &Path) -> Result<CsvEncoding, String> {
+    // Excel's Russian regional defaults commonly use Windows-1251. Inspect a
+    // bounded prefix; the actual conversion remains streaming.
+    let file = fs::File::open(input).map_err(display_io)?;
+    let mut sample = vec![0u8; 64 * 1024];
+    let count = file.take(sample.len() as u64).read(&mut sample).map_err(display_io)?;
+    match std::str::from_utf8(&sample[..count]) {
+        Ok(_) => Ok(CsvEncoding::Utf8),
+        Err(error) if error.error_len().is_none() => Ok(CsvEncoding::Utf8),
+        Err(_) => Ok(CsvEncoding::Windows1251),
+    }
+}
+
 fn detect_csv_delimiter(input: &Path) -> Result<u8, String> {
+    // Delimiters and quotes are ASCII in both supported encodings.
     let file = fs::File::open(input).map_err(display_io)?;
     let mut reader = BufReader::new(file);
-    let mut header = String::new();
-    reader.read_line(&mut header).map_err(display_io)?;
+    let mut header = Vec::new();
+    reader.read_until(b'\\n', &mut header).map_err(display_io)?;
 
     let mut commas = 0usize;
     let mut semicolons = 0usize;
     let mut quoted = false;
-    let mut chars = header.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '"' if quoted && chars.peek() == Some(&'"') => { chars.next(); }
-            '"' => quoted = !quoted,
-            ',' if !quoted => commas += 1,
-            ';' if !quoted => semicolons += 1,
+    let mut index = 0usize;
+    while index < header.len() {
+        match header[index] {
+            b'"' if quoted && header.get(index + 1) == Some(&b'"') => index += 1,
+            b'"' => quoted = !quoted,
+            b',' if !quoted => commas += 1,
+            b';' if !quoted => semicolons += 1,
             _ => {}
         }
+        index += 1;
     }
 
     Ok(if semicolons > commas && semicolons > 0 { b';' } else { b',' })
 }
 
+struct Windows1251Reader<R> {
+    inner: R,
+    decoded: Vec<u8>,
+    offset: usize,
+    finished: bool,
+}
+
+impl<R> Windows1251Reader<R> {
+    fn new(inner: R) -> Self {
+        Self { inner, decoded: Vec::new(), offset: 0, finished: false }
+    }
+}
+
+impl<R: Read> Read for Windows1251Reader<R> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+
+        loop {
+            if self.offset < self.decoded.len() {
+                let count = output.len().min(self.decoded.len() - self.offset);
+                output[..count].copy_from_slice(&self.decoded[self.offset..self.offset + count]);
+                self.offset += count;
+                return Ok(count);
+            }
+
+            if self.finished {
+                return Ok(0);
+            }
+
+            let mut input = [0u8; 8192];
+            let count = self.inner.read(&mut input)?;
+            if count == 0 {
+                self.finished = true;
+                return Ok(0);
+            }
+
+            self.decoded.clear();
+            self.offset = 0;
+            for byte in input[..count].iter().copied() {
+                let character = windows1251_character(byte);
+                let mut encoded = [0u8; 4];
+                self.decoded.extend_from_slice(character.encode_utf8(&mut encoded).as_bytes());
+            }
+        }
+    }
+}
+
+fn windows1251_character(byte: u8) -> char {
+    const EXTENDED: [u32; 64] = [
+        0x0402, 0x0403, 0x201A, 0x0453, 0x201E, 0x2026, 0x2020, 0x2021,
+        0x20AC, 0x2030, 0x0409, 0x2039, 0x040A, 0x040C, 0x040B, 0x040F,
+        0x0452, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+        0xFFFD, 0x2122, 0x0459, 0x203A, 0x045A, 0x045C, 0x045B, 0x045F,
+        0x00A0, 0x040E, 0x045E, 0x0408, 0x00A4, 0x0490, 0x00A6, 0x00A7,
+        0x0401, 0x00A9, 0x0404, 0x00AB, 0x00AC, 0x00AD, 0x00AE, 0x0407,
+        0x00B0, 0x00B1, 0x0406, 0x0456, 0x0491, 0x00B5, 0x00B6, 0x00B7,
+        0x0451, 0x2116, 0x0454, 0x00BB, 0x0458, 0x0405, 0x0455, 0x0457,
+    ];
+
+    match byte {
+        0x00..=0x7F => byte as char,
+        0x80..=0xBF => char::from_u32(EXTENDED[usize::from(byte - 0x80)]).unwrap_or('\\u{FFFD}'),
+        0xC0..=0xDF => char::from_u32(0x0410 + u32::from(byte - 0xC0)).unwrap_or('\\u{FFFD}'),
+        0xE0..=0xFF => char::from_u32(0x0430 + u32::from(byte - 0xE0)).unwrap_or('\\u{FFFD}'),
+    }
+}
+
 pub(super) fn csv_to_json(input: &Path, output: &Path) -> Result<(), String> {
     // Serialize one CSV row at a time instead of keeping the whole document in memory.
+    let encoding = detect_csv_encoding(input)?;
     let delimiter = detect_csv_delimiter(input)?;
+    let source = fs::File::open(input).map_err(display_io)?;
+    let source: Box<dyn Read> = match encoding {
+        CsvEncoding::Utf8 => Box::new(source),
+        CsvEncoding::Windows1251 => Box::new(Windows1251Reader::new(source)),
+    };
     let mut reader = ReaderBuilder::new()
         .delimiter(delimiter)
         .flexible(true)
-        .from_path(input)
-        .map_err(|e| format!("Could not read CSV: {e}"))?;
+        .from_reader(source);
     let headers = reader
         .headers()
         .map_err(|e| format!("Failed to read CSV headers: {e}"))?
