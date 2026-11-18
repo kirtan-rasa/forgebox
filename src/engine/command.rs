@@ -298,12 +298,18 @@ pub(super) fn run_qpdf(args: Vec<OsString>) -> Result<Output, String> {
     Ok(output)
 }
 
-pub(super) fn command_version_succeeds(candidate: &OsStr) -> bool {
-    Command::new(candidate)
-        .arg("--version")
-        .output()
+const COMMAND_VERSION_TIMEOUT: Duration = Duration::from_secs(3);
+
+fn command_version_succeeds_with_timeout(candidate: &OsStr, timeout: Duration) -> bool {
+    let mut command = Command::new(candidate);
+    command.arg("--version");
+    run_cancellable(&mut command, Some(timeout))
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+pub(super) fn command_version_succeeds(candidate: &OsStr) -> bool {
+    command_version_succeeds_with_timeout(candidate, COMMAND_VERSION_TIMEOUT)
 }
 
 fn has_command(program: &str) -> bool {
@@ -398,5 +404,38 @@ mod inherited_pipe_tests {
 
         assert!(error.contains("kept the command output pipes open"));
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+}
+
+
+#[cfg(all(test, unix))]
+mod command_version_timeout_tests {
+    use super::command_version_succeeds_with_timeout;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn version_probe_stops_a_hung_executable() {
+        let path = std::env::temp_dir().join(format!(
+            "forgebox-hung-version-probe-{}",
+            std::process::id()
+        ));
+        fs::write(&path, "#!/bin/sh\nsleep 10\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let started = Instant::now();
+        let succeeded = command_version_succeeds_with_timeout(
+            path.as_os_str(),
+            Duration::from_millis(150),
+        );
+        let elapsed = started.elapsed();
+
+        let _ = fs::remove_file(&path);
+        assert!(!succeeded, "a timed-out version probe must not report success");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "a hung version probe should stop promptly, elapsed: {elapsed:?}"
+        );
     }
 }
