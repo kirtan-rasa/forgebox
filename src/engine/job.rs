@@ -352,8 +352,8 @@ impl Job {
             if *width == 0 && *height == 0 {
                 return Err("Image resize requires at least one non-zero dimension.".into());
             }
-            if (*width > 0 && *width > MAX_IMAGE_RESIZE_DIMENSION)
-                || (*height > 0 && *height > MAX_IMAGE_RESIZE_DIMENSION)
+            if *width > MAX_IMAGE_RESIZE_DIMENSION
+                || *height > MAX_IMAGE_RESIZE_DIMENSION
             {
                 return Err("Image resize dimensions are limited to 16,384 px per side.".into());
             }
