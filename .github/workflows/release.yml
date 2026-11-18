@@ -57,6 +57,19 @@ jobs:
         run: |
           find scripts packaging -type f -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
           sh -n site/install.sh
+      - name: Verify installer requires interactive consent
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$(mktemp)"
+          trap 'rm -f "$log"' EXIT
+          if printf 'n\\n' | script -q -e -c "sh site/install.sh" /dev/null >"$log" 2>&1; then
+            cat "$log"
+            echo "The installer unexpectedly continued after consent was declined." >&2
+            exit 1
+          fi
+          grep -Fq "Continue with these system changes? [y/N]" "$log"
+          grep -Fq "Installation cancelled. No packages were changed." "$log"
       - name: Test public release asset selection
         run: python3 scripts/prepare-release-assets.py --self-test
       - name: Install native build dependencies
