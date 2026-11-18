@@ -118,7 +118,7 @@ install_rembg_backend() {
         "$VENV_DIR/bin/python" -m ensurepip --upgrade || return 1
     fi
     "$VENV_DIR/bin/python" -m pip install --upgrade pip || return 1
-    "$VENV_DIR/bin/python" -m pip install --upgrade 'rembg[cpu,cli]' || return 1
+    "$VENV_DIR/bin/python" -m pip install --upgrade 'rembg[cpu,cli]==2.0.87' || return 1
     "$VENV_DIR/bin/rembg" --help >/dev/null 2>&1 || return 1
     printf 'rembg is ready. Its AI model will be downloaded on first use.\n'
 }
