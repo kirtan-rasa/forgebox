@@ -220,7 +220,10 @@ fn sticker_video_info(input: &Path) -> Result<StickerVideoInfo, String> {
     let output = run_ok("ffprobe", vec![
         os("-v"), os("error"),
         os("-select_streams"), os("v:0"),
-        os("-show_entries"), os("stream=width,height:stream_side_data=rotation:stream_tags=rotate"),
+        // Older FFprobe releases reject stream_side_data in -show_entries.
+        // show_streams includes side_data_list in the stream JSON on versions
+        // that expose display-matrix rotation metadata.
+        os("-show_streams"),
         os("-of"), os("json"),
         os(input),
     ]).map_err(|error| format!("Could not inspect the source video: {error}"))?;
