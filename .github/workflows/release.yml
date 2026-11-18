@@ -80,7 +80,7 @@ jobs:
           versions = {}
           for path in paths:
               content = path.read_text(encoding="utf-8")
-              match = re.search(r'rembg\\[cpu,cli\\]==([0-9]+\\.[0-9]+\\.[0-9]+)', content)
+              match = re.search(r'rembg\[cpu,cli\]==([0-9]+\.[0-9]+\.[0-9]+)', content)
               if match is None:
                   raise SystemExit(f"{path} must pin rembg[cpu,cli] to an exact version.")
               versions[str(path)] = match.group(1)
