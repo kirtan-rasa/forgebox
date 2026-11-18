@@ -1086,14 +1086,17 @@ fn run_preview_command(
     let status = loop {
         if cancelled.load(Ordering::Acquire) {
             stop_preview_child(&mut child);
-            let _ = stdout_reader.join();
-            let _ = stderr_reader.join();
+            // Killing the process group normally closes both pipes. Detach
+            // readers rather than joining indefinitely if a helper escaped
+            // the group and inherited one of the handles.
+            drop(stdout_reader);
+            drop(stderr_reader);
             return Err("Preview cancelled.".into());
         }
         if started.elapsed() >= timeout {
             stop_preview_child(&mut child);
-            let _ = stdout_reader.join();
-            let _ = stderr_reader.join();
+            drop(stdout_reader);
+            drop(stderr_reader);
             return Err(format!(
                 "Preview command exceeded its {:.0}-second time limit.",
                 timeout.as_secs_f64()
@@ -1104,8 +1107,8 @@ fn run_preview_command(
             Ok(None) => thread::sleep(Duration::from_millis(20)),
             Err(error) => {
                 stop_preview_child(&mut child);
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
+                drop(stdout_reader);
+                drop(stderr_reader);
                 return Err(error.to_string());
             }
         }
@@ -1118,18 +1121,11 @@ fn run_preview_command(
     while !stdout_reader.is_finished() || !stderr_reader.is_finished() {
         if drain_started.elapsed() >= PREVIEW_PIPE_DRAIN_TIMEOUT {
             terminate_preview_process_group(process_id);
-            #[cfg(unix)]
-            {
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
-            }
-            #[cfg(not(unix))]
-            {
-                // The standard library cannot terminate a descendant process
-                // tree on non-Unix platforms. Never block the UI on its pipes.
-                drop(stdout_reader);
-                drop(stderr_reader);
-            }
+            // The standard library cannot reliably terminate a descendant
+            // that escaped its parent's process group. Never block the editor
+            // on pipe readers after the bounded drain period.
+            drop(stdout_reader);
+            drop(stderr_reader);
             return Err(
                 "A helper process kept the preview output pipes open after FFprobe/FFmpeg exited."
                     .into(),
