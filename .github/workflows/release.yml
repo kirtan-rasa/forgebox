@@ -54,7 +54,9 @@ jobs:
         with:
           components: clippy
       - name: Validate shell scripts
-        run: find scripts packaging -type f -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
+        run: |
+          find scripts packaging -type f -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
+          sh -n site/install.sh
       - name: Test public release asset selection
         run: python3 scripts/prepare-release-assets.py --self-test
       - name: Install native build dependencies
