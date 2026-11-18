@@ -1,15 +1,24 @@
-use super::{normalized_ext, os, positive, record_execution_warning, report_status, run_ok, ResolveProfile};
+use super::{
+    normalized_ext, os, positive, record_execution_warning, report_status, run_ok,
+    run_ok_with_timeout, ResolveProfile,
+};
 use serde_json::Value;
 use std::path::Path;
-use std::process::Command;
 use std::sync::OnceLock;
+use std::time::Duration;
+
+const MEDIA_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn run_ffprobe(args: Vec<std::ffi::OsString>) -> Result<std::process::Output, String> {
+    run_ok_with_timeout("ffprobe", args, MEDIA_PROBE_TIMEOUT)
+}
 
 fn is_hdr_transfer(transfer: Option<&str>) -> bool {
     matches!(transfer, Some("smpte2084" | "arib-std-b67"))
 }
 
 fn probe_video_conversion(input: &Path) -> Result<(u8, Option<String>), String> {
-    let output = run_ok("ffprobe", vec![
+    let output = run_ffprobe(vec![
         os("-v"), os("error"),
         os("-select_streams"), os("v:0"),
         os("-show_entries"), os("stream=pix_fmt,bits_per_raw_sample,color_transfer"),
@@ -31,11 +40,11 @@ fn probe_video_conversion(input: &Path) -> Result<(u8, Option<String>), String> 
 }
 
 fn ffmpeg_supports_filter(filter: &str) -> bool {
-    Command::new("ffmpeg")
-        .args(["-hide_banner", "-h", &format!("filter={filter}")])
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    run_ok_with_timeout(
+        "ffmpeg",
+        vec![os("-hide_banner"), os("-h"), os(&format!("filter={filter}"))],
+        MEDIA_PROBE_TIMEOUT,
+    ).is_ok()
 }
 
 pub(super) fn convert_video(input: &Path, output: &Path, target_format: &str, preset: &str, quality: &str) -> Result<(), String> {
@@ -217,7 +226,7 @@ struct StickerVideoInfo {
 }
 
 fn sticker_video_info(input: &Path) -> Result<StickerVideoInfo, String> {
-    let output = run_ok("ffprobe", vec![
+    let output = run_ffprobe(vec![
         os("-v"), os("error"),
         os("-select_streams"), os("v:0"),
         // Older FFprobe releases reject stream_side_data in -show_entries.
@@ -343,7 +352,7 @@ fn validate_sticker_output(path: &Path) -> Result<(), String> {
         ));
     }
 
-    let output = run_ok("ffprobe", vec![
+    let output = run_ffprobe(vec![
         os("-v"), os("error"),
         os("-show_entries"), os("stream=codec_type,codec_name,width,height:format=duration"),
         os("-of"), os("json"),
@@ -525,7 +534,7 @@ fn inferred_pixel_depth(pixel_format: &str) -> u8 {
 
 fn probe_video(input: &Path) -> Result<VideoProbe, String> {
     report_status(format!("Analyzing {} with FFprobe…", input.file_name().and_then(|name| name.to_str()).unwrap_or("video")));
-    let output = run_ok("ffprobe", vec![
+    let output = run_ffprobe(vec![
         os("-v"), os("error"),
         os("-show_entries"),
         os("stream=codec_type,codec_name,width,height,pix_fmt,bits_per_raw_sample,field_order,color_range,color_space,color_transfer,color_primaries,sample_rate,channels,channel_layout:format=duration"),
@@ -630,16 +639,11 @@ fn ffmpeg_video_sync_args() -> Result<Vec<std::ffi::OsString>, String> {
     }
 
     // Cache only success: FFmpeg may be installed or repaired while ForgeBox is open.
-    let output = Command::new("ffmpeg")
-        .args(["-hide_banner", "-h", "full"])
-        .output()
-        .map_err(|error| format!("Could not inspect FFmpeg options: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "FFmpeg could not report its supported options: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
+    let output = run_ok_with_timeout(
+        "ffmpeg",
+        vec![os("-hide_banner"), os("-h"), os("full")],
+        MEDIA_PROBE_TIMEOUT,
+    ).map_err(|error| format!("Could not inspect FFmpeg options: {error}"))?;
     let help = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -674,7 +678,7 @@ fn copy_color_metadata(args: &mut Vec<std::ffi::OsString>, source: &VideoProbe) 
 }
 
 fn verify_resolve_output(output: &Path, source_had_audio: bool, expected_profile: &str, expected_pixel_format: &str) -> Result<(), String> {
-    let result = run_ok("ffprobe", vec![
+    let result = run_ffprobe(vec![
         os("-v"), os("error"),
         os("-show_entries"), os("stream=codec_type,codec_name,profile,pix_fmt,sample_rate,channels"),
         os("-of"), os("json"),
