@@ -60,7 +60,7 @@ fi
 
 echo "Installing the CPU version of rembg and its CLI…"
 "$VENV_DIR/bin/python" -m pip install --upgrade pip
-"$VENV_DIR/bin/python" -m pip install --upgrade "rembg[cpu,cli]"
+"$VENV_DIR/bin/python" -m pip install --upgrade "rembg[cpu,cli]==2.0.87"
 "$VENV_DIR/bin/rembg" --help >/dev/null
 
 echo
