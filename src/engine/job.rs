@@ -291,8 +291,8 @@ pub struct Job {
     pub options: JobOptions,
 }
 
-const MAX_IMAGE_RESIZE_DIMENSION: u32 = 16_384;
-const MAX_IMAGE_RESIZE_PIXELS: u64 = 64_000_000;
+pub(super) const MAX_IMAGE_RESIZE_DIMENSION: u32 = 16_384;
+pub(super) const MAX_IMAGE_RESIZE_PIXELS: u64 = 64_000_000;
 
 impl Job {
     pub fn new(tool: ToolId, files: Vec<PathBuf>, output_dir: PathBuf, options: JobOptions) -> Result<Self, String> {
