@@ -63,7 +63,7 @@ jobs:
           set -euo pipefail
           log="$(mktemp)"
           trap 'rm -f "$log"' EXIT
-          if printf 'n\\n' | script -q -e -c "sh site/install.sh" /dev/null >"$log" 2>&1; then
+          if printf 'n\n' | timeout 15s script -q -e -c "sh site/install.sh" /dev/null >"$log" 2>&1; then
             cat "$log"
             echo "The installer unexpectedly continued after consent was declined." >&2
             exit 1
