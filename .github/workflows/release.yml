@@ -68,8 +68,27 @@ jobs:
             qpdf poppler-utils
       - name: Prepare native Wayland drag-and-drop backend
         run: bash scripts/enable-native-wayland-dnd.sh
-      - name: Validate optional Fedora installer script
-        run: bash -n scripts/install-rembg-fedora.sh
+      - name: Validate installer scripts and pinned rembg version
+        run: |
+          sh -n site/install.sh
+          bash -n scripts/install-rembg-fedora.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          paths = (Path("site/install.sh"), Path("scripts/install-rembg-fedora.sh"))
+          versions = {}
+          for path in paths:
+              content = path.read_text(encoding="utf-8")
+              match = re.search(r'rembg\\[cpu,cli\\]==([0-9]+\\.[0-9]+\\.[0-9]+)', content)
+              if match is None:
+                  raise SystemExit(f"{path} must pin rembg[cpu,cli] to an exact version.")
+              versions[str(path)] = match.group(1)
+
+          if len(set(versions.values())) != 1:
+              raise SystemExit(f"rembg installer versions differ: {versions}")
+          print(f"Both installers pin rembg to {next(iter(versions.values()))}.")
+          PY
       - name: Run Clippy
         run: cargo clippy --locked --all-targets
       - name: Run Rust tests
