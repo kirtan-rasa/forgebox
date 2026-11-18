@@ -17,6 +17,8 @@ On Fedora, the full FFmpeg build must be available from RPM Fusion Free because 
 
 The AppImage is different: it does not install host conversion engines or language data. Install the utilities required by the features you use.
 
+The one-command installer requires an interactive terminal and asks for confirmation before it installs Python, ForgeBox, or any required system packages. Declining aborts before package-manager changes; running it without a terminal also aborts safely. Optional components such as `rembg` and additional OCR language data have separate prompts.
+
 ## AppImage limitations
 
 AppImage bundles ForgeBox, its icon and desktop entry, and the shared libraries detected by the packager. It does **not** bundle every command-line conversion engine. Install the engines required by the features you use:
