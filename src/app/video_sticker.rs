@@ -9,12 +9,14 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const PLAYBACK_MAX_SIDE: u32 = 512;
 const PLAYBACK_FPS: u32 = 24;
 const STICKER_PREVIEW_FPS: u32 = 30;
 const CROP_HANDLE_SIZE: f32 = 22.0;
+const PREVIEW_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const PREVIEW_PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy)]
 struct VideoInfo { width: u32, height: u32, duration_ms: u32 }
@@ -1004,12 +1006,22 @@ fn stream_preview(
     }
 }
 
-fn stop_preview_child(child: &mut std::process::Child) {
+fn terminate_preview_process_group(process_id: u32) {
     #[cfg(unix)]
     {
-        let group = -(child.id() as libc::pid_t);
+        let group = -(process_id as libc::pid_t);
         let _ = unsafe { libc::kill(group, libc::SIGKILL) };
     }
+    #[cfg(not(unix))]
+    {
+        let _ = process_id;
+    }
+}
+
+fn stop_preview_child(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    terminate_preview_process_group(child.id());
+
     #[cfg(not(unix))]
     {
         let _ = child.kill();
@@ -1028,7 +1040,24 @@ fn terminate_preview_process(pid: i32) {
     }
 }
 
-fn run_preview_command(mut command: Command, cancelled: &AtomicBool) -> Result<std::process::Output, String> {
+fn join_preview_readers(
+    stdout_reader: thread::JoinHandle<std::io::Result<Vec<u8>>>,
+    stderr_reader: thread::JoinHandle<std::io::Result<Vec<u8>>>,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let stdout = stdout_reader.join()
+        .map_err(|_| "FFmpeg preview output reader panicked.".to_string())?
+        .map_err(|error| format!("Could not read preview output: {error}"))?;
+    let stderr = stderr_reader.join()
+        .map_err(|_| "FFmpeg preview error reader panicked.".to_string())?
+        .map_err(|error| format!("Could not read preview errors: {error}"))?;
+    Ok((stdout, stderr))
+}
+
+fn run_preview_command(
+    mut command: Command,
+    cancelled: &AtomicBool,
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
     if cancelled.load(Ordering::Acquire) {
         return Err("Preview cancelled.".into());
     }
@@ -1039,6 +1068,7 @@ fn run_preview_command(mut command: Command, cancelled: &AtomicBool) -> Result<s
         command.process_group(0);
     }
     let mut child = command.spawn().map_err(|error| error.to_string())?;
+    let process_id = child.id();
     let stdout = child.stdout.take().expect("preview stdout is piped");
     let stderr = child.stderr.take().expect("preview stderr is piped");
     let stdout_reader = thread::spawn(move || {
@@ -1051,6 +1081,7 @@ fn run_preview_command(mut command: Command, cancelled: &AtomicBool) -> Result<s
         let mut pipe = stderr;
         pipe.read_to_end(&mut bytes).map(|_| bytes)
     });
+    let started = Instant::now();
 
     let status = loop {
         if cancelled.load(Ordering::Acquire) {
@@ -1058,6 +1089,15 @@ fn run_preview_command(mut command: Command, cancelled: &AtomicBool) -> Result<s
             let _ = stdout_reader.join();
             let _ = stderr_reader.join();
             return Err("Preview cancelled.".into());
+        }
+        if started.elapsed() >= timeout {
+            stop_preview_child(&mut child);
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(format!(
+                "Preview command exceeded its {:.0}-second time limit.",
+                timeout.as_secs_f64()
+            ));
         }
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -1071,12 +1111,34 @@ fn run_preview_command(mut command: Command, cancelled: &AtomicBool) -> Result<s
         }
     };
 
-    let stdout = stdout_reader.join()
-        .map_err(|_| "FFmpeg preview output reader panicked.".to_string())?
-        .map_err(|error| format!("Could not read preview output: {error}"))?;
-    let stderr = stderr_reader.join()
-        .map_err(|_| "FFmpeg preview error reader panicked.".to_string())?
-        .map_err(|error| format!("Could not read preview errors: {error}"))?;
+    // A helper can inherit the pipes after the main FFprobe/FFmpeg process
+    // exits. Bound that drain too, or joining the reader threads can hang
+    // the editor indefinitely.
+    let drain_started = Instant::now();
+    while !stdout_reader.is_finished() || !stderr_reader.is_finished() {
+        if drain_started.elapsed() >= PREVIEW_PIPE_DRAIN_TIMEOUT {
+            terminate_preview_process_group(process_id);
+            #[cfg(unix)]
+            {
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+            }
+            #[cfg(not(unix))]
+            {
+                // The standard library cannot terminate a descendant process
+                // tree on non-Unix platforms. Never block the UI on its pipes.
+                drop(stdout_reader);
+                drop(stderr_reader);
+            }
+            return Err(
+                "A helper process kept the preview output pipes open after FFprobe/FFmpeg exited."
+                    .into(),
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let (stdout, stderr) = join_preview_readers(stdout_reader, stderr_reader)?;
     Ok(std::process::Output { status, stdout, stderr })
 }
 
@@ -1135,7 +1197,7 @@ fn inspect_video(path: &Path, cancelled: &AtomicBool) -> Result<VideoInfo, Strin
         "-show_format",
         "-of", "json",
     ]).arg(path);
-    let output = run_preview_command(command, cancelled)
+    let output = run_preview_command(command, cancelled, PREVIEW_COMMAND_TIMEOUT)
         .map_err(|e| format!("Could not inspect the selected video: {e}. Install FFmpeg and FFprobe if they are missing."))?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
@@ -1166,7 +1228,7 @@ fn preview_frame(path: &Path, time_ms: u32, cancelled: &AtomicBool) -> Result<eg
     command.args(["-hide_banner", "-loglevel", "error", "-nostdin", "-ss", &seek, "-i"])
         .arg(path)
         .args(["-frames:v", "1", "-vf", "scale=512:512:force_original_aspect_ratio=decrease:flags=fast_bilinear", "-f", "image2pipe", "-vcodec", "png", "pipe:1"]);
-    let output = run_preview_command(command, cancelled)
+    let output = run_preview_command(command, cancelled, PREVIEW_COMMAND_TIMEOUT)
         .map_err(|e| format!("Could not render FFmpeg preview: {e}"))?;
     if !output.status.success() || output.stdout.is_empty() {
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
@@ -1232,8 +1294,46 @@ mod tests {
 }
 
 #[cfg(all(test, unix))]
-mod preview_cancellation_tests {
+mod preview_timeout_tests {
     use super::run_preview_command;
+    use std::process::Command;
+    use std::sync::atomic::AtomicBool;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn preview_command_timeout_terminates_the_process_group() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 10"]);
+        let started = Instant::now();
+        let error = run_preview_command(
+            command,
+            &AtomicBool::new(false),
+            Duration::from_millis(150),
+        ).unwrap_err();
+
+        assert!(error.contains("time limit"));
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn exited_command_cannot_leave_a_helper_holding_preview_pipes_open() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 10 & exit 0"]);
+        let started = Instant::now();
+        let error = run_preview_command(
+            command,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        ).unwrap_err();
+
+        assert!(error.contains("kept the preview output pipes open"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod preview_cancellation_tests {
+    use super::{run_preview_command, PREVIEW_COMMAND_TIMEOUT};
     use std::process::Command;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -1247,7 +1347,7 @@ mod preview_cancellation_tests {
         let worker = thread::spawn(move || {
             let mut command = Command::new("sh");
             command.args(["-c", "sleep 10"]);
-            run_preview_command(command, &worker_cancelled)
+            run_preview_command(command, &worker_cancelled, PREVIEW_COMMAND_TIMEOUT)
         });
 
         thread::sleep(Duration::from_millis(150));
