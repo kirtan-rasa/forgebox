@@ -1,6 +1,6 @@
 use super::{
     display_io, first_file, os, reserve_output_for_input, reserve_unique_path, require_files,
-    run_magick_owned, run_ok, sort_numbered_paths, temp_dir_in, Job,
+    run_magick_owned, run_ok, sort_numbered_paths, temp_dir, temp_dir_in, Job,
 };
 use std::fs;
 use std::ffi::OsString;
