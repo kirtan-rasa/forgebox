@@ -68,6 +68,20 @@ prompt_yes_no() {
     case "$answer" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
 }
 
+confirm_system_install() {
+    if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
+        fail "An interactive terminal is required before system packages can be changed. Run the installer directly from a terminal."
+    fi
+
+    printf '\nForgeBox installation will make system package changes.\n' > /dev/tty
+    printf 'Distribution: %s (%s)\n' "$PRETTY_NAME" "$VERSION_ID" > /dev/tty
+    printf 'Package manager: %s\n' "$PACKAGE_FAMILY" > /dev/tty
+    printf 'The installer may install Python, ForgeBox, and required conversion dependencies.\n' > /dev/tty
+    if ! prompt_yes_no "Continue with these system changes?"; then
+        fail "Installation cancelled. No packages were changed."
+    fi
+}
+
 install_russian_ocr() {
     case "$PACKAGE_FAMILY" in
         fedora) run_privileged dnf install --assumeyes tesseract-langpack-rus ;;
@@ -206,6 +220,8 @@ case "$PACKAGE_FAMILY" in
         command -v pacman >/dev/null 2>&1 || fail "Pacman was not found on this Arch-based system."
         ;;
 esac
+
+confirm_system_install
 
 if ! command -v python3 >/dev/null 2>&1; then
     printf 'Python 3 is needed to read GitHub release metadata. Installing it first...\n'
