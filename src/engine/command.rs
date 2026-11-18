@@ -94,6 +94,7 @@ fn run_cancellable(command: &mut Command, timeout: Option<Duration>) -> io::Resu
     let mut child = command.spawn()?;
     let stdout = child.stdout.take().expect("stdout was configured as piped");
     let stderr = child.stderr.take().expect("stderr was configured as piped");
+    let process_id = child.id();
     let stdout_reader = read_pipe(stdout);
     let stderr_reader = read_pipe(stderr);
     let started = Instant::now();
@@ -124,16 +125,42 @@ fn run_cancellable(command: &mut Command, timeout: Option<Duration>) -> io::Resu
         }
     };
 
-    if let Some(limit) = timeout {
-        while !stdout_reader.is_finished() || !stderr_reader.is_finished() {
-            if started.elapsed() >= limit {
+    // Normally both pipes reach EOF immediately after the command exits.
+    // A helper that inherited stdout/stderr can otherwise keep our reader
+    // threads blocked forever even though the main child has already exited.
+    let pipe_drain_started = Instant::now();
+    while !stdout_reader.is_finished() || !stderr_reader.is_finished() {
+        let timed_out = match timeout {
+            Some(limit) => started.elapsed() >= limit,
+            None => pipe_drain_started.elapsed() >= Duration::from_secs(2),
+        };
+        if timed_out {
+            if timeout.is_some() {
                 stop_child(&mut child);
                 let _ = stdout_reader.join();
                 let _ = stderr_reader.join();
                 return Err(io::Error::new(io::ErrorKind::TimedOut, "External command exceeded its time limit."));
             }
-            std::thread::sleep(Duration::from_millis(10));
+
+            #[cfg(unix)]
+            {
+                stop_process_group(process_id);
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+            }
+            #[cfg(not(unix))]
+            {
+                // The main process has exited, but this platform has no
+                // process-tree termination in the standard library. Detach
+                // the readers rather than blocking the application forever.
+                drop(stdout_reader);
+                drop(stderr_reader);
+            }
+            return Err(io::Error::other(
+                "A helper process kept the command output pipes open after the main process exited.",
+            ));
         }
+        std::thread::sleep(Duration::from_millis(10));
     }
 
     let stdout = join_pipe(stdout_reader)?;
@@ -153,14 +180,21 @@ fn join_pipe(reader: JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Vec<u8>> {
     reader.join().map_err(|_| io::Error::new(io::ErrorKind::Other, "Process output reader panicked"))?
 }
 
-fn stop_child(child: &mut Child) {
+fn stop_process_group(process_id: u32) {
     #[cfg(unix)]
     {
         // process_group(0) above makes the child PID its process-group ID.
         // Signal the entire group so delegated helpers cannot outlive a cancel.
-        let process_group = -(child.id() as libc::pid_t);
+        let process_group = -(process_id as libc::pid_t);
         let _ = unsafe { libc::kill(process_group, libc::SIGKILL) };
     }
+    #[cfg(not(unix))]
+    let _ = process_id;
+}
+
+fn stop_child(child: &mut Child) {
+    #[cfg(unix)]
+    stop_process_group(child.id());
 
     #[cfg(not(unix))]
     {
@@ -215,7 +249,7 @@ fn run_ok_internal(
             Err(error) if error.kind() == io::ErrorKind::TimedOut => {
                 return Err(format!("Command `{program}` timed out after {} seconds. The process was stopped.", timeout.map(|value| value.as_secs()).unwrap_or_default()));
             }
-            Err(error) => return Err(format!("Failed to launch `{program}` via `{label}`: {error}")),
+            Err(error) => return Err(format!("Failed to run `{program}` via `{label}`: {error}")),
         }
     }
     let install_hint = match (program, std::env::consts::OS) {
@@ -348,5 +382,21 @@ mod timeout_tests {
 
         assert!(error.contains("timed out"));
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+}
+
+
+#[cfg(all(test, unix))]
+mod inherited_pipe_tests {
+    use super::{os, run_ok};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn background_helper_cannot_keep_command_waiting_forever() {
+        let started = Instant::now();
+        let error = run_ok("sh", vec![os("-c"), os("sleep 20 & exit 0")]).unwrap_err();
+
+        assert!(error.contains("kept the command output pipes open"));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }
