@@ -39,6 +39,12 @@ enum PlaybackMessage {
     Error { generation: u64, message: String },
 }
 
+/// Frames may be dropped when the preview is behind, but terminal state must
+/// be delivered so playback can stop, report errors, or restart sticker loops.
+fn send_playback_terminal(tx: &SyncSender<PlaybackMessage>, message: PlaybackMessage) {
+    let _ = tx.send(message);
+}
+
 #[derive(Clone, Copy)]
 enum TimelineDrag {
     Start,
@@ -937,7 +943,7 @@ fn stream_preview(
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
-            let _ = tx.try_send(PlaybackMessage::Error {
+            send_playback_terminal(&tx, PlaybackMessage::Error {
                 generation,
                 message: format!("Could not start FFmpeg playback: {error}"),
             });
@@ -979,20 +985,20 @@ fn stream_preview(
     pid.store(0, Ordering::Relaxed);
     if stop.load(Ordering::Relaxed) { return; }
     if let Some(error) = read_error {
-        let _ = tx.try_send(PlaybackMessage::Error { generation, message: format!("Could not read FFmpeg preview frames: {error}") });
+        send_playback_terminal(&tx, PlaybackMessage::Error { generation, message: format!("Could not read FFmpeg preview frames: {error}") });
     } else {
         match status {
             Ok(status) if status.success() => {
-                let _ = tx.try_send(PlaybackMessage::Finished { generation });
+                send_playback_terminal(&tx, PlaybackMessage::Finished { generation });
             }
             Ok(status) => {
-                let _ = tx.try_send(PlaybackMessage::Error {
+                send_playback_terminal(&tx, PlaybackMessage::Error {
                     generation,
                     message: format!("FFmpeg preview stopped with exit code {}.", status),
                 });
             }
             Err(error) => {
-                let _ = tx.try_send(PlaybackMessage::Error { generation, message: format!("Could not finish FFmpeg preview: {error}") });
+                send_playback_terminal(&tx, PlaybackMessage::Error { generation, message: format!("Could not finish FFmpeg preview: {error}") });
             }
         }
     }
@@ -1305,5 +1311,37 @@ mod duration_metadata_tests {
             "avg_frame_rate": "30/1"
         });
         assert_eq!(stream_duration_seconds(&stream), Some(2.0));
+    }
+}
+
+
+#[cfg(test)]
+mod playback_terminal_channel_tests {
+    use super::{send_playback_terminal, PlaybackMessage};
+    use std::sync::mpsc;
+    use std::thread;
+
+    #[test]
+    fn terminal_message_waits_for_room_instead_of_being_dropped() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        tx.try_send(PlaybackMessage::Frame {
+            generation: 1,
+            time_ms: 100,
+            pixels: Vec::new(),
+        }).unwrap();
+
+        let worker = thread::spawn(move || {
+            send_playback_terminal(&tx, PlaybackMessage::Finished { generation: 1 });
+        });
+
+        match rx.recv().unwrap() {
+            PlaybackMessage::Frame { generation, .. } => assert_eq!(generation, 1),
+            _ => panic!("the queued preview frame must be delivered first"),
+        }
+        match rx.recv().unwrap() {
+            PlaybackMessage::Finished { generation } => assert_eq!(generation, 1),
+            _ => panic!("the terminal playback message must not be lost"),
+        }
+        worker.join().unwrap();
     }
 }
