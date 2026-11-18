@@ -1121,8 +1121,12 @@ fn inspect_video(path: &Path, cancelled: &AtomicBool) -> Result<VideoInfo, Strin
     command.args([
         "-v", "error",
         "-select_streams", "v:0",
-        "-show_entries",
-        "stream=width,height,duration,duration_ts,time_base,nb_frames,avg_frame_rate:stream_side_data=rotation:format=duration",
+        // Use the long-standing show_streams/show_format flags instead of
+        // naming stream_side_data in -show_entries. Older FFprobe releases
+        // (including Ubuntu 22.04's) reject that section name, even though
+        // they can return side_data_list as part of each stream object.
+        "-show_streams",
+        "-show_format",
         "-of", "json",
     ]).arg(path);
     let output = run_preview_command(command, cancelled)
