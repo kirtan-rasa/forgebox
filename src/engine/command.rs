@@ -102,14 +102,12 @@ fn run_cancellable(command: &mut Command, timeout: Option<Duration>) -> io::Resu
     let status = loop {
         if timeout.map(|limit| started.elapsed() >= limit).unwrap_or(false) {
             stop_child(&mut child);
-            let _ = stdout_reader.join();
-            let _ = stderr_reader.join();
+            join_pipe_readers_bounded(stdout_reader, stderr_reader);
             return Err(io::Error::new(io::ErrorKind::TimedOut, "External command exceeded its time limit."));
         }
         if super::execution_cancelled() {
             stop_child(&mut child);
-            let _ = stdout_reader.join();
-            let _ = stderr_reader.join();
+            join_pipe_readers_bounded(stdout_reader, stderr_reader);
             return Err(io::Error::new(io::ErrorKind::Interrupted, "Operation cancelled by user."));
         }
 
@@ -118,8 +116,7 @@ fn run_cancellable(command: &mut Command, timeout: Option<Duration>) -> io::Resu
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
             Err(error) => {
                 stop_child(&mut child);
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
+                join_pipe_readers_bounded(stdout_reader, stderr_reader);
                 return Err(error);
             }
         }
@@ -137,25 +134,17 @@ fn run_cancellable(command: &mut Command, timeout: Option<Duration>) -> io::Resu
         if timed_out {
             if timeout.is_some() {
                 stop_child(&mut child);
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
+                join_pipe_readers_bounded(stdout_reader, stderr_reader);
                 return Err(io::Error::new(io::ErrorKind::TimedOut, "External command exceeded its time limit."));
             }
 
             #[cfg(unix)]
-            {
-                stop_process_group(process_id);
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
-            }
-            #[cfg(not(unix))]
-            {
-                // The main process has exited, but this platform has no
-                // process-tree termination in the standard library. Detach
-                // the readers rather than blocking the application forever.
-                drop(stdout_reader);
-                drop(stderr_reader);
-            }
+            stop_process_group(process_id);
+
+            // A helper may have escaped the process group and kept one or
+            // both pipes open. Give normal readers a brief chance to finish,
+            // then detach any reader that would otherwise block this worker.
+            join_pipe_readers_bounded(stdout_reader, stderr_reader);
             return Err(io::Error::other(
                 "A helper process kept the command output pipes open after the main process exited.",
             ));
@@ -174,6 +163,29 @@ fn read_pipe<R: Read + Send + 'static>(mut pipe: R) -> JoinHandle<io::Result<Vec
         pipe.read_to_end(&mut bytes)?;
         Ok(bytes)
     })
+}
+
+fn join_pipe_readers_bounded(
+    stdout_reader: JoinHandle<io::Result<Vec<u8>>>,
+    stderr_reader: JoinHandle<io::Result<Vec<u8>>>,
+) {
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while (!stdout_reader.is_finished() || !stderr_reader.is_finished())
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    if stdout_reader.is_finished() {
+        let _ = stdout_reader.join();
+    } else {
+        drop(stdout_reader);
+    }
+    if stderr_reader.is_finished() {
+        let _ = stderr_reader.join();
+    } else {
+        drop(stderr_reader);
+    }
 }
 
 fn join_pipe(reader: JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Vec<u8>> {
@@ -436,6 +448,69 @@ mod command_version_timeout_tests {
         assert!(
             elapsed < Duration::from_secs(2),
             "a hung version probe should stop promptly, elapsed: {elapsed:?}"
+        );
+    }
+}
+
+
+#[cfg(all(test, target_os = "linux"))]
+mod escaped_pipe_tests {
+    use super::{os, run_ok, run_ok_with_timeout};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, Instant};
+
+    fn escaped_helper_command(label: &str, after_start: &str) -> (PathBuf, Vec<std::ffi::OsString>) {
+        let pid_file = std::env::temp_dir().join(format!(
+            "forgebox-escaped-pipe-{}-{label}.pid",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&pid_file);
+        let pid_path = pid_file.to_string_lossy();
+        let script = format!(
+            "setsid sh -c 'echo $$ > {pid_path}; sleep 5' & while [ ! -s {pid_path} ]; do sleep 0.01; done; {after_start}"
+        );
+        (pid_file, vec![os("-c"), os(script)])
+    }
+
+    fn kill_escaped_helper(pid_file: &Path) {
+        if let Some(pid) = fs::read_to_string(pid_file)
+            .ok()
+            .and_then(|value| value.trim().parse::<libc::pid_t>().ok())
+        {
+            let process_group = -pid;
+            let _ = unsafe { libc::kill(process_group, libc::SIGKILL) };
+        }
+        let _ = fs::remove_file(pid_file);
+    }
+
+    #[test]
+    fn timed_out_command_does_not_join_pipes_held_by_an_escaped_helper() {
+        let (pid_file, args) = escaped_helper_command("timeout", "wait");
+        let started = Instant::now();
+        let error = run_ok_with_timeout("sh", args, Duration::from_millis(500)).unwrap_err();
+        let elapsed = started.elapsed();
+        kill_escaped_helper(&pid_file);
+
+        assert!(error.contains("timed out"));
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "timeout must not wait for an escaped helper, elapsed: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn normal_exit_does_not_join_pipes_held_by_an_escaped_helper() {
+        let (pid_file, args) = escaped_helper_command("normal-exit", "exit 0");
+        let started = Instant::now();
+        let error = run_ok("sh", args).unwrap_err();
+        let elapsed = started.elapsed();
+        kill_escaped_helper(&pid_file);
+
+        assert!(error.contains("kept the command output pipes open"));
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "post-exit pipe draining must remain bounded, elapsed: {elapsed:?}"
         );
     }
 }
