@@ -19,6 +19,7 @@ use self::common::{
 use self::data::{data_convert, pdf_to_docx, soffice_convert};
 use self::images::{images_to_pdf, long_png_to_pdf};
 use self::media::{convert_audio, convert_davinci_resolve, convert_video, convert_video_sticker, extract_audio};
+use self::job::{MAX_IMAGE_RESIZE_DIMENSION, MAX_IMAGE_RESIZE_PIXELS};
 use self::pdf::{parse_pdf_page_order, parse_pdf_page_range, pdf_page_count};
 pub use self::job::{
     AudioFormat, DataFormat, ImageFormat, Job, JobOptions, PdfCompressionProfile,
@@ -53,8 +54,20 @@ fn image_compression_args(input: &Path, quality: u8) -> Vec<OsString> {
 }
 
 fn resize_geometry(width: u32, height: u32) -> String {
+    let max_other_dimension = |requested: u32| {
+        let pixel_limit = MAX_IMAGE_RESIZE_PIXELS / u64::from(requested.max(1));
+        pixel_limit.min(u64::from(MAX_IMAGE_RESIZE_DIMENSION)) as u32
+    };
+    let (width, height) = match (width, height) {
+        (0, 0) => (0, 0),
+        (width, 0) => (width, max_other_dimension(width)),
+        (0, height) => (max_other_dimension(height), height),
+        (width, height) => (width, height),
+    };
     let width = if width == 0 { String::new() } else { width.to_string() };
     let height = if height == 0 { String::new() } else { height.to_string() };
+    // Bound the automatically calculated side too: extremely wide/tall images
+    // must still fit the same maximum side and total output-pixel limits.
     // The trailing '>' is ImageMagick's no-upscale modifier.
     format!("{width}x{height}>")
 }
@@ -884,9 +897,12 @@ mod resize_geometry_tests {
     use super::resize_geometry;
 
     #[test]
-    fn supports_width_only_and_height_only_resize() {
-        assert_eq!(resize_geometry(1600, 0), "1600x>");
-        assert_eq!(resize_geometry(0, 1200), "x1200>");
+    fn supports_width_only_and_height_only_resize_with_output_bounds() {
+        assert_eq!(resize_geometry(1600, 0), "1600x16384>");
+        assert_eq!(resize_geometry(0, 1200), "16384x1200>");
+        assert_eq!(resize_geometry(16_000, 0), "16000x4000>");
+        assert_eq!(resize_geometry(0, 16_000), "4000x16000>");
+        assert_eq!(resize_geometry(16_384, 0), "16384x3906>");
         assert_eq!(resize_geometry(1600, 1200), "1600x1200>");
     }
 }
