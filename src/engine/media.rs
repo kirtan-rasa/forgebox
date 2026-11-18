@@ -40,6 +40,11 @@ fn ffmpeg_supports_filter(filter: &str) -> bool {
 
 pub(super) fn convert_video(input: &Path, output: &Path, target_format: &str, preset: &str, quality: &str) -> Result<(), String> {
     let format = normalized_ext(target_format);
+    if !["mp4", "webm", "mkv", "mov"].contains(&format.as_str()) {
+        return Err(format!(
+            "Video format \"{format}\" is not supported. Choose MP4, WebM, MKV, or MOV."
+        ));
+    }
     let crf = positive(quality, 23).clamp(18, 30).to_string();
     let (preset_label, x264_preset, vp9_cpu_used) = match preset {
         "balanced" => ("balanced", "medium", "4"),
