@@ -186,7 +186,7 @@ pub(super) fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
                 labeled_text(ui, "Width", &mut app.width, "480");
                 labeled_text(ui, "Frames per second", &mut app.fps, "12");
             });
-            ui.label(RichText::new("A palette is generated automatically for cleaner colors. GIF works best for short clips.").size(11.0).color(MUTED));
+            ui.label(RichText::new("Palette optimization is automatic. GIF exports are limited to 60 seconds; ForgeBox checks estimated disk space before encoding.").size(11.0).color(MUTED));
         }
         ToolId::PdfWatermark => {
             ui.label(RichText::new("Select the main PDF on the left and a second PDF to use as a watermark.").size(12.0));

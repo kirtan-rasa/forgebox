@@ -131,7 +131,7 @@ fn available_disk_space_bytes(path: &Path) -> Result<u64, String> {
     }
     // SAFETY: statvfs succeeded and initialized the structure.
     let stats = unsafe { stats.assume_init() };
-    let block_size = if stats.f_frsize > 0 { stats.f_frsize } else { stats.f_bsize } as u128;
+    let block_size = (if stats.f_frsize > 0 { stats.f_frsize } else { stats.f_bsize }) as u128;
     let available = (stats.f_bavail as u128).saturating_mul(block_size);
     Ok(available.min(u128::from(u64::MAX)) as u64)
 }

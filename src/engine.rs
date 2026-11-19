@@ -18,7 +18,7 @@ use self::common::{
 };
 use self::data::{data_convert, pdf_to_docx, soffice_convert};
 use self::images::{images_to_pdf, long_png_to_pdf};
-use self::media::{convert_audio, convert_davinci_resolve, convert_video, convert_video_sticker, extract_audio};
+use self::media::{convert_audio, convert_davinci_resolve, convert_video, convert_video_sticker, convert_video_to_gif, extract_audio};
 use self::job::{MAX_IMAGE_RESIZE_DIMENSION, MAX_IMAGE_RESIZE_PIXELS};
 use self::pdf::{parse_pdf_page_order, parse_pdf_page_range, pdf_page_count};
 pub use self::job::{
@@ -467,8 +467,7 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
             convert_davinci_resolve(input, out, *profile)
         }),
         (Tool::VideoToGif, Options::VideoToGif { width, fps }) => process_each(&job, |input, out| {
-            let filter = format!("fps={fps},scale={width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer");
-            run_ok("ffmpeg", vec![os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"), os("-i"), os(input), os("-filter_complex"), os(&filter), os("-threads"), os("2"), os("-loop"), os("0"), os(out)]).map(|_| ())
+            convert_video_to_gif(input, out, *width, *fps)
         }),
         (Tool::VideoSticker, Options::VideoSticker { start_ms, end_ms, fit, crop_left, crop_top, zoom_milli }) => process_each(&job, |input, out| {
             convert_video_sticker(input, out, *start_ms, *end_ms, *fit, *crop_left, *crop_top, *zoom_milli)
