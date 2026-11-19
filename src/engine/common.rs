@@ -337,6 +337,14 @@ pub(super) fn temp_dir(prefix: &str) -> Result<PathBuf, String> {
     temp_dir_in(&std::env::temp_dir(), prefix)
 }
 
+pub(super) fn temp_dir_for_output(output: &Path, prefix: &str) -> Result<PathBuf, String> {
+    let base = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    temp_dir_in(base, prefix)
+}
+
 pub(super) fn temp_dir_in(base: &Path, prefix: &str) -> Result<PathBuf, String> {
     fs::create_dir_all(base).map_err(display_io)?;
 
@@ -601,7 +609,7 @@ mod prefix_reservation_tests {
 
 #[cfg(test)]
 mod temp_dir_in_tests {
-    use super::temp_dir_in;
+    use super::{temp_dir_for_output, temp_dir_in};
     use std::fs;
 
     #[test]
@@ -616,6 +624,17 @@ mod temp_dir_in_tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(fs::metadata(&workspace).unwrap().permissions().mode() & 0o077, 0);
         }
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn output_workspace_is_created_beside_the_destination() {
+        let base = std::env::temp_dir().join(format!("forgebox-output-temp-test-{}", std::process::id()));
+        fs::create_dir_all(&base).unwrap();
+        let output = base.join("converted.xlsx");
+        let workspace = temp_dir_for_output(&output, "office-convert").unwrap();
+        assert_eq!(workspace.parent(), Some(base.as_path()));
+        assert!(workspace.file_name().unwrap().to_string_lossy().starts_with(".forgebox-office-convert-"));
         fs::remove_dir_all(&base).unwrap();
     }
 }

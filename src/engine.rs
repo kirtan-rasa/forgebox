@@ -14,7 +14,7 @@ use self::command::{run_capture, run_magick_owned, run_ok, run_ok_with_timeout, 
 use self::common::{
     display_io, files_with_prefix, first_file, normalized_ext, os, reserve_output_for_input,
     reserve_unique_path, positive, process_each, process_each_capture, process_each_convert,
-    require_files, sort_numbered_paths, temp_dir, temp_dir_in, reserve_unique_prefix,
+    require_files, sort_numbered_paths, temp_dir, temp_dir_for_output, temp_dir_in, reserve_unique_prefix,
 };
 use self::data::{data_convert, pdf_to_docx, soffice_convert};
 use self::images::{images_to_pdf, long_png_to_pdf};

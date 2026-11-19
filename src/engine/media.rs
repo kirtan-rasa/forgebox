@@ -314,8 +314,9 @@ pub(super) fn convert_audio(
         os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"),
         os("-i"), os(input),
         os("-map"), os("0:a:0"),
-        // Avoid carrying source tags (including location metadata) into the audio output.
+        // Clear both file-level and audio-stream tags, including location metadata.
         os("-map_metadata"), os("-1"),
+        os("-map_metadata:s:a"), os("-1"),
         os("-map_chapters"), os("-1"),
         os("-vn"), os("-sn"), os("-dn"),
         os("-threads"), os("2"),
@@ -474,7 +475,6 @@ fn encode_sticker_pass(
         os("-an"), os("-sn"), os("-dn"),
         os("-c:v"), os("libvpx-vp9"),
         os("-pix_fmt"), os("yuva420p"),
-        os("-metadata:s:v:0"), os("alpha_mode=1"),
         os("-auto-alt-ref"), os("0"),
         os("-deadline"), os("good"),
         os("-cpu-used"), os("4"),
@@ -482,8 +482,11 @@ fn encode_sticker_pass(
         os("-b:v"), os(&format!("{bitrate_kbps}k")),
         os("-pass"), os(pass.to_string()),
         os("-passlogfile"), os(passlog),
+        // Clear source tags first, then set the required alpha-mode tag explicitly.
         os("-map_metadata"), os("-1"),
+        os("-map_metadata:s:v"), os("-1"),
         os("-map_chapters"), os("-1"),
+        os("-metadata:s:v:0"), os("alpha_mode=1"),
     ];
 
     if pass == 1 {
@@ -561,7 +564,7 @@ pub(super) fn convert_video_sticker(
     let info = sticker_video_info(input)?;
     let filter = sticker_video_filter(info, fit, crop_left, crop_top, zoom_milli)?;
 
-    let work_dir = super::temp_dir("sticker")
+    let work_dir = super::temp_dir_for_output(output, "sticker")
         .map_err(|error| format!("Could not prepare temporary sticker-encoding files: {error}"))?;
     let passlog = work_dir.join("vp9-pass");
 
@@ -603,7 +606,8 @@ pub(super) fn extract_audio(input: &Path, output: &Path, target_format: &str) ->
     let mut args = vec![
         os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"),
         os("-i"), os(input), os("-map"), os("0:a:0"),
-        os("-map_metadata"), os("-1"), os("-map_chapters"), os("-1"),
+        os("-map_metadata"), os("-1"), os("-map_metadata:s:a"), os("-1"),
+        os("-map_chapters"), os("-1"),
         os("-vn"),
     ];
     match format.as_str() {
@@ -915,6 +919,8 @@ pub(super) fn convert_davinci_resolve(input: &Path, output: &Path, requested_pro
         os("-map"), os("0:a?"),
         // Copy only the explicit color tags below, not arbitrary source metadata.
         os("-map_metadata"), os("-1"),
+        os("-map_metadata:s:v"), os("-1"),
+        os("-map_metadata:s:a"), os("-1"),
         os("-map_chapters"), os("-1"),
         os("-c:v"), os("dnxhd"),
         os("-profile:v"), os(encoding.profile),

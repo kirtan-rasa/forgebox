@@ -1,6 +1,8 @@
+#[cfg(test)]
+use super::temp_dir;
 use super::{
     check_cancelled, display_io, first_file, normalized_ext, os, record_execution_warning,
-    report_status, run_ok, run_ok_with_timeout, temp_dir, Job,
+    report_status, run_ok, run_ok_with_timeout, temp_dir_for_output, Job,
 };
 use csv::{ReaderBuilder, WriterBuilder};
 use serde::de::{Error as _, SeqAccess, Visitor};
@@ -53,7 +55,7 @@ pub(super) fn data_convert(job: &Job, target_format: &str) -> Result<Vec<PathBuf
             ("csv", "xlsx") => soffice_convert(input, "xlsx", &out)?,
             ("xlsx", "csv") => soffice_convert(input, "csv", &out)?,
             ("json", "xlsx") => {
-                let temp = temp_dir("json-xlsx")?;
+                let temp = temp_dir_for_output(&out, "json-xlsx")?;
                 let result = (|| {
                     let temp_csv = temp.join("table.csv");
                     json_to_csv(input, &temp_csv)?;
@@ -63,7 +65,7 @@ pub(super) fn data_convert(job: &Job, target_format: &str) -> Result<Vec<PathBuf
                 result?;
             }
             ("xlsx", "json") => {
-                let temp = temp_dir("xlsx-json")?;
+                let temp = temp_dir_for_output(&out, "xlsx-json")?;
                 let result = (|| {
                     let temp_csv = temp.join("data.csv");
                     soffice_convert(input, "csv", &temp_csv)?;
@@ -442,7 +444,7 @@ pub(super) fn path_to_file_url(path: &Path) -> Result<String, String> {
 }
 
 pub(super) fn pdf_to_docx(input: &Path, output: &Path) -> Result<(), String> {
-    let temp = temp_dir("pdf-to-docx")?;
+    let temp = temp_dir_for_output(output, "pdf-to-docx")?;
     let result = (|| -> Result<(), String> {
         let extracted_text = temp.join("extracted.txt");
         run_ok("pdftotext", vec![
@@ -467,7 +469,7 @@ pub(super) fn pdf_to_docx(input: &Path, output: &Path) -> Result<(), String> {
 }
 
 pub(super) fn soffice_convert(input: &Path, extension: &str, output: &Path) -> Result<(), String> {
-    let temp = temp_dir("office-convert")?;
+    let temp = temp_dir_for_output(output, "office-convert")?;
     let result = (|| -> Result<(), String> {
         let profile = temp.join("profile");
         fs::create_dir_all(&profile).map_err(|error| {

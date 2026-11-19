@@ -121,6 +121,45 @@ fn fixture_command(program: &str, args: Vec<OsString>) {
     );
 }
 
+fn assert_metadata_values_absent(path: &Path, sentinels: &[&str]) {
+    let probe = Command::new("ffprobe")
+        .args(["-v", "error", "-show_entries", "format_tags:stream_tags", "-of", "json"])
+        .arg(path)
+        .output()
+        .expect("probe exported media metadata");
+    assert!(probe.status.success(), "FFprobe failed: {}", String::from_utf8_lossy(&probe.stderr));
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&probe.stdout).expect("parse exported media metadata");
+
+    let has_value = |expected: &str| {
+        let format_has_value = metadata
+            .get("format")
+            .and_then(|format| format.get("tags"))
+            .and_then(serde_json::Value::as_object)
+            .map(|tags| tags.values().any(|value| value.as_str() == Some(expected)))
+            .unwrap_or(false);
+        let stream_has_value = metadata
+            .get("streams")
+            .and_then(serde_json::Value::as_array)
+            .map(|streams| streams.iter().any(|stream| {
+                stream.get("tags")
+                    .and_then(serde_json::Value::as_object)
+                    .map(|tags| tags.values().any(|value| value.as_str() == Some(expected)))
+                    .unwrap_or(false)
+            }))
+            .unwrap_or(false);
+        format_has_value || stream_has_value
+    };
+
+    for sentinel in sentinels {
+        assert!(
+            !has_value(sentinel),
+            "Output {} retained source metadata value {sentinel}: {metadata}",
+            path.display()
+        );
+    }
+}
+
 #[test]
 fn image_pdf_normalization_removes_gps_metadata_without_changing_density() {
     if !require(&["exiftool", "identify"], "image PDF metadata") {
@@ -482,34 +521,41 @@ fn audio_and_video_tools_extract_convert_and_generate_gif() {
         return;
     }
     let ws = Workspace::new("media");
-    let source = ws.path("sample.mp4");
+    let source = ws.path("sample.mkv");
     fixture_command("ffmpeg", vec![
         os("-y"), os("-hide_banner"), os("-loglevel"), os("error"),
         os("-f"), os("lavfi"), os("-i"), os("color=c=blue:s=160x120:r=10:d=1"),
         os("-f"), os("lavfi"), os("-i"), os("sine=frequency=880:duration=1"),
         os("-shortest"), os("-c:v"), os("libx264"), os("-pix_fmt"), os("yuv420p"),
         os("-c:a"), os("aac"),
-        os("-metadata"), os("title=ForgeBox private metadata sentinel"),
-        os("-metadata"), os("comment=ForgeBox private metadata sentinel"),
+        os("-metadata"), os("title=ForgeBox private global title sentinel"),
+        os("-metadata"), os("comment=ForgeBox private global comment sentinel"),
+        os("-metadata:s:v:0"), os("title=ForgeBox private video stream sentinel"),
+        os("-metadata:s:a:0"), os("title=ForgeBox private audio stream sentinel"),
         source.as_os_str().to_os_string(),
     ]);
 
     let source_probe = Command::new("ffprobe")
-        .args(["-v", "error", "-show_entries", "format_tags=title,comment", "-of", "json"])
+        .args(["-v", "error", "-show_entries", "format_tags:stream_tags", "-of", "json"])
         .arg(&source)
         .output()
         .expect("probe source metadata");
     assert!(source_probe.status.success(), "FFprobe failed to inspect source metadata");
     let source_metadata: serde_json::Value =
         serde_json::from_slice(&source_probe.stdout).expect("parse source metadata");
-    assert_eq!(
-        source_metadata["format"]["tags"]["title"],
-        "ForgeBox private metadata sentinel"
-    );
-    assert_eq!(
-        source_metadata["format"]["tags"]["comment"],
-        "ForgeBox private metadata sentinel"
-    );
+    let private_metadata_sentinels = [
+        "ForgeBox private global title sentinel",
+        "ForgeBox private global comment sentinel",
+        "ForgeBox private video stream sentinel",
+        "ForgeBox private audio stream sentinel",
+    ];
+    let source_metadata_text = source_metadata.to_string();
+    for sentinel in &private_metadata_sentinels {
+        assert!(
+            source_metadata_text.contains(sentinel),
+            "The source fixture is missing expected metadata value {sentinel}: {source_metadata}"
+        );
+    }
 
     let audio = execute(job(
         ToolId::ExtractAudio, vec![source.clone()], ws.path("audio"),
@@ -517,6 +563,7 @@ fn audio_and_video_tools_extract_convert_and_generate_gif() {
     )).expect("extract audio");
     outputs(&audio, 1);
     assert_eq!(audio[0].extension().and_then(|e| e.to_str()), Some("mp3"));
+    assert_metadata_values_absent(&audio[0], &private_metadata_sentinels);
 
     for (format, expected_codec) in [
         (super::AudioFormat::Mp3, "mp3"),
@@ -529,11 +576,12 @@ fn audio_and_video_tools_extract_convert_and_generate_gif() {
     ] {
         let converted = execute(job(
             ToolId::AudioConvert,
-            audio.clone(),
+            vec![source.clone()],
             ws.path(&format!("audio-{}", format.as_str())),
             JobOptions::AudioConvert { format, bitrate: 192 },
         )).unwrap_or_else(|error| panic!("{} audio conversion failed: {error}", format.as_str()));
         outputs(&converted, 1);
+        assert_metadata_values_absent(&converted[0], &private_metadata_sentinels);
         assert_eq!(
             converted[0].extension().and_then(|ext| ext.to_str()),
             Some(format.as_str())
@@ -561,6 +609,7 @@ fn audio_and_video_tools_extract_convert_and_generate_gif() {
         },
     )).expect("convert video to WebM");
     outputs(&video, 1);
+    assert_metadata_values_absent(&video[0], &private_metadata_sentinels);
 
     let sticker = execute(job(
         ToolId::VideoSticker,
@@ -576,6 +625,7 @@ fn audio_and_video_tools_extract_convert_and_generate_gif() {
         },
     )).expect("create Telegram video sticker");
     outputs(&sticker, 1);
+    assert_metadata_values_absent(&sticker[0], &private_metadata_sentinels);
     assert_eq!(sticker[0].extension().and_then(|ext| ext.to_str()), Some("webm"));
     assert!(fs::metadata(&sticker[0]).unwrap().len() <= 256 * 1024);
     let sticker_probe = Command::new("ffprobe")
@@ -606,6 +656,7 @@ fn audio_and_video_tools_extract_convert_and_generate_gif() {
         },
     )).expect("create fit-mode Telegram video sticker");
     outputs(&fitted_sticker, 1);
+    assert_metadata_values_absent(&fitted_sticker[0], &private_metadata_sentinels);
     assert!(fs::metadata(&fitted_sticker[0]).unwrap().len() <= 256 * 1024);
 
     let gif = execute(job(
@@ -613,38 +664,7 @@ fn audio_and_video_tools_extract_convert_and_generate_gif() {
         JobOptions::VideoToGif { width: 128, fps: 6 },
     )).expect("video to GIF");
     outputs(&gif, 1);
-    let gif_probe = Command::new("ffprobe")
-        .args(["-v", "error", "-show_entries", "format_tags:stream_tags", "-of", "json"])
-        .arg(&gif[0])
-        .output()
-        .expect("probe GIF metadata");
-    assert!(gif_probe.status.success(), "FFprobe failed to inspect GIF metadata");
-    let gif_metadata: serde_json::Value =
-        serde_json::from_slice(&gif_probe.stdout).expect("parse GIF metadata");
-    let has_private_source_tag = gif_metadata
-        .get("format")
-        .and_then(|format| format.get("tags"))
-        .and_then(serde_json::Value::as_object)
-        .map(|tags| tags.values().any(|value| {
-            value.as_str() == Some("ForgeBox private metadata sentinel")
-        }))
-        .unwrap_or(false)
-        || gif_metadata
-            .get("streams")
-            .and_then(serde_json::Value::as_array)
-            .map(|streams| streams.iter().any(|stream| {
-                stream.get("tags")
-                    .and_then(serde_json::Value::as_object)
-                    .map(|tags| tags.values().any(|value| {
-                        value.as_str() == Some("ForgeBox private metadata sentinel")
-                    }))
-                    .unwrap_or(false)
-            }))
-            .unwrap_or(false);
-    assert!(
-        !has_private_source_tag,
-        "GIF retained private metadata from the source video: {gif_metadata}"
-    );
+    assert_metadata_values_absent(&gif[0], &private_metadata_sentinels);
     let decoded = image::ImageReader::open(&gif[0]).unwrap()
         .with_guessed_format().unwrap().decode().unwrap();
     assert_eq!(decoded.width(), 128);
@@ -674,7 +694,11 @@ fn davinci_resolve_profile_creates_verified_dnxhr_mov_with_pcm_audio() {
         os("-f"), os("lavfi"), os("-i"), os("testsrc2=size=320x240:rate=25:duration=1"),
         os("-f"), os("lavfi"), os("-i"), os("sine=frequency=1000:sample_rate=48000:duration=1"),
         os("-c:v"), os("mpeg4"), os("-q:v"), os("5"), os("-pix_fmt"), os("yuv420p"),
-        os("-c:a"), os("pcm_s16le"), os("-shortest"), os(&input),
+        os("-c:a"), os("pcm_s16le"), os("-shortest"),
+        os("-metadata"), os("title=ForgeBox DaVinci private global sentinel"),
+        os("-metadata:s:v:0"), os("title=ForgeBox DaVinci private video stream sentinel"),
+        os("-metadata:s:a:0"), os("title=ForgeBox DaVinci private audio stream sentinel"),
+        os(&input),
     ]);
 
     let result = execute(job(
@@ -684,6 +708,14 @@ fn davinci_resolve_profile_creates_verified_dnxhr_mov_with_pcm_audio() {
         JobOptions::DavinciResolve { profile: ResolveProfile::Auto },
     )).expect("DaVinci Resolve export should succeed");
     outputs(&result, 1);
+    assert_metadata_values_absent(
+        &result[0],
+        &[
+            "ForgeBox DaVinci private global sentinel",
+            "ForgeBox DaVinci private video stream sentinel",
+            "ForgeBox DaVinci private audio stream sentinel",
+        ],
+    );
     assert_eq!(result[0].extension().and_then(|ext| ext.to_str()), Some("mov"));
 
     let probe = Command::new("ffprobe")
