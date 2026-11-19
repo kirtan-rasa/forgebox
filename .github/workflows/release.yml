@@ -19,8 +19,8 @@ jobs:
     name: Validate committed Rust lockfile
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       - name: Prepare native Wayland patch
         run: bash scripts/enable-native-wayland-dnd.sh
       - name: Validate committed Cargo.lock
@@ -34,7 +34,7 @@ jobs:
           if ! git diff --quiet -- Cargo.lock; then
             echo "::warning::Committed Cargo.lock was stale; downstream jobs will use the resolved lockfile artifact."
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: internal-cargo-lock
           path: Cargo.lock
@@ -45,12 +45,12 @@ jobs:
     needs: lockfile
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: internal-cargo-lock
           path: .
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: clippy
       - name: Validate shell scripts
@@ -116,12 +116,12 @@ jobs:
     needs: [lockfile, test]
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: internal-cargo-lock
           path: .
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       - name: Install conversion engines and fixture fonts
         run: |
           sudo apt-get update
@@ -154,12 +154,12 @@ jobs:
             libXi-devel libXcursor-devel libXinerama-devel mesa-libGL-devel \
             freetype-devel fontconfig-devel rpm-build rpm-sign gnupg2 \
             desktop-file-utils
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: internal-cargo-lock
           path: .
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       - name: Prepare native Wayland patch
         run: bash scripts/enable-native-wayland-dnd.sh
       - name: Build release binary
@@ -266,7 +266,7 @@ jobs:
         env:
           RPM_SIGNING_PRIVATE_KEY: ${{ secrets.RPM_SIGNING_PRIVATE_KEY }}
         run: bash scripts/sign-rpm.sh dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: forgebox-fedora-x86_64
           path: dist/*
@@ -278,12 +278,12 @@ jobs:
     needs: [lockfile, test, integration]
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: internal-cargo-lock
           path: .
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       - name: Install Linux packaging dependencies
         run: |
           sudo apt-get update
@@ -350,7 +350,7 @@ jobs:
           trap - EXIT
 
           find dist/linux -maxdepth 1 -type f -printf '%P\n' | sort
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: forgebox-deb-appimage-arch-x86_64
           path: dist/linux/*
@@ -365,8 +365,8 @@ jobs:
     steps:
       - name: Install Arch packaging tools
         run: pacman -Syu --noconfirm --needed base-devel git shadow
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: forgebox-deb-appimage-arch-x86_64
           path: dist/linux
@@ -415,7 +415,7 @@ jobs:
           test -n "$(find dist/linux -maxdepth 1 -type f -name '*.pkg.tar.*' -print -quit)"
           test -s dist/linux/.SRCINFO
           pacman -Qip dist/linux/*.pkg.tar.zst
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: forgebox-arch-pacman-x86_64
           path: |
@@ -433,7 +433,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Ensure the tag matches Cargo.toml
         shell: bash
         run: |
@@ -443,14 +443,14 @@ jobs:
             echo "Release tag v${tag_version} does not match Cargo.toml version ${cargo_version}." >&2
             exit 1
           fi
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: forgebox-*
           path: release-assets
           merge-multiple: true
       - name: Select public release files
         run: python3 scripts/prepare-release-assets.py --source release-assets --destination public-release
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: ForgeBox ${{ github.ref_name }}
           prerelease: false
