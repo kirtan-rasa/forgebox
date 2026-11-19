@@ -332,8 +332,14 @@ for release in releases:
             continue
 
         url = asset.get("browser_download_url") or ""
+        release_tag = release.get("tag_name") or ""
         expected_prefix = "https://github.com/kirtan-rasa/forgebox/releases/download/"
-        if os.path.basename(name) != name or not url.startswith(expected_prefix):
+        expected_package_url = f"{expected_prefix}{release_tag}/{name}"
+        if (
+            not release_tag
+            or os.path.basename(name) != name
+            or url != expected_package_url
+        ):
             print("GitHub returned an unexpected package asset URL.", file=sys.stderr)
             sys.exit(1)
 
@@ -371,7 +377,7 @@ for release in releases:
             if (
                 key_name != "forgebox-rpm-signing-key.asc"
                 or os.path.basename(key_name) != key_name
-                or not key_url.startswith(expected_prefix)
+                or key_url != f"{expected_prefix}{release_tag}/{key_name}"
                 or not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", key_digest)
             ):
                 print("GitHub returned invalid ForgeBox RPM signing-key metadata.", file=sys.stderr)
@@ -439,6 +445,8 @@ printf 'The package manager will install ForgeBox and its declared dependencies.
 case "$PACKAGE_FAMILY" in
     fedora)
         verify_fedora_rpm_signature "$RPM_KEY_PATH" "$PACKAGE_PATH" "$TMP_DIR/rpmdb"
+        printf 'Adding the verified ForgeBox release key to the system RPM trust store...\n'
+        run_privileged rpm --import "$RPM_KEY_PATH"
         ensure_fedora_ffmpeg
         run_privileged dnf install --assumeyes "$PACKAGE_PATH"
         ;;
