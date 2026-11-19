@@ -122,6 +122,86 @@ fn fixture_command(program: &str, args: Vec<OsString>) {
 }
 
 #[test]
+fn image_pdf_normalization_removes_gps_metadata_without_changing_density() {
+    if !require(&["exiftool", "identify"], "image PDF metadata") {
+        return;
+    }
+
+    let ws = Workspace::new("image-pdf-metadata");
+    let input = ws.path("source.jpg");
+    let normalized = ws.path("normalized.png");
+
+    run_magick_owned(vec![
+        os("-size"), os("100x100"), os("xc:white"),
+        os("-units"), os("PixelsPerInch"), os("-density"), os("300"),
+        os(&input),
+    ]).expect("create a 300-DPI JPEG fixture");
+
+    let tagged = Command::new("exiftool")
+        .args([
+            "-overwrite_original",
+            "-GPSLatitude=52.1234",
+            "-GPSLatitudeRef=N",
+            "-GPSLongitude=4.5678",
+            "-GPSLongitudeRef=E",
+            "-Comment=Private test location",
+        ])
+        .arg(&input)
+        .output()
+        .expect("write GPS metadata to the source image");
+    assert!(
+        tagged.status.success(),
+        "ExifTool could not write GPS metadata: {}",
+        String::from_utf8_lossy(&tagged.stderr)
+    );
+
+    let source_metadata = Command::new("exiftool")
+        .args(["-s3", "-GPS:all"])
+        .arg(&input)
+        .output()
+        .expect("inspect source GPS metadata");
+    assert!(source_metadata.status.success());
+    assert!(
+        !source_metadata.stdout.is_empty(),
+        "the fixture must contain GPS metadata before normalization"
+    );
+
+    super::images::normalize_pdf_page(&input, &normalized)
+        .expect("normalize image for PDF");
+
+    let output_metadata = Command::new("exiftool")
+        .args(["-s3", "-GPS:all", "-Comment"])
+        .arg(&normalized)
+        .output()
+        .expect("inspect normalized image metadata");
+    assert!(output_metadata.status.success());
+    assert!(
+        output_metadata.stdout.iter().all(u8::is_ascii_whitespace),
+        "normalized PDF page retained location/comment metadata: {}",
+        String::from_utf8_lossy(&output_metadata.stdout)
+    );
+
+    let density = Command::new("identify")
+        .args(["-format", "%x %y %[units]"])
+        .arg(&normalized)
+        .output()
+        .expect("read normalized image density");
+    assert!(density.status.success());
+    let density = String::from_utf8_lossy(&density.stdout);
+    let fields = density.split_whitespace().collect::<Vec<_>>();
+    assert_eq!(fields.len(), 3, "unexpected density output: {density}");
+    let x = fields[0].parse::<f64>().expect("horizontal density");
+    let y = fields[1].parse::<f64>().expect("vertical density");
+    let to_dpi = match fields[2] {
+        "PixelsPerInch" => 1.0,
+        "PixelsPerCentimeter" => 2.54,
+        unit => panic!("unexpected density unit {unit}"),
+    };
+    assert!((x * to_dpi - 300.0).abs() < 1.0, "horizontal DPI changed: {density}");
+    assert!((y * to_dpi - 300.0).abs() < 1.0, "vertical DPI changed: {density}");
+}
+
+#[test]
 fn image_tool_paths_work_with_real_imagemagick_exiftool_and_tesseract() {
     if !require(&[image_magick_program(), "img2pdf", "exiftool", "tesseract", "qpdf"], "images") {
         return;
