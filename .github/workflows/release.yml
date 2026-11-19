@@ -225,12 +225,42 @@ jobs:
 
           gpg --batch --homedir "$TEST_ROOT/gnupg" --generate-key "$TEST_ROOT/key.batch"
           gpg --batch --homedir "$TEST_ROOT/gnupg" --armor --export-secret-keys > "$TEST_ROOT/private.asc"
-          cp dist/*.rpm "$TEST_ROOT/dist/"
+          RPM_PACKAGE="$(find dist -maxdepth 1 -type f -name '*.rpm' -print -quit)"
+          test -n "$RPM_PACKAGE"
+          cp "$RPM_PACKAGE" "$TEST_ROOT/unsigned.rpm"
+          cp "$RPM_PACKAGE" "$TEST_ROOT/dist/"
 
+          TEST_FINGERPRINT="$(gpg --batch --homedir "$TEST_ROOT/gnupg" --with-colons --list-secret-keys | awk -F: '$1 == "fpr" { print $10; exit }')"
+          test -n "$TEST_FINGERPRINT"
           RPM_SIGNING_PRIVATE_KEY="$(cat "$TEST_ROOT/private.asc")" \
             bash scripts/sign-rpm.sh "$TEST_ROOT/dist"
           test -s "$TEST_ROOT/dist/forgebox-rpm-signing-key.asc"
           test -s "$TEST_ROOT/dist/forgebox-rpm-signing-key-id.txt"
+
+          # Exercise the same verifier function shipped in the one-command installer.
+          awk '/^verify_fedora_rpm_signature\(\) \{/ { capture=1 } capture { print } capture && /^}/ { exit }' \
+            site/install.sh > "$TEST_ROOT/verify-rpm-function.sh"
+          test -s "$TEST_ROOT/verify-rpm-function.sh"
+          cat > "$TEST_ROOT/test-rpm-verification.sh" <<EOF
+          set -euo pipefail
+          EXPECTED_RPM_SIGNING_FINGERPRINT="$TEST_FINGERPRINT"
+          TMP_DIR="$TEST_ROOT"
+          fail() { echo "RPM verification test: \$*" >&2; exit 1; }
+          run_privileged() { "\$@"; }
+          EOF
+          cat "$TEST_ROOT/verify-rpm-function.sh" >> "$TEST_ROOT/test-rpm-verification.sh"
+          cat >> "$TEST_ROOT/test-rpm-verification.sh" <<EOF
+          verify_fedora_rpm_signature "$TEST_ROOT/dist/forgebox-rpm-signing-key.asc" "$TEST_ROOT/dist/$(basename "$RPM_PACKAGE")" "$TEST_ROOT/rpmdb-valid"
+          if (verify_fedora_rpm_signature "$TEST_ROOT/dist/forgebox-rpm-signing-key.asc" "$TEST_ROOT/unsigned.rpm" "$TEST_ROOT/rpmdb-unsigned"); then
+            echo "The RPM verifier accepted an unsigned package." >&2
+            exit 1
+          fi
+          if (EXPECTED_RPM_SIGNING_FINGERPRINT="0000000000000000000000000000000000000000" verify_fedora_rpm_signature "$TEST_ROOT/dist/forgebox-rpm-signing-key.asc" "$TEST_ROOT/dist/$(basename "$RPM_PACKAGE")" "$TEST_ROOT/rpmdb-wrong-key"); then
+            echo "The RPM verifier accepted an unexpected signing-key fingerprint." >&2
+            exit 1
+          fi
+          EOF
+          bash "$TEST_ROOT/test-rpm-verification.sh"
       - name: Sign RPM for tagged releases
         if: startsWith(github.ref, 'refs/tags/v')
         env:
