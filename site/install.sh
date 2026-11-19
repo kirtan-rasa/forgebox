@@ -6,6 +6,7 @@ set -eu
 
 RELEASES_API="https://api.github.com/repos/kirtan-rasa/forgebox/releases?per_page=100"
 INSTALL_URL="https://kirtan-rasa.github.io/forgebox/install.sh"
+EXPECTED_RPM_SIGNING_FINGERPRINT="BBDD0FC7B69D4975233D6675817023604CBB61C6"
 
 fail() {
     printf 'ForgeBox installer: %s\n' "$1" >&2
@@ -66,6 +67,42 @@ prompt_yes_no() {
     answer=''
     IFS= read -r answer < /dev/tty || return 1
     case "$answer" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
+}
+
+verify_fedora_rpm_signature() {
+    key_file=$1
+    package_file=$2
+    rpm_database=$3
+
+    if ! command -v gpg >/dev/null 2>&1; then
+        printf 'GnuPG is required to verify the ForgeBox RPM signature. Installing it...\n'
+        run_privileged dnf install --assumeyes gnupg2
+    fi
+    command -v rpmkeys >/dev/null 2>&1 || fail "The rpmkeys command is required to verify the ForgeBox package signature."
+
+    actual_fingerprint=$(gpg --batch --with-colons --import-options show-only --import "$key_file" 2>/dev/null |
+        awk -F: '$1 == "fpr" { print $10; exit }') ||
+        fail "Could not read the ForgeBox RPM signing key fingerprint."
+    [ "$actual_fingerprint" = "$EXPECTED_RPM_SIGNING_FINGERPRINT" ] ||
+        fail "The downloaded RPM signing key has an unexpected fingerprint. Refusing to install this package."
+
+    mkdir -p "$rpm_database" || fail "Could not create a temporary RPM key database."
+    rpm --dbpath "$rpm_database" --initdb >/dev/null ||
+        fail "Could not initialise the temporary RPM key database."
+    rpm --dbpath "$rpm_database" --import "$key_file" ||
+        fail "Could not import the verified ForgeBox RPM public key."
+
+    signature_log="$TMP_DIR/rpm-signature-check.log"
+    if ! rpmkeys --dbpath "$rpm_database" --checksig --verbose "$package_file" > "$signature_log" 2>&1; then
+        cat "$signature_log" >&2
+        fail "The ForgeBox RPM signature is invalid. The package will not be installed."
+    fi
+    if ! grep -Eiq 'signature.*: OK|digests signatures OK' "$signature_log"; then
+        cat "$signature_log" >&2
+        fail "The RPM does not contain a verifiable signature from the ForgeBox release key."
+    fi
+
+    printf 'ForgeBox RPM signature verified (fingerprint %s).\n' "$actual_fingerprint"
 }
 
 confirm_system_install() {
@@ -313,6 +350,40 @@ for release in releases:
         print(name)
         print(url)
         print(digest.split(":", 1)[1])
+
+        if family == "fedora":
+            signing_keys = [
+                candidate for candidate in release.get("assets", [])
+                if isinstance(candidate, dict)
+                and candidate.get("name") == "forgebox-rpm-signing-key.asc"
+            ]
+            if len(signing_keys) != 1:
+                print(
+                    "The selected Fedora release must contain exactly one ForgeBox RPM signing key.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+            signing_key = signing_keys[0]
+            key_name = signing_key.get("name") or ""
+            key_url = signing_key.get("browser_download_url") or ""
+            key_digest = signing_key.get("digest") or ""
+            if (
+                key_name != "forgebox-rpm-signing-key.asc"
+                or os.path.basename(key_name) != key_name
+                or not key_url.startswith(expected_prefix)
+                or not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", key_digest)
+            ):
+                print("GitHub returned invalid ForgeBox RPM signing-key metadata.", file=sys.stderr)
+                sys.exit(1)
+
+            print(key_name)
+            print(key_url)
+            print(key_digest.split(":", 1)[1])
+        else:
+            print("")
+            print("")
+            print("")
         sys.exit(0)
 
 print(
@@ -327,11 +398,19 @@ RELEASE_TAG="$(sed -n '1p' "$TMP_DIR/asset-info")"
 PACKAGE_NAME="$(sed -n '2p' "$TMP_DIR/asset-info")"
 PACKAGE_URL="$(sed -n '3p' "$TMP_DIR/asset-info")"
 EXPECTED_SHA256="$(sed -n '4p' "$TMP_DIR/asset-info")"
+RPM_KEY_NAME="$(sed -n '5p' "$TMP_DIR/asset-info")"
+RPM_KEY_URL="$(sed -n '6p' "$TMP_DIR/asset-info")"
+RPM_KEY_SHA256="$(sed -n '7p' "$TMP_DIR/asset-info")"
 
 [ -n "$RELEASE_TAG" ] || fail "GitHub did not provide a release tag."
 [ -n "$PACKAGE_NAME" ] || fail "GitHub did not provide a package filename."
 [ -n "$PACKAGE_URL" ] || fail "GitHub did not provide a package URL."
 [ -n "$EXPECTED_SHA256" ] || fail "GitHub did not provide a package digest."
+if [ "$PACKAGE_FAMILY" = "fedora" ]; then
+    [ "$RPM_KEY_NAME" = "forgebox-rpm-signing-key.asc" ] || fail "The selected Fedora release has no ForgeBox RPM signing key."
+    [ -n "$RPM_KEY_URL" ] || fail "GitHub did not provide the RPM signing-key URL."
+    [ -n "$RPM_KEY_SHA256" ] || fail "GitHub did not provide the RPM signing-key digest."
+fi
 
 PACKAGE_PATH="$TMP_DIR/$PACKAGE_NAME"
 printf 'Selected release: %s\nPackage: %s\nDownloading and verifying SHA-256...\n' "$RELEASE_TAG" "$PACKAGE_NAME"
@@ -343,11 +422,23 @@ ACTUAL_SHA256="$(sha256sum "$PACKAGE_PATH" | awk '{print $1}')"
 [ "$ACTUAL_SHA256" = "$EXPECTED_SHA256" ] || fail "SHA-256 verification failed. The package will not be installed."
 printf 'SHA-256 verified.\n'
 
+if [ "$PACKAGE_FAMILY" = "fedora" ]; then
+    RPM_KEY_PATH="$TMP_DIR/$RPM_KEY_NAME"
+    printf 'Downloading the matching ForgeBox RPM signing key...\n'
+    curl --fail --location --silent --show-error --retry 3 \
+        --output "$RPM_KEY_PATH" "$RPM_KEY_URL"
+    [ -s "$RPM_KEY_PATH" ] || fail "The downloaded RPM signing key is empty."
+    ACTUAL_KEY_SHA256="$(sha256sum "$RPM_KEY_PATH" | awk '{print $1}')"
+    [ "$ACTUAL_KEY_SHA256" = "$RPM_KEY_SHA256" ] || fail "RPM signing-key SHA-256 verification failed."
+    printf 'RPM signing-key SHA-256 verified.\n'
+fi
+
 printf '\nInstalling ForgeBox with the native package manager...\n'
 printf 'The package manager will install ForgeBox and its declared dependencies. sudo may ask for your password.\n'
 
 case "$PACKAGE_FAMILY" in
     fedora)
+        verify_fedora_rpm_signature "$RPM_KEY_PATH" "$PACKAGE_PATH" "$TMP_DIR/rpmdb"
         ensure_fedora_ffmpeg
         run_privileged dnf install --assumeyes "$PACKAGE_PATH"
         ;;
