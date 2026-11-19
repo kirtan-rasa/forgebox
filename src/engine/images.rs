@@ -1,6 +1,6 @@
 use super::{
     display_io, first_file, os, reserve_output_for_input, reserve_unique_path, require_files,
-    run_magick_owned, run_ok, sort_numbered_paths, temp_dir, temp_dir_in, Job,
+    run_magick_owned, run_ok, sort_numbered_paths, temp_dir_in, Job,
 };
 use std::fs;
 use std::ffi::OsString;
@@ -15,6 +15,26 @@ fn first_frame_input_arg(input: &Path) -> OsString {
         argument.push("[0]");
     }
     argument
+}
+
+fn remove_private_image_metadata(args: &mut Vec<OsString>) {
+    // Remove profiles that can contain GPS/location data, but retain density
+    // and ICC color profiles so PDF page size and color rendering stay intact.
+    args.extend([
+        os("+profile"), os("exif"),
+        os("+profile"), os("iptc"),
+        os("+profile"), os("xmp"),
+        os("-set"), os("comment"), os(""),
+    ]);
+}
+
+pub(super) fn normalize_pdf_page(input: &Path, output: &Path) -> Result<(), String> {
+    let mut args = vec![first_frame_input_arg(input), os("-auto-orient"), os("+repage")];
+    // Apply orientation before removing EXIF, otherwise the orientation tag
+    // would no longer be available to ImageMagick.
+    remove_private_image_metadata(&mut args);
+    args.push(os(output));
+    run_magick_owned(args)
 }
 
 pub(super) fn images_to_pdf(job: &Job, combine: bool, compress: bool, quality: u8) -> Result<Vec<PathBuf>, String> {
@@ -32,12 +52,10 @@ pub(super) fn images_to_pdf(job: &Job, combine: bool, compress: bool, quality: u
         let mut normalized: Vec<PathBuf> = Vec::with_capacity(job.files.len());
         for (index, input) in job.files.iter().enumerate() {
             // Normalize each file separately before assembling the PDF. This applies EXIF
-            // orientation exactly once and writes standalone PNG pages so the orientation
-            // cannot be applied again by the PDF encoder. Preserve density metadata so physical
-            // page dimensions remain consistent with the source image.
+            // orientation exactly once, removes GPS-bearing metadata profiles, and preserves
+            // density/ICC information so physical page dimensions and colors remain consistent.
             let page = temp.join(format!("page-{:05}.png", index + 1));
-            let input_arg = first_frame_input_arg(input);
-            if let Err(error) = run_magick_owned(vec![input_arg, os("-auto-orient"), os("+repage"), os(&page)]) {
+            if let Err(error) = normalize_pdf_page(input, &page) {
                 let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("image");
                 return Err(format!(r#"Failed to prepare "{name}": {error}"#));
             }
@@ -103,12 +121,17 @@ pub(super) fn images_to_pdf(job: &Job, combine: bool, compress: bool, quality: u
 
 pub(super) fn long_png_to_pdf(job: &Job) -> Result<Vec<PathBuf>, String> {
     let input = first_file(job)?;
-    let temp = temp_dir("long-png")?;
+    // Tall images can expand substantially during pagination. Keep these
+    // intermediates beside the selected output instead of filling /tmp or tmpfs.
+    let temp = temp_dir_in(&job.output_dir, "long-png")?;
     let result = (|| -> Result<Vec<PathBuf>, String> {
         let pattern = temp.join("page-%05d.png");
         // Omitting the width makes ImageMagick tile the full source width into
         // vertical strips. A percentage width is treated as one crop rectangle.
-        run_magick_owned(vec![os(input), os("-auto-orient"), os("-crop"), os("x3508"), os("+repage"), os(&pattern)])?;
+        let mut args = vec![os(input), os("-auto-orient")];
+        remove_private_image_metadata(&mut args);
+        args.extend([os("-crop"), os("x3508"), os("+repage"), os(&pattern)]);
+        run_magick_owned(args)?;
         let mut pages = fs::read_dir(&temp).map_err(display_io)?.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.extension().and_then(|s| s.to_str()).map(|ext| ext.eq_ignore_ascii_case("png")).unwrap_or(false)).collect::<Vec<_>>();
         sort_numbered_paths(&mut pages);
         if pages.is_empty() { return Err("Could not create pages from the image.".into()); }
