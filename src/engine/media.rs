@@ -162,6 +162,10 @@ pub(super) fn convert_video_to_gif(
         os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"),
         os("-i"), os(input),
         os("-filter_complex"), os(&filter),
+        // Do not carry source tags (including location metadata) into GIF comments.
+        os("-map_metadata"), os("-1"),
+        os("-map_metadata:s:v"), os("-1"),
+        os("-map_chapters"), os("-1"),
         os("-threads"), os("2"),
         os("-loop"), os("0"),
         os(output),

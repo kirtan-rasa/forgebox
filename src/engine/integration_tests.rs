@@ -488,8 +488,28 @@ fn audio_and_video_tools_extract_convert_and_generate_gif() {
         os("-f"), os("lavfi"), os("-i"), os("color=c=blue:s=160x120:r=10:d=1"),
         os("-f"), os("lavfi"), os("-i"), os("sine=frequency=880:duration=1"),
         os("-shortest"), os("-c:v"), os("libx264"), os("-pix_fmt"), os("yuv420p"),
-        os("-c:a"), os("aac"), source.as_os_str().to_os_string(),
+        os("-c:a"), os("aac"),
+        os("-metadata"), os("title=ForgeBox private metadata sentinel"),
+        os("-metadata"), os("comment=ForgeBox private metadata sentinel"),
+        source.as_os_str().to_os_string(),
     ]);
+
+    let source_probe = Command::new("ffprobe")
+        .args(["-v", "error", "-show_entries", "format_tags=title,comment", "-of", "json"])
+        .arg(&source)
+        .output()
+        .expect("probe source metadata");
+    assert!(source_probe.status.success(), "FFprobe failed to inspect source metadata");
+    let source_metadata: serde_json::Value =
+        serde_json::from_slice(&source_probe.stdout).expect("parse source metadata");
+    assert_eq!(
+        source_metadata["format"]["tags"]["title"],
+        "ForgeBox private metadata sentinel"
+    );
+    assert_eq!(
+        source_metadata["format"]["tags"]["comment"],
+        "ForgeBox private metadata sentinel"
+    );
 
     let audio = execute(job(
         ToolId::ExtractAudio, vec![source.clone()], ws.path("audio"),
@@ -593,6 +613,38 @@ fn audio_and_video_tools_extract_convert_and_generate_gif() {
         JobOptions::VideoToGif { width: 128, fps: 6 },
     )).expect("video to GIF");
     outputs(&gif, 1);
+    let gif_probe = Command::new("ffprobe")
+        .args(["-v", "error", "-show_entries", "format_tags:stream_tags", "-of", "json"])
+        .arg(&gif[0])
+        .output()
+        .expect("probe GIF metadata");
+    assert!(gif_probe.status.success(), "FFprobe failed to inspect GIF metadata");
+    let gif_metadata: serde_json::Value =
+        serde_json::from_slice(&gif_probe.stdout).expect("parse GIF metadata");
+    let has_private_source_tag = gif_metadata
+        .get("format")
+        .and_then(|format| format.get("tags"))
+        .and_then(serde_json::Value::as_object)
+        .map(|tags| tags.values().any(|value| {
+            value.as_str() == Some("ForgeBox private metadata sentinel")
+        }))
+        .unwrap_or(false)
+        || gif_metadata
+            .get("streams")
+            .and_then(serde_json::Value::as_array)
+            .map(|streams| streams.iter().any(|stream| {
+                stream.get("tags")
+                    .and_then(serde_json::Value::as_object)
+                    .map(|tags| tags.values().any(|value| {
+                        value.as_str() == Some("ForgeBox private metadata sentinel")
+                    }))
+                    .unwrap_or(false)
+            }))
+            .unwrap_or(false);
+    assert!(
+        !has_private_source_tag,
+        "GIF retained private metadata from the source video: {gif_metadata}"
+    );
     let decoded = image::ImageReader::open(&gif[0]).unwrap()
         .with_guessed_format().unwrap().decode().unwrap();
     assert_eq!(decoded.width(), 128);
