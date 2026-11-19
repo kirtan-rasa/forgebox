@@ -1,16 +1,19 @@
+#[cfg(test)]
+use super::temp_dir;
 use super::{
-    check_cancelled, display_io, first_file, normalized_ext, os, report_status,
-    run_ok, temp_dir, Job,
+    check_cancelled, display_io, first_file, normalized_ext, os, record_execution_warning,
+    report_status, run_ok, run_ok_with_timeout, temp_dir_for_output, Job,
 };
 use csv::{ReaderBuilder, WriterBuilder};
 use serde::de::{Error as _, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserializer, Serializer};
 use serde_json::{Map, Value};
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::fmt;
+use std::io;
 use std::fs;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub(super) fn data_convert(job: &Job, target_format: &str) -> Result<Vec<PathBuf>, String> {
@@ -27,6 +30,22 @@ pub(super) fn data_convert(job: &Job, target_format: &str) -> Result<Vec<PathBuf
         return Err("The input and output formats are the same.".into());
     }
 
+    match (source_ext.as_str(), target_ext.as_str()) {
+        ("csv", "json") => record_execution_warning(
+            "CSV has no built-in data types; ForgeBox imports its cell values as strings.".into()
+        ),
+        ("json", "csv") => record_execution_warning(
+            "Nested JSON arrays and objects are written as JSON text inside one CSV cell. CSV cannot reconstruct that nesting automatically.".into()
+        ),
+        ("csv", "xlsx") | ("json", "xlsx") => record_execution_warning(
+            "LibreOffice may infer spreadsheet cell types. Check identifiers with leading zeroes, long numbers, and date-like text after conversion.".into()
+        ),
+        ("xlsx", "csv") => record_execution_warning(
+            "CSV stores one table only. LibreOffice exports the active/first worksheet; other worksheets are not included.".into()
+        ),
+        _ => {}
+    }
+
     let reservation = super::reserve_output_for_input(job, input, "converted", &target_ext)?;
     let out = reservation.path().to_path_buf();
     let result = (|| -> Result<(), String> {
@@ -36,7 +55,7 @@ pub(super) fn data_convert(job: &Job, target_format: &str) -> Result<Vec<PathBuf
             ("csv", "xlsx") => soffice_convert(input, "xlsx", &out)?,
             ("xlsx", "csv") => soffice_convert(input, "csv", &out)?,
             ("json", "xlsx") => {
-                let temp = temp_dir("json-xlsx")?;
+                let temp = temp_dir_for_output(&out, "json-xlsx")?;
                 let result = (|| {
                     let temp_csv = temp.join("table.csv");
                     json_to_csv(input, &temp_csv)?;
@@ -46,7 +65,7 @@ pub(super) fn data_convert(job: &Job, target_format: &str) -> Result<Vec<PathBuf
                 result?;
             }
             ("xlsx", "json") => {
-                let temp = temp_dir("xlsx-json")?;
+                let temp = temp_dir_for_output(&out, "xlsx-json")?;
                 let result = (|| {
                     let temp_csv = temp.join("data.csv");
                     soffice_convert(input, "csv", &temp_csv)?;
@@ -66,18 +85,159 @@ pub(super) fn data_convert(job: &Job, target_format: &str) -> Result<Vec<PathBuf
     Ok(vec![out])
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CsvEncoding {
+    Utf8,
+    Windows1251,
+}
+
+fn detect_csv_encoding(input: &Path) -> Result<CsvEncoding, String> {
+    // Validate the entire file in bounded chunks, keeping only an incomplete
+    // UTF-8 code point between reads. The actual conversion is also streaming.
+    let file = fs::File::open(input).map_err(display_io)?;
+    let mut reader = BufReader::new(file);
+    let mut incomplete = Vec::new();
+
+    loop {
+        let chunk = reader.fill_buf().map_err(display_io)?;
+        if chunk.is_empty() {
+            return Ok(if incomplete.is_empty() {
+                CsvEncoding::Utf8
+            } else {
+                CsvEncoding::Windows1251
+            });
+        }
+
+        let consumed = chunk.len();
+        let mut bytes = Vec::with_capacity(incomplete.len() + consumed);
+        bytes.extend_from_slice(&incomplete);
+        bytes.extend_from_slice(chunk);
+
+        match std::str::from_utf8(&bytes) {
+            Ok(_) => incomplete.clear(),
+            Err(error) if error.error_len().is_none() => {
+                incomplete.clear();
+                incomplete.extend_from_slice(&bytes[error.valid_up_to()..]);
+            }
+            Err(_) => return Ok(CsvEncoding::Windows1251),
+        }
+        reader.consume(consumed);
+    }
+}
+
+fn detect_csv_delimiter(input: &Path) -> Result<u8, String> {
+    // Delimiters and quotes are ASCII in both supported encodings.
+    let file = fs::File::open(input).map_err(display_io)?;
+    let mut reader = BufReader::new(file);
+    let mut header = Vec::new();
+    reader.read_until(b'\n', &mut header).map_err(display_io)?;
+
+    let mut commas = 0usize;
+    let mut semicolons = 0usize;
+    let mut quoted = false;
+    let mut index = 0usize;
+    while index < header.len() {
+        match header[index] {
+            b'"' if quoted && header.get(index + 1) == Some(&b'"') => index += 1,
+            b'"' => quoted = !quoted,
+            b',' if !quoted => commas += 1,
+            b';' if !quoted => semicolons += 1,
+            _ => {}
+        }
+        index += 1;
+    }
+
+    Ok(if semicolons > commas && semicolons > 0 { b';' } else { b',' })
+}
+
+struct Windows1251Reader<R> {
+    inner: R,
+    decoded: Vec<u8>,
+    offset: usize,
+    finished: bool,
+}
+
+impl<R> Windows1251Reader<R> {
+    fn new(inner: R) -> Self {
+        Self { inner, decoded: Vec::new(), offset: 0, finished: false }
+    }
+}
+
+impl<R: Read> Read for Windows1251Reader<R> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+
+        loop {
+            if self.offset < self.decoded.len() {
+                let count = output.len().min(self.decoded.len() - self.offset);
+                output[..count].copy_from_slice(&self.decoded[self.offset..self.offset + count]);
+                self.offset += count;
+                return Ok(count);
+            }
+
+            if self.finished {
+                return Ok(0);
+            }
+
+            let mut input = [0u8; 8192];
+            let count = self.inner.read(&mut input)?;
+            if count == 0 {
+                self.finished = true;
+                return Ok(0);
+            }
+
+            self.decoded.clear();
+            self.offset = 0;
+            for byte in input[..count].iter().copied() {
+                let character = windows1251_character(byte);
+                let mut encoded = [0u8; 4];
+                self.decoded.extend_from_slice(character.encode_utf8(&mut encoded).as_bytes());
+            }
+        }
+    }
+}
+
+fn windows1251_character(byte: u8) -> char {
+    const EXTENDED: [u32; 64] = [
+        0x0402, 0x0403, 0x201A, 0x0453, 0x201E, 0x2026, 0x2020, 0x2021,
+        0x20AC, 0x2030, 0x0409, 0x2039, 0x040A, 0x040C, 0x040B, 0x040F,
+        0x0452, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+        0xFFFD, 0x2122, 0x0459, 0x203A, 0x045A, 0x045C, 0x045B, 0x045F,
+        0x00A0, 0x040E, 0x045E, 0x0408, 0x00A4, 0x0490, 0x00A6, 0x00A7,
+        0x0401, 0x00A9, 0x0404, 0x00AB, 0x00AC, 0x00AD, 0x00AE, 0x0407,
+        0x00B0, 0x00B1, 0x0406, 0x0456, 0x0491, 0x00B5, 0x00B6, 0x00B7,
+        0x0451, 0x2116, 0x0454, 0x00BB, 0x0458, 0x0405, 0x0455, 0x0457,
+    ];
+
+    match byte {
+        0x00..=0x7F => byte as char,
+        0x80..=0xBF => char::from_u32(EXTENDED[usize::from(byte - 0x80)]).unwrap_or('\u{FFFD}'),
+        0xC0..=0xDF => char::from_u32(0x0410 + u32::from(byte - 0xC0)).unwrap_or('\u{FFFD}'),
+        0xE0..=0xFF => char::from_u32(0x0430 + u32::from(byte - 0xE0)).unwrap_or('\u{FFFD}'),
+    }
+}
+
 pub(super) fn csv_to_json(input: &Path, output: &Path) -> Result<(), String> {
     // Serialize one CSV row at a time instead of keeping the whole document in memory.
+    let encoding = detect_csv_encoding(input)?;
+    let delimiter = detect_csv_delimiter(input)?;
+    let source = fs::File::open(input).map_err(display_io)?;
+    let source: Box<dyn Read> = match encoding {
+        CsvEncoding::Utf8 => Box::new(source),
+        CsvEncoding::Windows1251 => Box::new(Windows1251Reader::new(source)),
+    };
     let mut reader = ReaderBuilder::new()
+        .delimiter(delimiter)
         .flexible(true)
-        .from_path(input)
-        .map_err(|e| format!("Could not read CSV: {e}"))?;
+        .from_reader(source);
     let headers = reader
         .headers()
         .map_err(|e| format!("Failed to read CSV headers: {e}"))?
         .clone();
 
-    let mut unique_headers = BTreeSet::new();
+    let mut unique_headers = HashSet::new();
     for header in &headers {
         if !unique_headers.insert(header) {
             return Err(format!("CSV contains a duplicate column name: {header}"));
@@ -136,7 +296,8 @@ pub(super) fn csv_to_json(input: &Path, output: &Path) -> Result<(), String> {
 pub(super) fn json_to_csv(input: &Path, output: &Path) -> Result<(), String> {
     // Discover the union of object keys in a first streaming pass. A second pass
     // writes rows, so JSON arrays with differing object keys remain supported.
-    let mut header_set = BTreeSet::new();
+    let mut header_set = HashSet::new();
+    let mut headers = Vec::new();
     let mut scanned_rows = 0usize;
     let input_file = fs::File::open(input).map_err(display_io)?;
     visit_json_rows(BufReader::new(input_file), |row| {
@@ -148,12 +309,15 @@ pub(super) fn json_to_csv(input: &Path, output: &Path) -> Result<(), String> {
         let object = row
             .as_object()
             .ok_or("Each JSON row must be an object.")?;
-        header_set.extend(object.keys().cloned());
+        for key in object.keys() {
+            if header_set.insert(key.clone()) {
+                headers.push(key.clone());
+            }
+        }
         Ok(())
     })?;
 
     check_cancelled()?;
-    let headers: Vec<String> = header_set.into_iter().collect();
     let file = fs::File::create(output).map_err(display_io)?;
     let mut writer = WriterBuilder::new().from_writer(BufWriter::new(file));
 
@@ -247,7 +411,12 @@ where
 fn json_cell(value: &Value) -> String {
     match value {
         Value::Null => String::new(),
-        Value::String(s) => s.clone(),
+        Value::String(s) => {
+            let formula_like = s.trim_start().chars().next()
+                .map(|ch| matches!(ch, '=' | '+' | '-' | '@'))
+                .unwrap_or(false);
+            if formula_like { format!("'{s}") } else { s.clone() }
+        },
         Value::Number(_) | Value::Bool(_) => value.to_string(),
         Value::Array(_) | Value::Object(_) => value.to_string(),
     }
@@ -275,7 +444,7 @@ pub(super) fn path_to_file_url(path: &Path) -> Result<String, String> {
 }
 
 pub(super) fn pdf_to_docx(input: &Path, output: &Path) -> Result<(), String> {
-    let temp = temp_dir("pdf-to-docx")?;
+    let temp = temp_dir_for_output(output, "pdf-to-docx")?;
     let result = (|| -> Result<(), String> {
         let extracted_text = temp.join("extracted.txt");
         run_ok("pdftotext", vec![
@@ -300,7 +469,7 @@ pub(super) fn pdf_to_docx(input: &Path, output: &Path) -> Result<(), String> {
 }
 
 pub(super) fn soffice_convert(input: &Path, extension: &str, output: &Path) -> Result<(), String> {
-    let temp = temp_dir("office-convert")?;
+    let temp = temp_dir_for_output(output, "office-convert")?;
     let result = (|| -> Result<(), String> {
         let profile = temp.join("profile");
         fs::create_dir_all(&profile).map_err(|error| {
@@ -311,7 +480,7 @@ pub(super) fn soffice_convert(input: &Path, extension: &str, output: &Path) -> R
         // LibreOffice forwards requests to an already-running instance when they
         // share the same user profile. A per-conversion profile avoids conflicts
         // with the user's desktop session and other headless conversions.
-        run_ok("libreoffice", vec![
+        run_ok_with_timeout("libreoffice", vec![
             os(format!("-env:UserInstallation={profile_url}")),
             os("--headless"),
             os("--convert-to"),
@@ -319,7 +488,7 @@ pub(super) fn soffice_convert(input: &Path, extension: &str, output: &Path) -> R
             os("--outdir"),
             os(&temp),
             os(input),
-        ])?;
+        ], std::time::Duration::from_secs(300))?;
         let generated = temp.join(format!("{}.{}", input.file_stem().and_then(|s| s.to_str()).unwrap_or("output"), extension));
         if !generated.exists() {
             return Err(format!("LibreOffice did not create the expected file {}. Check whether the input format is supported.", generated.display()));
@@ -377,21 +546,49 @@ mod tests {
         let mut reader = Reader::from_path(&output).unwrap();
         assert_eq!(
             reader.headers().unwrap().iter().collect::<Vec<_>>(),
-            vec!["active", "name", "nested", "z"]
+            vec!["z", "name", "nested", "active"]
         );
         let rows = reader
             .records()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].get(0), Some(""));
+        assert_eq!(rows[0].get(0), Some("1"));
         assert_eq!(rows[0].get(1), Some("Ada"));
         assert_eq!(rows[0].get(2), Some(r#"{"ok":true}"#));
-        assert_eq!(rows[0].get(3), Some("1"));
-        assert_eq!(rows[1].get(0), Some("true"));
+        assert_eq!(rows[0].get(3), Some(""));
+        assert_eq!(rows[1].get(0), Some(""));
         assert_eq!(rows[1].get(1), Some(""));
         assert_eq!(rows[1].get(2), Some(""));
-        assert_eq!(rows[1].get(3), Some(""));
+        assert_eq!(rows[1].get(3), Some("true"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn csv_to_json_detects_semicolon_delimiters() {
+        let directory = temp_dir("csv-json-semicolon-test").unwrap();
+        let input = directory.join("input.csv");
+        let output = directory.join("output.json");
+        fs::write(&input, "name;city\nAda;London\n").unwrap();
+
+        csv_to_json(&input, &output).unwrap();
+        let value: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+        assert_eq!(value, serde_json::json!([{"name":"Ada","city":"London"}]));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn json_to_csv_keeps_column_order_and_escapes_formula_like_strings() {
+        let directory = temp_dir("json-csv-formula-test").unwrap();
+        let input = directory.join("input.json");
+        let output = directory.join("output.csv");
+        fs::write(&input, r#"[{"second":"=1+1","first":"safe"}]"#).unwrap();
+
+        json_to_csv(&input, &output).unwrap();
+        let mut reader = Reader::from_path(&output).unwrap();
+        assert_eq!(reader.headers().unwrap().iter().collect::<Vec<_>>(), vec!["second", "first"]);
+        let row = reader.records().next().unwrap().unwrap();
+        assert_eq!(row.get(0), Some("'=1+1"));
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -436,6 +633,44 @@ mod tests {
             .contains("Extra fields would be lost"));
         assert!(!output.exists());
 
+        fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+
+#[cfg(test)]
+mod windows_1251_tests {
+    use super::{csv_to_json, CsvEncoding, Windows1251Reader};
+    use std::fs;
+    use std::io::{Cursor, Read};
+
+    #[test]
+    fn decodes_common_cyrillic_windows_1251_bytes() {
+        // "Привет" in Windows-1251.
+        let bytes = [0xCF, 0xF0, 0xE8, 0xE2, 0xE5, 0xF2];
+        let mut reader = Windows1251Reader::new(Cursor::new(bytes));
+        let mut decoded = String::new();
+        reader.read_to_string(&mut decoded).unwrap();
+        assert_eq!(decoded, "Привет");
+    }
+
+    #[test]
+    fn converts_semicolon_delimited_windows_1251_csv() {
+        let directory = super::temp_dir("csv-json-windows-1251-test").unwrap();
+        let input = directory.join("input.csv");
+        let output = directory.join("output.json");
+        let bytes = [
+            0xE8,0xEC,0xFF,b';',0xE3,0xEE,0xF0,0xEE,0xE4,b'\n',
+            0xC0,0xE4,0xE0,b';',0xCC,0xEE,0xF1,0xEA,0xE2,0xE0,b'\n'
+        ];
+        fs::write(&input, bytes).unwrap();
+
+        assert_eq!(super::detect_csv_encoding(&input).unwrap(), CsvEncoding::Windows1251);
+        csv_to_json(&input, &output).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+        assert_eq!(value[0]["имя"], "Ада");
+        assert_eq!(value[0]["город"], "Москва");
         fs::remove_dir_all(directory).unwrap();
     }
 }

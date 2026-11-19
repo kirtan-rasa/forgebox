@@ -19,16 +19,22 @@ jobs:
     name: Validate committed Rust lockfile
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       - name: Prepare native Wayland patch
         run: bash scripts/enable-native-wayland-dnd.sh
       - name: Validate committed Cargo.lock
         run: |
           test -s Cargo.lock
           git ls-files --error-unmatch Cargo.lock
-          cargo metadata --locked --format-version 1 --no-deps
-      - uses: actions/upload-artifact@v4
+          # Resolve the complete dependency graph, including target and dev dependencies.
+          # Cargo may add missing feature edges while preserving existing locked versions.
+          cargo metadata --format-version 1 >/dev/null
+          cargo metadata --locked --format-version 1 >/dev/null
+          if ! git diff --quiet -- Cargo.lock; then
+            echo "::warning::Committed Cargo.lock was stale; downstream jobs will use the resolved lockfile artifact."
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: internal-cargo-lock
           path: Cargo.lock
@@ -39,16 +45,31 @@ jobs:
     needs: lockfile
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: internal-cargo-lock
           path: .
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: clippy
       - name: Validate shell scripts
-        run: find scripts packaging -type f -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
+        run: |
+          find scripts packaging -type f -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
+          sh -n site/install.sh
+      - name: Verify installer requires interactive consent
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$(mktemp)"
+          trap 'rm -f "$log"' EXIT
+          if printf 'n\n' | timeout 15s script -q -e -c "sh site/install.sh" /dev/null >"$log" 2>&1; then
+            cat "$log"
+            echo "The installer unexpectedly continued after consent was declined." >&2
+            exit 1
+          fi
+          grep -Fq "Continue with these system changes? [y/N]" "$log"
+          grep -Fq "Installation cancelled. No packages were changed." "$log"
       - name: Test public release asset selection
         run: python3 scripts/prepare-release-assets.py --self-test
       - name: Install native build dependencies
@@ -62,8 +83,27 @@ jobs:
             qpdf poppler-utils
       - name: Prepare native Wayland drag-and-drop backend
         run: bash scripts/enable-native-wayland-dnd.sh
-      - name: Validate optional Fedora installer script
-        run: bash -n scripts/install-rembg-fedora.sh
+      - name: Validate installer scripts and pinned rembg version
+        run: |
+          sh -n site/install.sh
+          bash -n scripts/install-rembg-fedora.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          paths = (Path("site/install.sh"), Path("scripts/install-rembg-fedora.sh"))
+          versions = {}
+          for path in paths:
+              content = path.read_text(encoding="utf-8")
+              match = re.search(r'rembg\[cpu,cli\]==([0-9]+\.[0-9]+\.[0-9]+)', content)
+              if match is None:
+                  raise SystemExit(f"{path} must pin rembg[cpu,cli] to an exact version.")
+              versions[str(path)] = match.group(1)
+
+          if len(set(versions.values())) != 1:
+              raise SystemExit(f"rembg installer versions differ: {versions}")
+          print(f"Both installers pin rembg to {next(iter(versions.values()))}.")
+          PY
       - name: Run Clippy
         run: cargo clippy --locked --all-targets
       - name: Run Rust tests
@@ -76,12 +116,12 @@ jobs:
     needs: [lockfile, test]
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: internal-cargo-lock
           path: .
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       - name: Install conversion engines and fixture fonts
         run: |
           sudo apt-get update
@@ -114,12 +154,12 @@ jobs:
             libXi-devel libXcursor-devel libXinerama-devel mesa-libGL-devel \
             freetype-devel fontconfig-devel rpm-build rpm-sign gnupg2 \
             desktop-file-utils
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: internal-cargo-lock
           path: .
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       - name: Prepare native Wayland patch
         run: bash scripts/enable-native-wayland-dnd.sh
       - name: Build release binary
@@ -185,18 +225,48 @@ jobs:
 
           gpg --batch --homedir "$TEST_ROOT/gnupg" --generate-key "$TEST_ROOT/key.batch"
           gpg --batch --homedir "$TEST_ROOT/gnupg" --armor --export-secret-keys > "$TEST_ROOT/private.asc"
-          cp dist/*.rpm "$TEST_ROOT/dist/"
+          RPM_PACKAGE="$(find dist -maxdepth 1 -type f -name '*.rpm' -print -quit)"
+          test -n "$RPM_PACKAGE"
+          cp "$RPM_PACKAGE" "$TEST_ROOT/unsigned.rpm"
+          cp "$RPM_PACKAGE" "$TEST_ROOT/dist/"
 
+          TEST_FINGERPRINT="$(gpg --batch --homedir "$TEST_ROOT/gnupg" --with-colons --list-secret-keys | awk -F: '$1 == "fpr" { print $10; exit }')"
+          test -n "$TEST_FINGERPRINT"
           RPM_SIGNING_PRIVATE_KEY="$(cat "$TEST_ROOT/private.asc")" \
             bash scripts/sign-rpm.sh "$TEST_ROOT/dist"
           test -s "$TEST_ROOT/dist/forgebox-rpm-signing-key.asc"
           test -s "$TEST_ROOT/dist/forgebox-rpm-signing-key-id.txt"
+
+          # Exercise the same verifier function shipped in the one-command installer.
+          awk '/^verify_fedora_rpm_signature\(\) \{/ { capture=1 } capture { print } capture && /^}/ { exit }' \
+            site/install.sh > "$TEST_ROOT/verify-rpm-function.sh"
+          test -s "$TEST_ROOT/verify-rpm-function.sh"
+          cat > "$TEST_ROOT/test-rpm-verification.sh" <<EOF
+          set -euo pipefail
+          EXPECTED_RPM_SIGNING_FINGERPRINT="$TEST_FINGERPRINT"
+          TMP_DIR="$TEST_ROOT"
+          fail() { echo "RPM verification test: \$*" >&2; exit 1; }
+          run_privileged() { "\$@"; }
+          EOF
+          cat "$TEST_ROOT/verify-rpm-function.sh" >> "$TEST_ROOT/test-rpm-verification.sh"
+          cat >> "$TEST_ROOT/test-rpm-verification.sh" <<EOF
+          verify_fedora_rpm_signature "$TEST_ROOT/dist/forgebox-rpm-signing-key.asc" "$TEST_ROOT/dist/$(basename "$RPM_PACKAGE")" "$TEST_ROOT/rpmdb-valid"
+          if (verify_fedora_rpm_signature "$TEST_ROOT/dist/forgebox-rpm-signing-key.asc" "$TEST_ROOT/unsigned.rpm" "$TEST_ROOT/rpmdb-unsigned"); then
+            echo "The RPM verifier accepted an unsigned package." >&2
+            exit 1
+          fi
+          if (EXPECTED_RPM_SIGNING_FINGERPRINT="0000000000000000000000000000000000000000" verify_fedora_rpm_signature "$TEST_ROOT/dist/forgebox-rpm-signing-key.asc" "$TEST_ROOT/dist/$(basename "$RPM_PACKAGE")" "$TEST_ROOT/rpmdb-wrong-key"); then
+            echo "The RPM verifier accepted an unexpected signing-key fingerprint." >&2
+            exit 1
+          fi
+          EOF
+          bash "$TEST_ROOT/test-rpm-verification.sh"
       - name: Sign RPM for tagged releases
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           RPM_SIGNING_PRIVATE_KEY: ${{ secrets.RPM_SIGNING_PRIVATE_KEY }}
         run: bash scripts/sign-rpm.sh dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: forgebox-fedora-x86_64
           path: dist/*
@@ -208,12 +278,12 @@ jobs:
     needs: [lockfile, test, integration]
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: internal-cargo-lock
           path: .
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       - name: Install Linux packaging dependencies
         run: |
           sudo apt-get update
@@ -280,7 +350,7 @@ jobs:
           trap - EXIT
 
           find dist/linux -maxdepth 1 -type f -printf '%P\n' | sort
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: forgebox-deb-appimage-arch-x86_64
           path: dist/linux/*
@@ -294,9 +364,9 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Install Arch packaging tools
-        run: pacman -Sy --noconfirm --needed base-devel git shadow
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+        run: pacman -Syu --noconfirm --needed base-devel git shadow
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: forgebox-deb-appimage-arch-x86_64
           path: dist/linux
@@ -345,7 +415,7 @@ jobs:
           test -n "$(find dist/linux -maxdepth 1 -type f -name '*.pkg.tar.*' -print -quit)"
           test -s dist/linux/.SRCINFO
           pacman -Qip dist/linux/*.pkg.tar.zst
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: forgebox-arch-pacman-x86_64
           path: |
@@ -363,7 +433,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Ensure the tag matches Cargo.toml
         shell: bash
         run: |
@@ -373,14 +443,14 @@ jobs:
             echo "Release tag v${tag_version} does not match Cargo.toml version ${cargo_version}." >&2
             exit 1
           fi
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: forgebox-*
           path: release-assets
           merge-multiple: true
       - name: Select public release files
         run: python3 scripts/prepare-release-assets.py --source release-assets --destination public-release
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: ForgeBox ${{ github.ref_name }}
           prerelease: false

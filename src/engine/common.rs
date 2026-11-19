@@ -10,6 +10,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static TEMP_DIR_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+fn processed_image_extension(input: &Path) -> String {
+    let extension = input.extension().and_then(|value| value.to_str()).unwrap_or("png");
+    match extension.to_ascii_lowercase().as_str() {
+        // ImageMagick can decode HEIC/HEIF on supported builds, but HEIF
+        // encoders are commonly absent. Produce a portable PNG instead.
+        "heic" | "heif" => "png".into(),
+        other => other.into(),
+    }
+}
+
 fn output_details(job: &Job, input: &Path) -> (&'static str, String) {
     use super::JobOptions as Options;
     use crate::catalog::ToolId as Tool;
@@ -19,9 +29,9 @@ fn output_details(job: &Job, input: &Path) -> (&'static str, String) {
     };
     match (&job.tool, &job.options) {
         (Tool::ImageConvert, Options::ImageConvert { format }) => ("converted", format.as_str().to_owned()),
-        (Tool::ImageResize, Options::ImageResize { .. }) => ("resized", source_extension()),
-        (Tool::ImageCompress, Options::ImageCompress { .. }) => ("compressed", source_extension()),
-        (Tool::ImageGrayscale, Options::None) => ("grayscale", source_extension()),
+        (Tool::ImageResize, Options::ImageResize { .. }) => ("resized", processed_image_extension(input)),
+        (Tool::ImageCompress, Options::ImageCompress { .. }) => ("compressed", processed_image_extension(input)),
+        (Tool::ImageGrayscale, Options::None) => ("grayscale", processed_image_extension(input)),
         (Tool::RemoveBackground, Options::None) => ("no-background", "png".into()),
         (Tool::ExtractExif, Options::None) => ("exif", "json".into()),
         (Tool::PdfToDoc, Options::None) => ("converted", "docx".into()),
@@ -36,12 +46,25 @@ fn output_details(job: &Job, input: &Path) -> (&'static str, String) {
     }
 }
 
-fn check_cancelled_or_remove_outputs(outputs: &[PathBuf]) -> Result<(), String> {
-    if let Err(error) = check_cancelled() {
-        for output in outputs {
-            let _ = fs::remove_file(output);
+fn check_batch_cancelled(outputs: &[PathBuf], output_dir: &Path) -> Result<(), String> {
+    check_cancelled().map_err(|error| {
+        if outputs.is_empty() {
+            error
+        } else {
+            format!(
+                "{error} {} completed output(s) were kept in {}.",
+                outputs.len(),
+                output_dir.display()
+            )
         }
-        return Err(error);
+    })
+}
+
+fn ensure_output_file(path: &Path) -> Result<(), String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("The converter did not create the expected output file: {error}"))?;
+    if !metadata.is_file() || metadata.len() == 0 {
+        return Err("The converter did not create a non-empty output file.".into());
     }
     Ok(())
 }
@@ -53,7 +76,7 @@ where
     require_files(job, 1, "Add files to process first.")?;
     let mut outputs: Vec<PathBuf> = Vec::new();
     for (index, input) in job.files.iter().enumerate() {
-        check_cancelled_or_remove_outputs(&outputs)?;
+        check_batch_cancelled(&outputs, &job.output_dir)?;
         let name = input.file_name().and_then(|value| value.to_str()).unwrap_or("file");
         report_status(format!("Processing {name} ({}/{})", index + 1, job.files.len()));
         let (suffix, extension) = output_details(job, input);
@@ -61,9 +84,17 @@ where
         let out = reservation.path().to_path_buf();
         if let Err(error) = operation(input, &out) {
             let _ = fs::remove_file(&out);
-            for created in &outputs { let _ = fs::remove_file(created); }
             let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-            return Err(format!(r#"Failed to process "{name}": {error}"#));
+            return Err(if outputs.is_empty() {
+                format!(r#"Failed to process "{name}": {error}"#)
+            } else {
+                format!(r#"Failed to process "{name}": {error}. {} earlier completed output(s) were kept in {}."#, outputs.len(), job.output_dir.display())
+            });
+        }
+        if let Err(error) = ensure_output_file(&out) {
+            let _ = fs::remove_file(&out);
+            let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+            return Err(format!(r#"Failed to process "{name}": {error}. Earlier completed outputs, if any, were kept."#));
         }
         outputs.push(out);
     }
@@ -77,16 +108,24 @@ where
     require_files(job, 1, "Add files to process first.")?;
     let mut outputs: Vec<PathBuf> = Vec::new();
     for (index, input) in job.files.iter().enumerate() {
-        check_cancelled_or_remove_outputs(&outputs)?;
+        check_batch_cancelled(&outputs, &job.output_dir)?;
         let name = input.file_name().and_then(|value| value.to_str()).unwrap_or("file");
         report_status(format!("Reading metadata from {name} ({}/{})", index + 1, job.files.len()));
         let reservation = reserve_output_for_input(job, input, "exif", "json")?;
         let out = reservation.path().to_path_buf();
         if let Err(error) = operation(input, &out) {
             let _ = fs::remove_file(&out);
-            for created in &outputs { let _ = fs::remove_file(created); }
             let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-            return Err(format!(r#"Failed to read metadata from "{name}": {error}"#));
+            return Err(if outputs.is_empty() {
+                format!(r#"Failed to read metadata from "{name}": {error}"#)
+            } else {
+                format!(r#"Failed to read metadata from "{name}": {error}. {} earlier completed output(s) were kept in {}."#, outputs.len(), job.output_dir.display())
+            });
+        }
+        if let Err(error) = ensure_output_file(&out) {
+            let _ = fs::remove_file(&out);
+            let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+            return Err(format!(r#"Failed to read metadata from "{name}": {error}. Earlier completed outputs, if any, were kept."#));
         }
         outputs.push(out);
     }
@@ -97,16 +136,24 @@ pub(super) fn process_each_convert(job: &Job, target_ext: &str) -> Result<Vec<Pa
     require_files(job, 1, "Add documents first.")?;
     let mut outputs: Vec<PathBuf> = Vec::new();
     for (index, input) in job.files.iter().enumerate() {
-        check_cancelled_or_remove_outputs(&outputs)?;
+        check_batch_cancelled(&outputs, &job.output_dir)?;
         let name = input.file_name().and_then(|value| value.to_str()).unwrap_or("document");
         report_status(format!("Converting {name} ({}/{})", index + 1, job.files.len()));
         let reservation = reserve_output_for_input(job, input, "converted", target_ext)?;
         let out = reservation.path().to_path_buf();
         if let Err(error) = soffice_convert(input, target_ext, &out) {
             let _ = fs::remove_file(&out);
-            for created in &outputs { let _ = fs::remove_file(created); }
             let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("document");
-            return Err(format!(r#"Failed to convert "{name}": {error}"#));
+            return Err(if outputs.is_empty() {
+                format!(r#"Failed to convert "{name}": {error}"#)
+            } else {
+                format!(r#"Failed to convert "{name}": {error}. {} earlier completed output(s) were kept in {}."#, outputs.len(), job.output_dir.display())
+            });
+        }
+        if let Err(error) = ensure_output_file(&out) {
+            let _ = fs::remove_file(&out);
+            let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("document");
+            return Err(format!(r#"Failed to convert "{name}": {error}. Earlier completed outputs, if any, were kept."#));
         }
         outputs.push(out);
     }
@@ -287,7 +334,19 @@ pub(super) fn files_with_prefix(dir: &Path, prefix: &str) -> Vec<PathBuf> {
 }
 
 pub(super) fn temp_dir(prefix: &str) -> Result<PathBuf, String> {
-    let base = std::env::temp_dir();
+    temp_dir_in(&std::env::temp_dir(), prefix)
+}
+
+pub(super) fn temp_dir_for_output(output: &Path, prefix: &str) -> Result<PathBuf, String> {
+    let base = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    temp_dir_in(base, prefix)
+}
+
+pub(super) fn temp_dir_in(base: &Path, prefix: &str) -> Result<PathBuf, String> {
+    fs::create_dir_all(base).map_err(display_io)?;
 
     // A millisecond timestamp alone can collide when two conversions create
     // temporary directories at nearly the same time. Use an in-process
@@ -296,7 +355,7 @@ pub(super) fn temp_dir(prefix: &str) -> Result<PathBuf, String> {
     for _ in 0..128 {
         let sequence = TEMP_DIR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path = base.join(format!(
-            "forgebox-{prefix}-{}-{}-{sequence}",
+            ".forgebox-{prefix}-{}-{}-{sequence}",
             std::process::id(),
             timestamp()
         ));
@@ -365,7 +424,7 @@ mod cancellation_cleanup_tests {
     use std::sync::mpsc;
 
     #[test]
-    fn cancelling_between_files_removes_outputs_from_the_current_batch() {
+    fn cancelling_between_files_keeps_completed_outputs() {
         let directory = temp_dir("batch-cancel-cleanup-test").unwrap();
         let first_input = directory.join("first.png");
         let second_input = directory.join("second.png");
@@ -396,11 +455,41 @@ mod cancellation_cleanup_tests {
         });
 
         assert!(result.unwrap_err().contains("cancelled"));
-        assert_eq!(
-            fs::read_dir(&output_dir).unwrap().count(),
-            0,
-            "a cancelled batch must not leave files from earlier inputs"
-        );
+        let outputs = fs::read_dir(&output_dir).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(outputs.len(), 1, "the first completed output must be preserved");
+        assert_eq!(fs::read(outputs[0].path()).unwrap(), b"completed output");
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_later_file_failure_keeps_earlier_completed_outputs() {
+        let directory = temp_dir("batch-failure-preserve-test").unwrap();
+        let first_input = directory.join("first.png");
+        let second_input = directory.join("second.png");
+        fs::write(&first_input, b"first").unwrap();
+        fs::write(&second_input, b"second").unwrap();
+
+        let output_dir = directory.join("output");
+        fs::create_dir_all(&output_dir).unwrap();
+        let job = Job::new(
+            ToolId::ImageConvert,
+            vec![first_input.clone(), second_input.clone()],
+            output_dir.clone(),
+            JobOptions::ImageConvert { format: ImageFormat::Png },
+        ).unwrap();
+
+        let result = process_each(&job, |input, output| {
+            if input == second_input {
+                return Err("simulated second-file failure".into());
+            }
+            fs::write(output, b"first completed output").map_err(|error| error.to_string())
+        });
+
+        assert!(result.unwrap_err().contains("simulated second-file failure"));
+        let outputs = fs::read_dir(&output_dir).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(outputs.len(), 1, "the first output should remain after a later failure");
+        assert_eq!(fs::read(outputs[0].path()).unwrap(), b"first completed output");
 
         fs::remove_dir_all(directory).unwrap();
     }
@@ -516,3 +605,55 @@ mod prefix_reservation_tests {
 
 
 
+
+
+#[cfg(test)]
+mod temp_dir_in_tests {
+    use super::{temp_dir_for_output, temp_dir_in};
+    use std::fs;
+
+    #[test]
+    fn private_workspace_can_be_created_under_destination_directory() {
+        let base = std::env::temp_dir().join(format!("forgebox-temp-in-test-{}", std::process::id()));
+        fs::create_dir_all(&base).unwrap();
+        let workspace = temp_dir_in(&base, "images-pdf").unwrap();
+        assert_eq!(workspace.parent(), Some(base.as_path()));
+        assert!(workspace.file_name().unwrap().to_string_lossy().starts_with(".forgebox-images-pdf-"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&workspace).unwrap().permissions().mode() & 0o077, 0);
+        }
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn output_workspace_is_created_beside_the_destination() {
+        let base = std::env::temp_dir().join(format!("forgebox-output-temp-test-{}", std::process::id()));
+        fs::create_dir_all(&base).unwrap();
+        let output = base.join("converted.xlsx");
+        let workspace = temp_dir_for_output(&output, "office-convert").unwrap();
+        assert_eq!(workspace.parent(), Some(base.as_path()));
+        assert!(workspace.file_name().unwrap().to_string_lossy().starts_with(".forgebox-office-convert-"));
+        fs::remove_dir_all(&base).unwrap();
+    }
+}
+
+
+#[cfg(test)]
+mod processed_image_extension_tests {
+    use super::processed_image_extension;
+    use std::path::Path;
+
+    #[test]
+    fn heif_sources_are_saved_as_portable_png_for_in_place_image_tools() {
+        assert_eq!(processed_image_extension(Path::new("photo.heic")), "png");
+        assert_eq!(processed_image_extension(Path::new("photo.HEIF")), "png");
+    }
+
+    #[test]
+    fn other_image_formats_keep_their_extension() {
+        assert_eq!(processed_image_extension(Path::new("photo.jpg")), "jpg");
+        assert_eq!(processed_image_extension(Path::new("scan.tiff")), "tiff");
+    }
+}

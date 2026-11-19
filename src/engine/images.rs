@@ -1,13 +1,45 @@
 use super::{
     display_io, first_file, os, reserve_output_for_input, reserve_unique_path, require_files,
-    run_magick_owned, run_ok, sort_numbered_paths, temp_dir, Job,
+    run_magick_owned, run_ok, sort_numbered_paths, temp_dir_in, Job,
 };
 use std::fs;
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+
+fn first_frame_input_arg(input: &Path) -> OsString {
+    let mut argument = input.as_os_str().to_os_string();
+    let extension = input.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+    if ["gif", "tif", "tiff"].iter().any(|value| extension.eq_ignore_ascii_case(value)) {
+        // Each selected source file contributes exactly one PDF page.
+        // GIF and multi-page TIFF inputs must not fan out into extra files.
+        argument.push("[0]");
+    }
+    argument
+}
+
+fn remove_private_image_metadata(args: &mut Vec<OsString>) {
+    // Remove profiles that can contain GPS/location data, but retain density
+    // and ICC color profiles so PDF page size and color rendering stay intact.
+    args.extend([
+        os("+profile"), os("exif"),
+        os("+profile"), os("iptc"),
+        os("+profile"), os("xmp"),
+        os("-set"), os("comment"), os(""),
+    ]);
+}
+
+pub(super) fn normalize_pdf_page(input: &Path, output: &Path) -> Result<(), String> {
+    let mut args = vec![first_frame_input_arg(input), os("-auto-orient"), os("+repage")];
+    // Apply orientation before removing EXIF, otherwise the orientation tag
+    // would no longer be available to ImageMagick.
+    remove_private_image_metadata(&mut args);
+    args.push(os(output));
+    run_magick_owned(args)
+}
 
 pub(super) fn images_to_pdf(job: &Job, combine: bool, compress: bool, quality: u8) -> Result<Vec<PathBuf>, String> {
     require_files(job, 1, "Add at least one image to create a PDF.")?;
-    let allowed = ["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "heic", "avif", "gif"];
+    let allowed = ["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "heic", "heif", "avif", "gif"];
     for input in &job.files {
         let ext = input.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
         if !allowed.contains(&ext.as_str()) {
@@ -15,20 +47,15 @@ pub(super) fn images_to_pdf(job: &Job, combine: bool, compress: bool, quality: u
         }
     }
 
-    let temp = temp_dir("images-pdf")?;
+    let temp = temp_dir_in(&job.output_dir, "images-pdf")?;
     let result = (|| -> Result<Vec<PathBuf>, String> {
         let mut normalized: Vec<PathBuf> = Vec::with_capacity(job.files.len());
         for (index, input) in job.files.iter().enumerate() {
             // Normalize each file separately before assembling the PDF. This applies EXIF
-            // orientation exactly once and writes standalone PNG pages so the orientation
-            // cannot be applied again by the PDF encoder. Preserve density metadata so physical
-            // page dimensions remain consistent with the source image.
+            // orientation exactly once, removes GPS-bearing metadata profiles, and preserves
+            // density/ICC information so physical page dimensions and colors remain consistent.
             let page = temp.join(format!("page-{:05}.png", index + 1));
-            let mut input_arg = input.as_os_str().to_os_string();
-            if input.extension().and_then(|ext| ext.to_str()).map(|ext| ext.eq_ignore_ascii_case("gif")).unwrap_or(false) {
-                input_arg.push("[0]");
-            }
-            if let Err(error) = run_magick_owned(vec![input_arg, os("-auto-orient"), os("+repage"), os(&page)]) {
+            if let Err(error) = normalize_pdf_page(input, &page) {
                 let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("image");
                 return Err(format!(r#"Failed to prepare "{name}": {error}"#));
             }
@@ -65,17 +92,23 @@ pub(super) fn images_to_pdf(job: &Job, combine: bool, compress: bool, quality: u
             let mut outputs = Vec::with_capacity(job.files.len());
             for (input, page) in job.files.iter().zip(pdf_pages.iter()) {
                 if let Err(error) = super::check_cancelled() {
-                    for output in &outputs { let _ = fs::remove_file(output); }
-                    return Err(error);
+                    return Err(format!(
+                        "{error} {} completed PDF(s) were kept in {}.",
+                        outputs.len(),
+                        job.output_dir.display()
+                    ));
                 }
                 let reservation = reserve_output_for_input(job, input, "converted", "pdf")?;
                 let out = reservation.path().to_path_buf();
                 let args = vec![os("--output"), os(&out), os(page)];
                 if let Err(error) = run_ok("img2pdf", args) {
                     let _ = fs::remove_file(&out);
-                    for output in &outputs { let _ = fs::remove_file(output); }
                     let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("image");
-                    return Err(format!(r#"Failed to create a PDF for "{name}": {error}"#));
+                    return Err(if outputs.is_empty() {
+                        format!(r#"Failed to create a PDF for "{name}": {error}"#)
+                    } else {
+                        format!(r#"Failed to create a PDF for "{name}": {error}. {} earlier completed PDF(s) were kept in {}."#, outputs.len(), job.output_dir.display())
+                    });
                 }
                 outputs.push(out);
             }
@@ -88,12 +121,17 @@ pub(super) fn images_to_pdf(job: &Job, combine: bool, compress: bool, quality: u
 
 pub(super) fn long_png_to_pdf(job: &Job) -> Result<Vec<PathBuf>, String> {
     let input = first_file(job)?;
-    let temp = temp_dir("long-png")?;
+    // Tall images can expand substantially during pagination. Keep these
+    // intermediates beside the selected output instead of filling /tmp or tmpfs.
+    let temp = temp_dir_in(&job.output_dir, "long-png")?;
     let result = (|| -> Result<Vec<PathBuf>, String> {
         let pattern = temp.join("page-%05d.png");
         // Omitting the width makes ImageMagick tile the full source width into
         // vertical strips. A percentage width is treated as one crop rectangle.
-        run_magick_owned(vec![os(input), os("-auto-orient"), os("-crop"), os("x3508"), os("+repage"), os(&pattern)])?;
+        let mut args = vec![os(input), os("-auto-orient")];
+        remove_private_image_metadata(&mut args);
+        args.extend([os("-crop"), os("x3508"), os("+repage"), os(&pattern)]);
+        run_magick_owned(args)?;
         let mut pages = fs::read_dir(&temp).map_err(display_io)?.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.extension().and_then(|s| s.to_str()).map(|ext| ext.eq_ignore_ascii_case("png")).unwrap_or(false)).collect::<Vec<_>>();
         sort_numbered_paths(&mut pages);
         if pages.is_empty() { return Err("Could not create pages from the image.".into()); }
@@ -109,4 +147,29 @@ pub(super) fn long_png_to_pdf(job: &Job) -> Result<Vec<PathBuf>, String> {
     })();
     let _ = fs::remove_dir_all(&temp);
     result
+}
+
+
+#[cfg(test)]
+mod first_frame_input_tests {
+    use super::first_frame_input_arg;
+    use std::path::Path;
+
+    #[test]
+    fn multi_frame_sources_are_limited_to_one_pdf_page() {
+        for path in ["animation.gif", "scan.tif", "archive.TIFF"] {
+            assert_eq!(
+                first_frame_input_arg(Path::new(path)).to_string_lossy(),
+                format!("{path}[0]")
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_images_keep_their_original_path() {
+        assert_eq!(
+            first_frame_input_arg(Path::new("photo.png")).to_string_lossy(),
+            "photo.png"
+        );
+    }
 }

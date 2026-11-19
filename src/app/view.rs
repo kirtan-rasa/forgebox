@@ -10,7 +10,7 @@ mod thumbnails;
 mod widgets;
 mod workspace;
 
-pub(super) use self::files::{accepted_input_description, append_image_paths, default_output_dir, is_supported_input_file, sort_image_paths_naturally};
+pub(super) use self::files::{accepted_input_description, append_image_paths, default_output_dir, is_supported_input_file};
 pub(super) use self::icons::load_nerd_font;
 pub(super) use self::thumbnails::load_thumbnail;
 
@@ -23,9 +23,15 @@ impl eframe::App for ForgeApp {
         self.video_sticker.poll(ctx);
         self.queue_thumbnails();
         let dropped = ctx.input(|input| input.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>());
-        if !dropped.is_empty() && !self.running {
-            self.add_files(dropped);
-            self.wizard_step = 0;
+        if !dropped.is_empty() {
+            if self.selected_tool == crate::catalog::ToolId::GenerateQr {
+                self.selection_notice = Some("QR Code Generator accepts text, not files.".into());
+            } else if self.running {
+                self.deferred_dropped_files.extend(dropped);
+            } else {
+                self.add_files(dropped);
+                self.wizard_step = 0;
+            }
         }
         let dragging_external_files = ctx.input(|input| !input.raw.hovered_files.is_empty());
 

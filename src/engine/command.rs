@@ -4,18 +4,16 @@ use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn os<T: AsRef<OsStr>>(value: T) -> OsString {
     value.as_ref().to_os_string()
 }
 
-static IMAGEMAGICK_PROGRAM: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
-
 pub(crate) fn image_magick_program() -> &'static str {
-    *IMAGEMAGICK_PROGRAM.get_or_init(|| {
-        if has_command("magick") { "magick" } else { "convert" }
-    })
+    // Probe each time so an installation or repair made while ForgeBox is
+    // running is picked up without requiring an application restart.
+    if has_command("magick") { "magick" } else { "convert" }
 }
 
 /// Reserve at least one available CPU thread for the desktop UI and the rest
@@ -79,7 +77,7 @@ pub(super) fn configure_command_environment(program: &str, command: &mut Command
     }
 }
 
-fn run_cancellable(command: &mut Command) -> io::Result<Output> {
+fn run_cancellable(command: &mut Command, timeout: Option<Duration>) -> io::Result<Output> {
     super::check_cancelled()
         .map_err(|message| io::Error::new(io::ErrorKind::Interrupted, message))?;
 
@@ -96,14 +94,20 @@ fn run_cancellable(command: &mut Command) -> io::Result<Output> {
     let mut child = command.spawn()?;
     let stdout = child.stdout.take().expect("stdout was configured as piped");
     let stderr = child.stderr.take().expect("stderr was configured as piped");
+    let process_id = child.id();
     let stdout_reader = read_pipe(stdout);
     let stderr_reader = read_pipe(stderr);
+    let started = Instant::now();
 
     let status = loop {
+        if timeout.map(|limit| started.elapsed() >= limit).unwrap_or(false) {
+            stop_child(&mut child);
+            join_pipe_readers_bounded(stdout_reader, stderr_reader);
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "External command exceeded its time limit."));
+        }
         if super::execution_cancelled() {
             stop_child(&mut child);
-            let _ = stdout_reader.join();
-            let _ = stderr_reader.join();
+            join_pipe_readers_bounded(stdout_reader, stderr_reader);
             return Err(io::Error::new(io::ErrorKind::Interrupted, "Operation cancelled by user."));
         }
 
@@ -112,12 +116,41 @@ fn run_cancellable(command: &mut Command) -> io::Result<Output> {
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
             Err(error) => {
                 stop_child(&mut child);
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
+                join_pipe_readers_bounded(stdout_reader, stderr_reader);
                 return Err(error);
             }
         }
     };
+
+    // Normally both pipes reach EOF immediately after the command exits.
+    // A helper that inherited stdout/stderr can otherwise keep our reader
+    // threads blocked forever even though the main child has already exited.
+    let pipe_drain_started = Instant::now();
+    while !stdout_reader.is_finished() || !stderr_reader.is_finished() {
+        let timed_out = match timeout {
+            Some(limit) => started.elapsed() >= limit,
+            None => pipe_drain_started.elapsed() >= Duration::from_secs(2),
+        };
+        if timed_out {
+            if timeout.is_some() {
+                stop_child(&mut child);
+                join_pipe_readers_bounded(stdout_reader, stderr_reader);
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "External command exceeded its time limit."));
+            }
+
+            #[cfg(unix)]
+            stop_process_group(process_id);
+
+            // A helper may have escaped the process group and kept one or
+            // both pipes open. Give normal readers a brief chance to finish,
+            // then detach any reader that would otherwise block this worker.
+            join_pipe_readers_bounded(stdout_reader, stderr_reader);
+            return Err(io::Error::other(
+                "A helper process kept the command output pipes open after the main process exited.",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 
     let stdout = join_pipe(stdout_reader)?;
     let stderr = join_pipe(stderr_reader)?;
@@ -132,18 +165,48 @@ fn read_pipe<R: Read + Send + 'static>(mut pipe: R) -> JoinHandle<io::Result<Vec
     })
 }
 
+fn join_pipe_readers_bounded(
+    stdout_reader: JoinHandle<io::Result<Vec<u8>>>,
+    stderr_reader: JoinHandle<io::Result<Vec<u8>>>,
+) {
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while (!stdout_reader.is_finished() || !stderr_reader.is_finished())
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    if stdout_reader.is_finished() {
+        let _ = stdout_reader.join();
+    } else {
+        drop(stdout_reader);
+    }
+    if stderr_reader.is_finished() {
+        let _ = stderr_reader.join();
+    } else {
+        drop(stderr_reader);
+    }
+}
+
 fn join_pipe(reader: JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Vec<u8>> {
     reader.join().map_err(|_| io::Error::new(io::ErrorKind::Other, "Process output reader panicked"))?
 }
 
-fn stop_child(child: &mut Child) {
+fn stop_process_group(process_id: u32) {
     #[cfg(unix)]
     {
         // process_group(0) above makes the child PID its process-group ID.
         // Signal the entire group so delegated helpers cannot outlive a cancel.
-        let process_group = -(child.id() as libc::pid_t);
+        let process_group = -(process_id as libc::pid_t);
         let _ = unsafe { libc::kill(process_group, libc::SIGKILL) };
     }
+    #[cfg(not(unix))]
+    let _ = process_id;
+}
+
+fn stop_child(child: &mut Child) {
+    #[cfg(unix)]
+    stop_process_group(child.id());
 
     #[cfg(not(unix))]
     {
@@ -154,6 +217,22 @@ fn stop_child(child: &mut Child) {
 }
 
 pub(super) fn run_ok(program: &str, args: Vec<OsString>) -> Result<Output, String> {
+    run_ok_internal(program, args, None)
+}
+
+pub(super) fn run_ok_with_timeout(
+    program: &str,
+    args: Vec<OsString>,
+    timeout: Duration,
+) -> Result<Output, String> {
+    run_ok_internal(program, args, Some(timeout))
+}
+
+fn run_ok_internal(
+    program: &str,
+    args: Vec<OsString>,
+    timeout: Option<Duration>,
+) -> Result<Output, String> {
     super::check_cancelled()?;
     super::report_status(format!("Running {program}…"));
     let candidates = command_candidates(program);
@@ -163,7 +242,7 @@ pub(super) fn run_ok(program: &str, args: Vec<OsString>) -> Result<Output, Strin
         let mut command = Command::new(&candidate);
         configure_command_environment(program, &mut command);
         command.args(args.iter());
-        match run_cancellable(&mut command) {
+        match run_cancellable(&mut command, timeout) {
             Ok(output) if output.status.success() => return Ok(output),
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -179,7 +258,10 @@ pub(super) fn run_ok(program: &str, args: Vec<OsString>) -> Result<Output, Strin
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {
                 return Err("Operation cancelled by user.".into());
             }
-            Err(error) => return Err(format!("Failed to launch `{program}` via `{label}`: {error}")),
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+                return Err(format!("Command `{program}` timed out after {} seconds. The process was stopped.", timeout.map(|value| value.as_secs()).unwrap_or_default()));
+            }
+            Err(error) => return Err(format!("Failed to run `{program}` via `{label}`: {error}")),
         }
     }
     let install_hint = match (program, std::env::consts::OS) {
@@ -228,12 +310,18 @@ pub(super) fn run_qpdf(args: Vec<OsString>) -> Result<Output, String> {
     Ok(output)
 }
 
-pub(super) fn command_version_succeeds(candidate: &OsStr) -> bool {
-    Command::new(candidate)
-        .arg("--version")
-        .output()
+const COMMAND_VERSION_TIMEOUT: Duration = Duration::from_secs(3);
+
+fn command_version_succeeds_with_timeout(candidate: &OsStr, timeout: Duration) -> bool {
+    let mut command = Command::new(candidate);
+    command.arg("--version");
+    run_cancellable(&mut command, Some(timeout))
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+pub(super) fn command_version_succeeds(candidate: &OsStr) -> bool {
+    command_version_succeeds_with_timeout(candidate, COMMAND_VERSION_TIMEOUT)
 }
 
 fn has_command(program: &str) -> bool {
@@ -294,3 +382,135 @@ mod cancellation_tests {
     }
 }
 
+
+
+#[cfg(all(test, unix))]
+mod timeout_tests {
+    use super::{os, run_ok_with_timeout};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn timeout_terminates_a_running_process_group() {
+        let started = Instant::now();
+        let error = run_ok_with_timeout(
+            "sh",
+            vec![os("-c"), os("sleep 10")],
+            Duration::from_millis(150),
+        ).unwrap_err();
+
+        assert!(error.contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+}
+
+
+#[cfg(all(test, unix))]
+mod inherited_pipe_tests {
+    use super::{os, run_ok};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn background_helper_cannot_keep_command_waiting_forever() {
+        let started = Instant::now();
+        let error = run_ok("sh", vec![os("-c"), os("sleep 20 & exit 0")]).unwrap_err();
+
+        assert!(error.contains("kept the command output pipes open"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+}
+
+
+#[cfg(all(test, unix))]
+mod command_version_timeout_tests {
+    use super::command_version_succeeds_with_timeout;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn version_probe_stops_a_hung_executable() {
+        let path = std::env::temp_dir().join(format!(
+            "forgebox-hung-version-probe-{}",
+            std::process::id()
+        ));
+        fs::write(&path, "#!/bin/sh\nsleep 10\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let started = Instant::now();
+        let succeeded = command_version_succeeds_with_timeout(
+            path.as_os_str(),
+            Duration::from_millis(150),
+        );
+        let elapsed = started.elapsed();
+
+        let _ = fs::remove_file(&path);
+        assert!(!succeeded, "a timed-out version probe must not report success");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "a hung version probe should stop promptly, elapsed: {elapsed:?}"
+        );
+    }
+}
+
+
+#[cfg(all(test, target_os = "linux"))]
+mod escaped_pipe_tests {
+    use super::{os, run_ok, run_ok_with_timeout};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, Instant};
+
+    fn escaped_helper_command(label: &str, after_start: &str) -> (PathBuf, Vec<std::ffi::OsString>) {
+        let pid_file = std::env::temp_dir().join(format!(
+            "forgebox-escaped-pipe-{}-{label}.pid",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&pid_file);
+        let pid_path = pid_file.to_string_lossy();
+        let script = format!(
+            "setsid sh -c 'echo $$ > {pid_path}; sleep 5' & while [ ! -s {pid_path} ]; do sleep 0.01; done; {after_start}"
+        );
+        (pid_file, vec![os("-c"), os(script)])
+    }
+
+    fn kill_escaped_helper(pid_file: &Path) {
+        if let Some(pid) = fs::read_to_string(pid_file)
+            .ok()
+            .and_then(|value| value.trim().parse::<libc::pid_t>().ok())
+        {
+            let process_group = -pid;
+            let _ = unsafe { libc::kill(process_group, libc::SIGKILL) };
+        }
+        let _ = fs::remove_file(pid_file);
+    }
+
+    #[test]
+    fn timed_out_command_does_not_join_pipes_held_by_an_escaped_helper() {
+        let (pid_file, args) = escaped_helper_command("timeout", "wait");
+        let started = Instant::now();
+        let error = run_ok_with_timeout("sh", args, Duration::from_millis(500)).unwrap_err();
+        let elapsed = started.elapsed();
+        kill_escaped_helper(&pid_file);
+
+        assert!(error.contains("timed out"));
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "timeout must not wait for an escaped helper, elapsed: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn normal_exit_does_not_join_pipes_held_by_an_escaped_helper() {
+        let (pid_file, args) = escaped_helper_command("normal-exit", "exit 0");
+        let started = Instant::now();
+        let error = run_ok("sh", args).unwrap_err();
+        let elapsed = started.elapsed();
+        kill_escaped_helper(&pid_file);
+
+        assert!(error.contains("kept the command output pipes open"));
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "post-exit pipe draining must remain bounded, elapsed: {elapsed:?}"
+        );
+    }
+}

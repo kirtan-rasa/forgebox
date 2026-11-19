@@ -1,22 +1,268 @@
-use super::{normalized_ext, os, positive, record_execution_warning, report_status, run_ok, ResolveProfile};
+use super::{
+    normalized_ext, os, positive, record_execution_warning, report_status, run_ok,
+    run_ok_with_timeout, ResolveProfile,
+};
 use serde_json::Value;
 use std::path::Path;
-use std::process::Command;
 use std::sync::OnceLock;
+use std::time::Duration;
+
+const MEDIA_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn run_ffprobe(args: Vec<std::ffi::OsString>) -> Result<std::process::Output, String> {
+    run_ok_with_timeout("ffprobe", args, MEDIA_PROBE_TIMEOUT)
+}
+
+const MAX_VIDEO_GIF_DURATION_SECONDS: f64 = 60.0;
+const GIF_DISK_SPACE_RESERVE_BYTES: u64 = 64 * 1024 * 1024;
+const GIF_ESTIMATED_BYTES_PER_PIXEL: u128 = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct GifSourceInfo {
+    width: u32,
+    height: u32,
+    duration_seconds: f64,
+}
+
+fn parse_positive_duration(value: Option<&Value>) -> Option<f64> {
+    let value = match value? {
+        Value::String(text) => text.parse::<f64>().ok()?,
+        Value::Number(number) => number.as_f64()?,
+        _ => return None,
+    };
+    (value.is_finite() && value > 0.0).then_some(value)
+}
+
+fn probe_gif_source(input: &Path) -> Result<GifSourceInfo, String> {
+    let output = run_ffprobe(vec![
+        os("-v"), os("error"),
+        os("-select_streams"), os("v:0"),
+        os("-show_entries"), os("stream=width,height,duration:format=duration"),
+        os("-of"), os("json"),
+        os(input),
+    ]).map_err(|error| format!("Could not inspect the video before GIF conversion: {error}"))?;
+    let json: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("FFprobe returned invalid video metadata: {error}"))?;
+    let stream = json.get("streams")
+        .and_then(Value::as_array)
+        .and_then(|streams| streams.first())
+        .ok_or_else(|| "No video stream was found in the selected file.".to_string())?;
+    let width = stream.get("width").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let height = stream.get("height").and_then(Value::as_u64).unwrap_or(0) as u32;
+    if width == 0 || height == 0 {
+        return Err("FFprobe returned invalid video dimensions; GIF conversion was stopped.".into());
+    }
+
+    // Prefer the video-stream duration so a longer audio track does not inflate
+    // the estimate. Some containers expose duration only at format level.
+    let duration_seconds = parse_positive_duration(stream.get("duration"))
+        .or_else(|| json.get("format").and_then(|format| parse_positive_duration(format.get("duration"))))
+        .ok_or_else(|| "Could not determine the source video duration. GIF conversion was stopped to avoid an unbounded export.".to_string())?;
+
+    Ok(GifSourceInfo { width, height, duration_seconds })
+}
+
+fn gif_frame_count(duration_seconds: f64, fps: u8) -> Result<u128, String> {
+    if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
+        return Err("The source video has an invalid duration.".into());
+    }
+    if fps == 0 {
+        return Err("GIF frame rate must be greater than zero.".into());
+    }
+    if duration_seconds > MAX_VIDEO_GIF_DURATION_SECONDS {
+        return Err(format!(
+            "Video-to-GIF is limited to {:.0} seconds per file. This video is {:.1} seconds long. Trim it before converting.",
+            MAX_VIDEO_GIF_DURATION_SECONDS,
+            duration_seconds
+        ));
+    }
+    Ok((duration_seconds * f64::from(fps)).ceil().max(1.0) as u128)
+}
+
+fn estimate_gif_output_bytes(
+    source: GifSourceInfo,
+    target_width: u16,
+    fps: u8,
+) -> Result<u64, String> {
+    if target_width == 0 || fps == 0 || source.width == 0 || source.height == 0 {
+        return Err("GIF output dimensions and frame rate must be greater than zero.".into());
+    }
+    let frames = gif_frame_count(source.duration_seconds, fps)?;
+    let target_height = (
+        u128::from(source.height) * u128::from(target_width)
+            + u128::from(source.width) / 2
+    ) / u128::from(source.width);
+    let pixels_per_frame = u128::from(target_width) * target_height.max(1);
+    let estimate = pixels_per_frame
+        .saturating_mul(frames)
+        .saturating_mul(GIF_ESTIMATED_BYTES_PER_PIXEL)
+        .saturating_add(64 * 1024);
+    u64::try_from(estimate)
+        .map_err(|_| "The estimated GIF size exceeds the supported file-size range.".to_string())
+}
+
+fn ensure_gif_disk_space(estimated_bytes: u64, available_bytes: u64) -> Result<(), String> {
+    let required_bytes = estimated_bytes.saturating_add(GIF_DISK_SPACE_RESERVE_BYTES);
+    if available_bytes < required_bytes {
+        return Err(format!(
+            "There may not be enough free disk space for this GIF. Estimated output: about {} MiB; available: {} MiB. Reduce the width or frame rate, choose a shorter video, or free disk space.",
+            estimated_bytes.div_ceil(1_048_576),
+            available_bytes / 1_048_576
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn available_disk_space_bytes(path: &Path) -> Result<u64, String> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| "The output folder path contains an unsupported NUL byte.".to_string())?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: statvfs writes the output structure when it returns success.
+    let result = unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) };
+    if result != 0 {
+        return Err(format!(
+            "Could not check free disk space for GIF output: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: statvfs succeeded and initialized the structure.
+    let stats = unsafe { stats.assume_init() };
+    let block_size = (if stats.f_frsize > 0 { stats.f_frsize } else { stats.f_bsize }) as u128;
+    let available = (stats.f_bavail as u128).saturating_mul(block_size);
+    Ok(available.min(u128::from(u64::MAX)) as u64)
+}
+
+#[cfg(not(unix))]
+fn available_disk_space_bytes(_path: &Path) -> Result<u64, String> {
+    // The current desktop builds are Linux/Unix-first. Keep non-Unix builds
+    // functional, while still enforcing the duration and size estimate limits.
+    Ok(u64::MAX)
+}
+
+pub(super) fn convert_video_to_gif(
+    input: &Path,
+    output: &Path,
+    target_width: u16,
+    fps: u8,
+) -> Result<(), String> {
+    let source = probe_gif_source(input)?;
+    let estimated_bytes = estimate_gif_output_bytes(source, target_width, fps)?;
+    let output_dir = output.parent().unwrap_or_else(|| Path::new("."));
+    let available_bytes = available_disk_space_bytes(output_dir)?;
+    ensure_gif_disk_space(estimated_bytes, available_bytes)?;
+
+    let filter = format!(
+        "fps={fps},scale={target_width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer"
+    );
+    run_ok("ffmpeg", vec![
+        os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"),
+        os("-i"), os(input),
+        os("-filter_complex"), os(&filter),
+        // Do not carry source tags (including location metadata) into GIF comments.
+        os("-map_metadata"), os("-1"),
+        os("-map_metadata:s:v"), os("-1"),
+        os("-map_chapters"), os("-1"),
+        os("-threads"), os("2"),
+        os("-loop"), os("0"),
+        os(output),
+    ]).map(|_| ())
+}
+
+fn is_hdr_transfer(transfer: Option<&str>) -> bool {
+    matches!(transfer, Some("smpte2084" | "arib-std-b67"))
+}
+
+fn probe_video_conversion(input: &Path) -> Result<(u8, Option<String>), String> {
+    let output = run_ffprobe(vec![
+        os("-v"), os("error"),
+        os("-select_streams"), os("v:0"),
+        os("-show_entries"), os("stream=pix_fmt,bits_per_raw_sample,color_transfer"),
+        os("-of"), os("json"),
+        os(input),
+    ]).map_err(|error| format!("Could not inspect the video bit depth and HDR transfer: {error}"))?;
+    let json: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("FFprobe returned invalid video metadata: {error}"))?;
+    let stream = json.get("streams").and_then(Value::as_array)
+        .and_then(|streams| streams.first())
+        .ok_or_else(|| "FFprobe did not find a video stream in the selected file.".to_string())?;
+    let pixel_format = value_string(stream, "pix_fmt").unwrap_or("unknown");
+    let raw_depth = stream.get("bits_per_raw_sample")
+        .and_then(|value| value.as_str().and_then(|text| text.parse::<u8>().ok())
+            .or_else(|| value.as_u64().map(|number| number as u8)))
+        .unwrap_or(0);
+    let bit_depth = raw_depth.max(inferred_pixel_depth(pixel_format));
+    Ok((bit_depth, parse_optional_string(stream, "color_transfer")))
+}
+
+fn ffmpeg_supports_filter(filter: &str) -> bool {
+    run_ok_with_timeout(
+        "ffmpeg",
+        vec![os("-hide_banner"), os("-h"), os(&format!("filter={filter}"))],
+        MEDIA_PROBE_TIMEOUT,
+    ).is_ok()
+}
 
 pub(super) fn convert_video(input: &Path, output: &Path, target_format: &str, preset: &str, quality: &str) -> Result<(), String> {
     let format = normalized_ext(target_format);
+    if !["mp4", "webm", "mkv", "mov"].contains(&format.as_str()) {
+        return Err(format!(
+            "Video format \"{format}\" is not supported. Choose MP4, WebM, MKV, or MOV."
+        ));
+    }
     let crf = positive(quality, 23).clamp(18, 30).to_string();
     let (preset_label, x264_preset, vp9_cpu_used) = match preset {
         "balanced" => ("balanced", "medium", "4"),
         "smaller" => ("smaller", "slow", "2"),
         _ => ("fast", "veryfast", "6"),
     };
+    let (source_bit_depth, source_transfer) = probe_video_conversion(input)?;
+    let source_is_hdr = is_hdr_transfer(source_transfer.as_deref());
+    if source_is_hdr && !ffmpeg_supports_filter("zscale") {
+        return Err(
+            "The source uses HDR (PQ/HLG), but this FFmpeg build does not include the zscale filter.              Install an FFmpeg build with libzimg support; conversion was stopped to avoid damaging HDR highlights."
+                .into()
+        );
+    }
+    if source_bit_depth > 8 && !source_is_hdr && format != "webm" {
+        record_execution_warning(format!(
+            "The source is {source_bit_depth}-bit SDR, while the selected H.264 output is 8-bit. Some source precision will be reduced."
+        ));
+    }
+    if source_is_hdr {
+        record_execution_warning(
+            "The HDR source was tone-mapped to SDR BT.709 for compatibility with the selected output format."
+                .into()
+        );
+    }
+
+    let video_filter = if source_is_hdr {
+        "zscale=transfer=linear:npl=100,format=gbrpf32le,tonemap=tonemap=hable:desat=0,zscale=transfer=bt709:primaries=bt709:matrix=bt709,scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"
+    } else {
+        "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+    };
     let mut args = vec![
         os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"),
-        os("-i"), os(input), os("-map"), os("0:v:0"), os("-map"), os("0:a?"),
-        os("-map_metadata"), os("0"), os("-threads"), os("2"),
+        os("-i"), os(input),
+        os("-vf"), os(video_filter),
+        os("-map"), os("0:v:0"), os("-map"), os("0:a?"),
+        // Conversion is privacy-first: do not carry source metadata (including GPS).
+        os("-map_metadata"), os("-1"),
+        os("-map_metadata:s:v"), os("-1"),
+        os("-map_metadata:s:a"), os("-1"),
+        os("-map_chapters"), os("-1"),
+        os("-threads"), os("2"),
     ];
+    if source_is_hdr {
+        args.extend([
+            os("-color_primaries"), os("bt709"),
+            os("-color_trc"), os("bt709"),
+            os("-colorspace"), os("bt709"),
+        ]);
+    }
     match format.as_str() {
         "mp4" | "mov" | "mkv" => {
             args.extend([
@@ -30,9 +276,15 @@ pub(super) fn convert_video(input: &Path, output: &Path, target_format: &str, pr
         }
         "webm" => {
             let vp9_crf = (positive(quality, 23) + 9).clamp(24, 39).to_string();
+            let pixel_format = if source_bit_depth > 8 && !source_is_hdr {
+                "yuv420p10le"
+            } else {
+                "yuv420p"
+            };
             args.extend([
                 os("-c:v"), os("libvpx-vp9"), os("-deadline"), os("good"),
                 os("-cpu-used"), os(vp9_cpu_used), os("-crf"), os(&vp9_crf), os("-b:v"), os("0"),
+                os("-pix_fmt"), os(pixel_format),
                 os("-c:a"), os("libopus"), os("-b:a"), os("128k"),
             ]);
         }
@@ -62,7 +314,10 @@ pub(super) fn convert_audio(
         os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"),
         os("-i"), os(input),
         os("-map"), os("0:a:0"),
-        os("-map_metadata"), os("0"),
+        // Clear both file-level and audio-stream tags, including location metadata.
+        os("-map_metadata"), os("-1"),
+        os("-map_metadata:s:a"), os("-1"),
+        os("-map_chapters"), os("-1"),
         os("-vn"), os("-sn"), os("-dn"),
         os("-threads"), os("2"),
     ];
@@ -131,10 +386,13 @@ struct StickerVideoInfo {
 }
 
 fn sticker_video_info(input: &Path) -> Result<StickerVideoInfo, String> {
-    let output = run_ok("ffprobe", vec![
+    let output = run_ffprobe(vec![
         os("-v"), os("error"),
         os("-select_streams"), os("v:0"),
-        os("-show_entries"), os("stream=width,height"),
+        // Older FFprobe releases reject stream_side_data in -show_entries.
+        // show_streams includes side_data_list in the stream JSON on versions
+        // that expose display-matrix rotation metadata.
+        os("-show_streams"),
         os("-of"), os("json"),
         os(input),
     ]).map_err(|error| format!("Could not inspect the source video: {error}"))?;
@@ -146,10 +404,21 @@ fn sticker_video_info(input: &Path) -> Result<StickerVideoInfo, String> {
         .ok_or_else(|| "No video stream was found in the selected file.".to_string())?;
     let width = stream.get("width").and_then(Value::as_u64).unwrap_or(0) as u32;
     let height = stream.get("height").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let rotation = stream.get("side_data_list")
+        .and_then(Value::as_array)
+        .and_then(|items| items.iter().find_map(|item| item.get("rotation").and_then(Value::as_f64)))
+        .or_else(|| stream.get("tags").and_then(|tags| tags.get("rotate"))
+            .and_then(Value::as_str).and_then(|value| value.parse::<f64>().ok()));
+    let (width, height) = display_oriented_dimensions(width, height, rotation);
     if width < 2 || height < 2 {
         return Err("The selected video has invalid dimensions.".into());
     }
     Ok(StickerVideoInfo { width, height })
+}
+
+fn display_oriented_dimensions(width: u32, height: u32, rotation: Option<f64>) -> (u32, u32) {
+    let rotation = rotation.unwrap_or(0.0).round() as i32;
+    if rotation.rem_euclid(180) == 90 { (height, width) } else { (width, height) }
 }
 
 fn sticker_video_filter(
@@ -198,15 +467,14 @@ fn encode_sticker_pass(
     let duration = format!("{:.3}", duration_ms as f64 / 1_000.0);
     let mut args = vec![
         os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"),
-        os("-i"), os(input),
         os("-ss"), os(&seek),
+        os("-i"), os(input),
         os("-t"), os(&duration),
         os("-map"), os("0:v:0"),
         os("-vf"), os(filter),
         os("-an"), os("-sn"), os("-dn"),
         os("-c:v"), os("libvpx-vp9"),
         os("-pix_fmt"), os("yuva420p"),
-        os("-metadata:s:v:0"), os("alpha_mode=1"),
         os("-auto-alt-ref"), os("0"),
         os("-deadline"), os("good"),
         os("-cpu-used"), os("4"),
@@ -214,6 +482,11 @@ fn encode_sticker_pass(
         os("-b:v"), os(&format!("{bitrate_kbps}k")),
         os("-pass"), os(pass.to_string()),
         os("-passlogfile"), os(passlog),
+        // Clear source tags first, then set the required alpha-mode tag explicitly.
+        os("-map_metadata"), os("-1"),
+        os("-map_metadata:s:v"), os("-1"),
+        os("-map_chapters"), os("-1"),
+        os("-metadata:s:v:0"), os("alpha_mode=1"),
     ];
 
     if pass == 1 {
@@ -241,7 +514,7 @@ fn validate_sticker_output(path: &Path) -> Result<(), String> {
         ));
     }
 
-    let output = run_ok("ffprobe", vec![
+    let output = run_ffprobe(vec![
         os("-v"), os("error"),
         os("-show_entries"), os("stream=codec_type,codec_name,width,height:format=duration"),
         os("-of"), os("json"),
@@ -291,7 +564,7 @@ pub(super) fn convert_video_sticker(
     let info = sticker_video_info(input)?;
     let filter = sticker_video_filter(info, fit, crop_left, crop_top, zoom_milli)?;
 
-    let work_dir = super::temp_dir("sticker")
+    let work_dir = super::temp_dir_for_output(output, "sticker")
         .map_err(|error| format!("Could not prepare temporary sticker-encoding files: {error}"))?;
     let passlog = work_dir.join("vp9-pass");
 
@@ -330,7 +603,13 @@ pub(super) fn convert_video_sticker(
 
 pub(super) fn extract_audio(input: &Path, output: &Path, target_format: &str) -> Result<(), String> {
     let format = normalized_ext(target_format);
-    let mut args = vec![os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"), os("-i"), os(input), os("-map"), os("0:a:0"), os("-vn")];
+    let mut args = vec![
+        os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"),
+        os("-i"), os(input), os("-map"), os("0:a:0"),
+        os("-map_metadata"), os("-1"), os("-map_metadata:s:a"), os("-1"),
+        os("-map_chapters"), os("-1"),
+        os("-vn"),
+    ];
     match format.as_str() {
         "mp3" => args.extend([os("-c:a"), os("libmp3lame"), os("-b:a"), os("192k")]),
         "wav" => args.extend([os("-c:a"), os("pcm_s16le")]),
@@ -390,17 +669,35 @@ fn pixel_format_has_alpha(pixel_format: &str) -> bool {
 }
 
 fn inferred_pixel_depth(pixel_format: &str) -> u8 {
+    let format = pixel_format.to_ascii_lowercase();
+
+    // Packed RGB formats encode total bits per pixel in the suffix.
+    if ["rgb48", "bgr48", "rgba64", "bgra64", "argb64", "abgr64"]
+        .iter()
+        .any(|prefix| format.starts_with(prefix))
+    {
+        return 16;
+    }
+
+    // Planar high-bit-depth formats carry component depth after p,
+    // e.g. yuv420p10le, yuva444p12be, gbrp16le.
+    if format.contains("p010") {
+        return 10;
+    }
     for depth in [16_u8, 14, 12, 10, 9] {
-        if pixel_format.contains(&depth.to_string()) {
+        if format.contains(&format!("p{depth}")) {
             return depth;
         }
     }
-    if pixel_format.contains("p010") { 10 } else { 8 }
+    if format.starts_with("gray16") || format.starts_with("ya16") {
+        return 16;
+    }
+    8
 }
 
 fn probe_video(input: &Path) -> Result<VideoProbe, String> {
     report_status(format!("Analyzing {} with FFprobe…", input.file_name().and_then(|name| name.to_str()).unwrap_or("video")));
-    let output = run_ok("ffprobe", vec![
+    let output = run_ffprobe(vec![
         os("-v"), os("error"),
         os("-show_entries"),
         os("stream=codec_type,codec_name,width,height,pix_fmt,bits_per_raw_sample,field_order,color_range,color_space,color_transfer,color_primaries,sample_rate,channels,channel_layout:format=duration"),
@@ -499,27 +796,28 @@ fn video_sync_args_from_help(help: &str) -> Result<Vec<&'static str>, String> {
 }
 
 fn ffmpeg_video_sync_args() -> Result<Vec<std::ffi::OsString>, String> {
-    static CACHED_ARGS: OnceLock<Result<Vec<std::ffi::OsString>, String>> = OnceLock::new();
+    static CACHED_ARGS: OnceLock<Vec<std::ffi::OsString>> = OnceLock::new();
+    if let Some(args) = CACHED_ARGS.get() {
+        return Ok(args.clone());
+    }
 
-    CACHED_ARGS.get_or_init(|| {
-        let output = Command::new("ffmpeg")
-            .args(["-hide_banner", "-h", "full"])
-            .output()
-            .map_err(|error| format!("Could not inspect FFmpeg options: {error}"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "FFmpeg could not report its supported options: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
-        let help = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let options = video_sync_args_from_help(&help)?;
-        Ok(options.into_iter().map(os).collect())
-    }).clone()
+    // Cache only success: FFmpeg may be installed or repaired while ForgeBox is open.
+    let output = run_ok_with_timeout(
+        "ffmpeg",
+        vec![os("-hide_banner"), os("-h"), os("full")],
+        MEDIA_PROBE_TIMEOUT,
+    ).map_err(|error| format!("Could not inspect FFmpeg options: {error}"))?;
+    let help = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let options = video_sync_args_from_help(&help)?
+        .into_iter()
+        .map(os)
+        .collect::<Vec<_>>();
+    let _ = CACHED_ARGS.set(options.clone());
+    Ok(CACHED_ARGS.get().cloned().unwrap_or(options))
 }
 
 fn ffmpeg_color_space_tag(source: &VideoProbe) -> Option<&str> {
@@ -543,7 +841,7 @@ fn copy_color_metadata(args: &mut Vec<std::ffi::OsString>, source: &VideoProbe) 
 }
 
 fn verify_resolve_output(output: &Path, source_had_audio: bool, expected_profile: &str, expected_pixel_format: &str) -> Result<(), String> {
-    let result = run_ok("ffprobe", vec![
+    let result = run_ffprobe(vec![
         os("-v"), os("error"),
         os("-show_entries"), os("stream=codec_type,codec_name,profile,pix_fmt,sample_rate,channels"),
         os("-of"), os("json"),
@@ -619,8 +917,11 @@ pub(super) fn convert_davinci_resolve(input: &Path, output: &Path, requested_pro
         os("-i"), os(input),
         os("-map"), os("0:v:0"),
         os("-map"), os("0:a?"),
-        os("-map_metadata"), os("0"),
-        os("-map_chapters"), os("0"),
+        // Copy only the explicit color tags below, not arbitrary source metadata.
+        os("-map_metadata"), os("-1"),
+        os("-map_metadata:s:v"), os("-1"),
+        os("-map_metadata:s:a"), os("-1"),
+        os("-map_chapters"), os("-1"),
         os("-c:v"), os("dnxhd"),
         os("-profile:v"), os(encoding.profile),
         os("-pix_fmt"), os(encoding.pixel_format),
@@ -648,13 +949,30 @@ pub(super) fn convert_davinci_resolve(input: &Path, output: &Path, requested_pro
         }
     })?;
 
-    verify_resolve_output(output, source.has_audio, encoding.label, encoding.pixel_format)?;
+    if let Err(error) = verify_resolve_output(output, source.has_audio, encoding.label, encoding.pixel_format) {
+        record_execution_warning(format!(
+            "The DNxHR MOV was encoded but could not be fully verified: {error}. The output was retained for inspection."
+        ));
+    }
     Ok(())
 }
 
 #[cfg(test)]
+mod sticker_orientation_tests {
+    use super::display_oriented_dimensions;
+
+    #[test]
+    fn portrait_display_matrix_swaps_encoded_dimensions() {
+        assert_eq!(display_oriented_dimensions(1920, 1080, Some(90.0)), (1080, 1920));
+        assert_eq!(display_oriented_dimensions(1920, 1080, Some(-90.0)), (1080, 1920));
+        assert_eq!(display_oriented_dimensions(1920, 1080, Some(180.0)), (1920, 1080));
+        assert_eq!(display_oriented_dimensions(1920, 1080, None), (1920, 1080));
+    }
+}
+
+#[cfg(test)]
 mod davinci_tests {
-    use super::{ffmpeg_color_space_tag, is_rgb_pixel_format, pixel_format_has_alpha, select_resolve_encoding, video_sync_args_from_help, ResolveProfile, VideoProbe};
+    use super::{ffmpeg_color_space_tag, inferred_pixel_depth, is_rgb_pixel_format, pixel_format_has_alpha, select_resolve_encoding, video_sync_args_from_help, ResolveProfile, VideoProbe};
 
     fn source(pixel_format: &str, bit_depth: u8) -> VideoProbe {
         VideoProbe {
@@ -675,6 +993,21 @@ mod davinci_tests {
         }
     }
 
+    #[test]
+    fn pixel_depth_ignores_chroma_subsampling_digits() {
+        assert_eq!(inferred_pixel_depth("nv12"), 8);
+        assert_eq!(inferred_pixel_depth("yuv410p"), 8);
+        assert_eq!(inferred_pixel_depth("yuv420p"), 8);
+    }
+
+    #[test]
+    fn pixel_depth_detects_component_depth_and_packed_rgb() {
+        assert_eq!(inferred_pixel_depth("yuv420p10le"), 10);
+        assert_eq!(inferred_pixel_depth("yuva444p12be"), 12);
+        assert_eq!(inferred_pixel_depth("gbrp16le"), 16);
+        assert_eq!(inferred_pixel_depth("rgb48le"), 16);
+        assert_eq!(inferred_pixel_depth("rgba64le"), 16);
+    }
     #[test]
     fn modern_ffmpeg_uses_fps_mode_passthrough() {
         let help = "  -fps_mode[:stream_specifier]  set framerate mode\n  -vsync parameter  legacy sync mode";
@@ -730,5 +1063,73 @@ mod davinci_tests {
         assert_eq!(bgr.pixel_format, "gbrp10le");
         assert!(source("bgra", 8).has_alpha);
         assert!(source("yuva420p", 8).has_alpha);
+    }
+}
+
+
+#[cfg(test)]
+mod hdr_transfer_tests {
+    use super::is_hdr_transfer;
+
+    #[test]
+    fn recognizes_hdr_transfer_functions_only() {
+        assert!(is_hdr_transfer(Some("smpte2084")));
+        assert!(is_hdr_transfer(Some("arib-std-b67")));
+        assert!(!is_hdr_transfer(Some("bt709")));
+        assert!(!is_hdr_transfer(Some("unknown")));
+        assert!(!is_hdr_transfer(None));
+    }
+}
+
+
+#[cfg(test)]
+mod gif_preflight_tests {
+    use super::{
+        ensure_gif_disk_space, estimate_gif_output_bytes, gif_frame_count,
+        parse_positive_duration, GifSourceInfo, GIF_DISK_SPACE_RESERVE_BYTES,
+        MAX_VIDEO_GIF_DURATION_SECONDS,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn gif_duration_requires_a_known_positive_value_and_has_a_hard_limit() {
+        assert_eq!(gif_frame_count(1.0, 12).unwrap(), 12);
+        assert_eq!(gif_frame_count(1.01, 12).unwrap(), 13);
+        assert_eq!(gif_frame_count(MAX_VIDEO_GIF_DURATION_SECONDS, 12).unwrap(), 720);
+        assert!(gif_frame_count(0.0, 12).is_err());
+        assert!(gif_frame_count(f64::NAN, 12).is_err());
+        assert!(gif_frame_count(61.0, 12).unwrap_err().contains("limited to 60 seconds"));
+        assert!(gif_frame_count(1.0, 0).is_err());
+    }
+
+    #[test]
+    fn ffprobe_duration_parser_rejects_unknown_or_non_finite_values() {
+        assert_eq!(parse_positive_duration(Some(&json!("12.5"))), Some(12.5));
+        assert_eq!(parse_positive_duration(Some(&json!(3))), Some(3.0));
+        assert_eq!(parse_positive_duration(Some(&json!("N/A"))), None);
+        assert_eq!(parse_positive_duration(Some(&json!("NaN"))), None);
+        assert_eq!(parse_positive_duration(Some(&json!(-1))), None);
+        assert_eq!(parse_positive_duration(None), None);
+    }
+
+    #[test]
+    fn gif_size_estimate_scales_with_target_dimensions_and_frame_rate() {
+        let source = GifSourceInfo { width: 1920, height: 1080, duration_seconds: 10.0 };
+        let small = estimate_gif_output_bytes(source, 320, 6).unwrap();
+        let large = estimate_gif_output_bytes(source, 640, 12).unwrap();
+        assert!(large > small * 7);
+    }
+
+    #[test]
+    fn gif_preflight_requires_the_estimate_plus_a_free_space_reserve() {
+        let estimate = 100 * 1_048_576_u64;
+        assert!(ensure_gif_disk_space(
+            estimate,
+            estimate + GIF_DISK_SPACE_RESERVE_BYTES
+        ).is_ok());
+        assert!(ensure_gif_disk_space(
+            estimate,
+            estimate + GIF_DISK_SPACE_RESERVE_BYTES - 1
+        ).unwrap_err().contains("not be enough free disk space"));
     }
 }

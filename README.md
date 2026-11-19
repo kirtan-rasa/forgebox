@@ -54,7 +54,7 @@ On supported x86_64 Linux systems, run:
 curl -f https://kirtan-rasa.github.io/forgebox/install.sh | sh
 ```
 
-The installer selects the newest published release with a package matching your distribution, verifies the package's SHA-256 digest, and installs it through the native package manager. It supports Fedora versions with a matching RPM build, Debian/Ubuntu-based systems, and Arch-based systems. A POSIX-compatible sh, curl, and sha256sum are required; Python 3 is installed automatically if it is missing. The package manager runs in automatic-confirmation mode, while sudo may still ask for your password. On Fedora, the installer enables RPM Fusion Free and installs the full FFmpeg build required by ForgeBox's video converter.
+The installer selects the newest published release with a package matching your distribution, verifies the package's SHA-256 digest, and installs it through the native package manager. It supports Fedora versions with a matching RPM build, Debian/Ubuntu-based systems, and Arch-based systems. A POSIX-compatible sh, curl, and sha256sum are required; Python 3 is installed automatically if it is missing. The installer asks for confirmation before making system package changes and requires an interactive terminal; declining makes no package changes. The package manager then runs in automatic-confirmation mode for the transaction you approved, while sudo may still ask for your password. On Fedora, the installer enables RPM Fusion Free and installs the full FFmpeg build required by ForgeBox's video converter.
 
 On Arch Linux, keep the system fully updated before installing. The installer does not trigger a system-wide upgrade.
 
