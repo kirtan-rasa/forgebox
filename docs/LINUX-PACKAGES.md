@@ -65,7 +65,7 @@ chmod 600 forgebox-rpm-signing-private.asc
 
 Open GitHub → **Settings → Secrets and variables → Actions → New repository secret**. Use the name `RPM_SIGNING_PRIVATE_KEY` and paste the complete contents of that file as its value. Keep a secure offline backup of the private key. Do not commit the exported file.
 
-The release workflow exports the corresponding public key as `forgebox-rpm-signing-key.asc` and verifies the RPM signature before publishing. The public key is included in each tagged release. Users can inspect its fingerprint, import the key, and then verify/install the package:
+The release workflow exports the corresponding public key as `forgebox-rpm-signing-key.asc` and verifies the RPM signature before publishing. The current release signing-key fingerprint is pinned in the one-command installer. Fedora installs verify the key asset digest, verify its fingerprint, and check the RPM signature in a temporary RPM database before trusting the key in the system RPM database and installing the package. Manual RPM installations should follow the steps below:
 
 ```bash
 gpg --show-keys --with-fingerprint forgebox-rpm-signing-key.asc
@@ -80,6 +80,6 @@ The private key is never published. The small text file containing only the key 
 
 The Linux workflow runs tests, builds RPM, DEB, AppImage, and a native Arch package, then publishes only the four installable packages and the public RPM signing key. Intermediate outputs such as the debug Arch package, `PKGBUILD`, `.SRCINFO`, and temporary source archives remain in the CI artifacts rather than the public release.
 
-GitHub exposes a SHA-256 digest for each release asset. The one-command installer reads that digest from the release API and verifies the downloaded package before installation.
+GitHub exposes a SHA-256 digest for each release asset. The one-command installer checks the package digest for every format; Fedora additionally verifies the RPM against the pinned ForgeBox signing-key fingerprint before adding that key to the system RPM trust store.
 
 The current workflow does not publish to a signed APT or Pacman repository. DEB and Arch users install the downloaded release artifacts directly. AUR/Flathub-style repository publication can be added separately after the first package builds are verified.
