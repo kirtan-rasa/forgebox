@@ -13,6 +13,161 @@ fn run_ffprobe(args: Vec<std::ffi::OsString>) -> Result<std::process::Output, St
     run_ok_with_timeout("ffprobe", args, MEDIA_PROBE_TIMEOUT)
 }
 
+const MAX_VIDEO_GIF_DURATION_SECONDS: f64 = 60.0;
+const GIF_DISK_SPACE_RESERVE_BYTES: u64 = 64 * 1024 * 1024;
+const GIF_ESTIMATED_BYTES_PER_PIXEL: u128 = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct GifSourceInfo {
+    width: u32,
+    height: u32,
+    duration_seconds: f64,
+}
+
+fn parse_positive_duration(value: Option<&Value>) -> Option<f64> {
+    let value = match value? {
+        Value::String(text) => text.parse::<f64>().ok()?,
+        Value::Number(number) => number.as_f64()?,
+        _ => return None,
+    };
+    (value.is_finite() && value > 0.0).then_some(value)
+}
+
+fn probe_gif_source(input: &Path) -> Result<GifSourceInfo, String> {
+    let output = run_ffprobe(vec![
+        os("-v"), os("error"),
+        os("-select_streams"), os("v:0"),
+        os("-show_entries"), os("stream=width,height,duration:format=duration"),
+        os("-of"), os("json"),
+        os(input),
+    ]).map_err(|error| format!("Could not inspect the video before GIF conversion: {error}"))?;
+    let json: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("FFprobe returned invalid video metadata: {error}"))?;
+    let stream = json.get("streams")
+        .and_then(Value::as_array)
+        .and_then(|streams| streams.first())
+        .ok_or_else(|| "No video stream was found in the selected file.".to_string())?;
+    let width = stream.get("width").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let height = stream.get("height").and_then(Value::as_u64).unwrap_or(0) as u32;
+    if width == 0 || height == 0 {
+        return Err("FFprobe returned invalid video dimensions; GIF conversion was stopped.".into());
+    }
+
+    // Prefer the video-stream duration so a longer audio track does not inflate
+    // the estimate. Some containers expose duration only at format level.
+    let duration_seconds = parse_positive_duration(stream.get("duration"))
+        .or_else(|| json.get("format").and_then(|format| parse_positive_duration(format.get("duration"))))
+        .ok_or_else(|| "Could not determine the source video duration. GIF conversion was stopped to avoid an unbounded export.".to_string())?;
+
+    Ok(GifSourceInfo { width, height, duration_seconds })
+}
+
+fn gif_frame_count(duration_seconds: f64, fps: u8) -> Result<u128, String> {
+    if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
+        return Err("The source video has an invalid duration.".into());
+    }
+    if fps == 0 {
+        return Err("GIF frame rate must be greater than zero.".into());
+    }
+    if duration_seconds > MAX_VIDEO_GIF_DURATION_SECONDS {
+        return Err(format!(
+            "Video-to-GIF is limited to {:.0} seconds per file. This video is {:.1} seconds long. Trim it before converting.",
+            MAX_VIDEO_GIF_DURATION_SECONDS,
+            duration_seconds
+        ));
+    }
+    Ok((duration_seconds * f64::from(fps)).ceil().max(1.0) as u128)
+}
+
+fn estimate_gif_output_bytes(
+    source: GifSourceInfo,
+    target_width: u16,
+    fps: u8,
+) -> Result<u64, String> {
+    if target_width == 0 || fps == 0 || source.width == 0 || source.height == 0 {
+        return Err("GIF output dimensions and frame rate must be greater than zero.".into());
+    }
+    let frames = gif_frame_count(source.duration_seconds, fps)?;
+    let target_height = (
+        u128::from(source.height) * u128::from(target_width)
+            + u128::from(source.width) / 2
+    ) / u128::from(source.width);
+    let pixels_per_frame = u128::from(target_width) * target_height.max(1);
+    let estimate = pixels_per_frame
+        .saturating_mul(frames)
+        .saturating_mul(GIF_ESTIMATED_BYTES_PER_PIXEL)
+        .saturating_add(64 * 1024);
+    u64::try_from(estimate)
+        .map_err(|_| "The estimated GIF size exceeds the supported file-size range.".to_string())
+}
+
+fn ensure_gif_disk_space(estimated_bytes: u64, available_bytes: u64) -> Result<(), String> {
+    let required_bytes = estimated_bytes.saturating_add(GIF_DISK_SPACE_RESERVE_BYTES);
+    if available_bytes < required_bytes {
+        return Err(format!(
+            "There may not be enough free disk space for this GIF. Estimated output: about {} MiB; available: {} MiB. Reduce the width or frame rate, choose a shorter video, or free disk space.",
+            estimated_bytes.div_ceil(1_048_576),
+            available_bytes / 1_048_576
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn available_disk_space_bytes(path: &Path) -> Result<u64, String> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| "The output folder path contains an unsupported NUL byte.".to_string())?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: statvfs writes the output structure when it returns success.
+    let result = unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) };
+    if result != 0 {
+        return Err(format!(
+            "Could not check free disk space for GIF output: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: statvfs succeeded and initialized the structure.
+    let stats = unsafe { stats.assume_init() };
+    let block_size = if stats.f_frsize > 0 { stats.f_frsize } else { stats.f_bsize } as u128;
+    let available = (stats.f_bavail as u128).saturating_mul(block_size);
+    Ok(available.min(u128::from(u64::MAX)) as u64)
+}
+
+#[cfg(not(unix))]
+fn available_disk_space_bytes(_path: &Path) -> Result<u64, String> {
+    // The current desktop builds are Linux/Unix-first. Keep non-Unix builds
+    // functional, while still enforcing the duration and size estimate limits.
+    Ok(u64::MAX)
+}
+
+pub(super) fn convert_video_to_gif(
+    input: &Path,
+    output: &Path,
+    target_width: u16,
+    fps: u8,
+) -> Result<(), String> {
+    let source = probe_gif_source(input)?;
+    let estimated_bytes = estimate_gif_output_bytes(source, target_width, fps)?;
+    let output_dir = output.parent().unwrap_or_else(|| Path::new("."));
+    let available_bytes = available_disk_space_bytes(output_dir)?;
+    ensure_gif_disk_space(estimated_bytes, available_bytes)?;
+
+    let filter = format!(
+        "fps={fps},scale={target_width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer"
+    );
+    run_ok("ffmpeg", vec![
+        os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"),
+        os("-i"), os(input),
+        os("-filter_complex"), os(&filter),
+        os("-threads"), os("2"),
+        os("-loop"), os("0"),
+        os(output),
+    ]).map(|_| ())
+}
+
 fn is_hdr_transfer(transfer: Option<&str>) -> bool {
     matches!(transfer, Some("smpte2084" | "arib-std-b67"))
 }
@@ -913,5 +1068,58 @@ mod hdr_transfer_tests {
         assert!(!is_hdr_transfer(Some("bt709")));
         assert!(!is_hdr_transfer(Some("unknown")));
         assert!(!is_hdr_transfer(None));
+    }
+}
+
+
+#[cfg(test)]
+mod gif_preflight_tests {
+    use super::{
+        ensure_gif_disk_space, estimate_gif_output_bytes, gif_frame_count,
+        parse_positive_duration, GifSourceInfo, GIF_DISK_SPACE_RESERVE_BYTES,
+        MAX_VIDEO_GIF_DURATION_SECONDS,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn gif_duration_requires_a_known_positive_value_and_has_a_hard_limit() {
+        assert_eq!(gif_frame_count(1.0, 12).unwrap(), 12);
+        assert_eq!(gif_frame_count(1.01, 12).unwrap(), 13);
+        assert_eq!(gif_frame_count(MAX_VIDEO_GIF_DURATION_SECONDS, 12).unwrap(), 720);
+        assert!(gif_frame_count(0.0, 12).is_err());
+        assert!(gif_frame_count(f64::NAN, 12).is_err());
+        assert!(gif_frame_count(61.0, 12).unwrap_err().contains("limited to 60 seconds"));
+        assert!(gif_frame_count(1.0, 0).is_err());
+    }
+
+    #[test]
+    fn ffprobe_duration_parser_rejects_unknown_or_non_finite_values() {
+        assert_eq!(parse_positive_duration(Some(&json!("12.5"))), Some(12.5));
+        assert_eq!(parse_positive_duration(Some(&json!(3))), Some(3.0));
+        assert_eq!(parse_positive_duration(Some(&json!("N/A"))), None);
+        assert_eq!(parse_positive_duration(Some(&json!("NaN"))), None);
+        assert_eq!(parse_positive_duration(Some(&json!(-1))), None);
+        assert_eq!(parse_positive_duration(None), None);
+    }
+
+    #[test]
+    fn gif_size_estimate_scales_with_target_dimensions_and_frame_rate() {
+        let source = GifSourceInfo { width: 1920, height: 1080, duration_seconds: 10.0 };
+        let small = estimate_gif_output_bytes(source, 320, 6).unwrap();
+        let large = estimate_gif_output_bytes(source, 640, 12).unwrap();
+        assert!(large > small * 7);
+    }
+
+    #[test]
+    fn gif_preflight_requires_the_estimate_plus_a_free_space_reserve() {
+        let estimate = 100 * 1_048_576_u64;
+        assert!(ensure_gif_disk_space(
+            estimate,
+            estimate + GIF_DISK_SPACE_RESERVE_BYTES
+        ).is_ok());
+        assert!(ensure_gif_disk_space(
+            estimate,
+            estimate + GIF_DISK_SPACE_RESERVE_BYTES - 1
+        ).unwrap_err().contains("not be enough free disk space"));
     }
 }
