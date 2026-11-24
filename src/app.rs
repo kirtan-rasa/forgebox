@@ -27,7 +27,7 @@ extern "C" fn request_graceful_shutdown(_signal: libc::c_int) {
 fn install_graceful_shutdown_handlers() {
     unsafe {
         for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
-            let _ = libc::signal(signal, request_graceful_shutdown as libc::sighandler_t);
+            let _ = libc::signal(signal, request_graceful_shutdown as *const () as libc::sighandler_t);
         }
     }
 }
