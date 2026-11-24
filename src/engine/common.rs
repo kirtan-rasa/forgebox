@@ -781,6 +781,12 @@ mod output_reservation_tests {
     use std::sync::{Arc, Barrier};
     use std::thread;
 
+    fn reservation_entry_count(directory: &std::path::Path) -> usize {
+        fs::read_dir(directory).unwrap().filter_map(Result::ok)
+            .filter(|entry| entry.file_name() != ".forgebox-reservations.lock")
+            .count()
+    }
+
     #[test]
     fn concurrent_reservations_never_return_the_same_path() {
         let directory = temp_dir("output-reservation-test").unwrap();
@@ -809,10 +815,36 @@ mod output_reservation_tests {
         paths.sort();
         paths.dedup();
         assert_eq!(paths.len(), 8);
-        assert_eq!(fs::read_dir(&directory).unwrap().count(), 8);
+        assert_eq!(reservation_entry_count(&directory), 8);
 
         drop(reservations);
-        assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+        assert_eq!(reservation_entry_count(&directory), 0);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn abandoned_reservation_lock_is_reclaimed_after_owner_exits() {
+        use std::hash::{Hash, Hasher};
+
+        let directory = temp_dir("stale-output-reservation-test").unwrap();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        "result.pdf".hash(&mut hasher);
+        let hash = hasher.finish();
+        let old = super::super::timestamp().saturating_sub(
+            super::super::STALE_ARTIFACT_GRACE_MS + 1,
+        );
+        let stale = directory.join(format!(
+            ".forgebox-output-{hash:016x}-{}-1-{old}.lock",
+            u32::MAX,
+        ));
+        fs::write(&stale, b"").unwrap();
+
+        let reservation = reserve_unique_path(&directory, "result", "pdf").unwrap();
+        assert!(!stale.exists(), "a dead owner's aged reservation should be removed");
+        assert_eq!(reservation.path().file_name().unwrap(), "result.pdf");
+        drop(reservation);
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -844,6 +876,12 @@ mod prefix_reservation_tests {
     use std::sync::{Arc, Barrier};
     use std::thread;
 
+    fn reservation_entry_count(directory: &std::path::Path) -> usize {
+        fs::read_dir(directory).unwrap().filter_map(Result::ok)
+            .filter(|entry| entry.file_name() != ".forgebox-reservations.lock")
+            .count()
+    }
+
     #[test]
     fn concurrent_multi_output_prefixes_are_reserved_independently() {
         let directory = temp_dir("prefix-reservation-test").unwrap();
@@ -872,7 +910,7 @@ mod prefix_reservation_tests {
         prefixes.sort();
         prefixes.dedup();
         assert_eq!(prefixes.len(), 6);
-        assert_eq!(fs::read_dir(&directory).unwrap().count(), 6);
+        assert_eq!(reservation_entry_count(&directory), 6);
 
         drop(reservations);
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
@@ -888,6 +926,30 @@ mod prefix_reservation_tests {
 mod temp_dir_in_tests {
     use super::{temp_dir_for_output, temp_dir_in};
     use std::fs;
+
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn abandoned_temporary_workspace_is_reclaimed_after_owner_exits() {
+        use super::super::{temp_dir_in, timestamp, STALE_ARTIFACT_GRACE_MS};
+        use std::fs;
+
+        let base = std::env::temp_dir().join(format!(
+            "forgebox-stale-workspace-test-{}",
+            std::process::id(),
+        ));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let old = timestamp().saturating_sub(STALE_ARTIFACT_GRACE_MS + 1);
+        let stale = base.join(format!(".forgebox-abandoned-{}-1-{old}-0", u32::MAX));
+        fs::create_dir(&stale).unwrap();
+        fs::write(stale.join("partial.dat"), b"orphaned").unwrap();
+
+        let current = temp_dir_in(&base, "cleanup-trigger").unwrap();
+        assert!(!stale.exists(), "a dead owner's aged workspace should be removed");
+        assert!(current.is_dir());
+        fs::remove_dir_all(&base).unwrap();
+    }
 
     #[test]
     fn private_workspace_can_be_created_under_destination_directory() {
