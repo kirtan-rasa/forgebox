@@ -11,6 +11,12 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(target_os = "linux")]
+use std::collections::HashMap;
+#[cfg(target_os = "linux")]
+use std::sync::{Mutex, OnceLock};
+#[cfg(target_os = "linux")]
+use std::time::{Duration, Instant};
 
 static TEMP_DIR_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -411,7 +417,10 @@ pub(super) fn temp_dir_for_output(output: &Path, prefix: &str) -> Result<PathBuf
 pub(super) fn temp_dir_in(base: &Path, prefix: &str) -> Result<PathBuf, String> {
     fs::create_dir_all(base).map_err(display_io)?;
     #[cfg(target_os = "linux")]
-    remove_stale_temp_dirs(base);
+    maybe_run_artifact_sweep(&LAST_TEMP_SWEEP, base, || {
+        remove_stale_temp_dirs(base);
+        Ok(())
+    })?;
 
     // Include the process start time as well as its PID. A reused PID must not
     // make an abandoned workspace look active after an application crash.
@@ -463,6 +472,36 @@ fn timestamp() -> u128 {
 }
 
 const STALE_ARTIFACT_GRACE_MS: u128 = 24 * 60 * 60 * 1_000;
+
+#[cfg(target_os = "linux")]
+const ARTIFACT_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
+
+#[cfg(target_os = "linux")]
+static LAST_RESERVATION_SWEEP: OnceLock<Mutex<HashMap<PathBuf, Instant>>> = OnceLock::new();
+#[cfg(target_os = "linux")]
+static LAST_TEMP_SWEEP: OnceLock<Mutex<HashMap<PathBuf, Instant>>> = OnceLock::new();
+
+#[cfg(target_os = "linux")]
+fn maybe_run_artifact_sweep(
+    cache: &'static OnceLock<Mutex<HashMap<PathBuf, Instant>>>,
+    directory: &Path,
+    sweep: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    let mut last_sweeps = cache
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if last_sweeps
+        .get(directory)
+        .is_some_and(|last| last.elapsed() < ARTIFACT_SWEEP_INTERVAL)
+    {
+        return Ok(());
+    }
+
+    sweep()?;
+    last_sweeps.insert(directory.to_path_buf(), Instant::now());
+    Ok(())
+}
 
 #[cfg(target_os = "linux")]
 fn process_identity(pid: u32) -> io::Result<Option<(char, u64)>> {
@@ -564,7 +603,7 @@ fn reservation_gate(dir: &Path) -> Result<ReservationGate, String> {
 }
 
 #[cfg(target_os = "linux")]
-fn remove_stale_reservation_locks(dir: &Path) -> Result<(), String> {
+fn sweep_stale_reservation_locks(dir: &Path) -> Result<(), String> {
     let now = timestamp();
     let entries = fs::read_dir(dir)
         .map_err(|error| format!("Could not inspect output reservation folder {}: {error}", dir.display()))?;
@@ -641,7 +680,9 @@ fn reserve_lock_under_gate(
     lock_prefix: &str,
     legacy_lock_path: &Path,
 ) -> Result<Option<PathBuf>, String> {
-    remove_stale_reservation_locks(dir)?;
+    maybe_run_artifact_sweep(&LAST_RESERVATION_SWEEP, dir, || {
+        sweep_stale_reservation_locks(dir)
+    })?;
     if reservation_lock_is_busy(dir, lock_prefix, legacy_lock_path)? {
         // Legacy locks have no process identity. Preserve them rather than
         // risking deletion while an older ForgeBox process still owns one.
