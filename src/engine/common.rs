@@ -3,6 +3,10 @@ use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::fs::OpenOptions;
+#[cfg(target_os = "linux")]
+use std::fs::File;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -181,6 +185,11 @@ impl OutputReservation {
 
 impl Drop for OutputReservation {
     fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
+        if let Some(parent) = self.lock_path.parent() {
+            remove_reservation_lock(parent, &self.lock_path);
+        }
+        #[cfg(not(target_os = "linux"))]
         let _ = fs::remove_file(&self.lock_path);
     }
 }
@@ -204,42 +213,71 @@ pub(super) fn reserve_unique_path(
     for index in 1..=10_000 {
         let candidate_stem = if index == 1 { stem.to_owned() } else { format!("{stem}-{index}") };
         let path = dir.join(format!("{candidate_stem}.{ext}"));
-        match fs::symlink_metadata(&path) {
-            Ok(_) => continue,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("Could not inspect output path {}: {error}", path.display())),
-        }
-
         let file_name = path.file_name().ok_or_else(|| "Could not construct an output filename.".to_string())?;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         file_name.hash(&mut hasher);
-        let lock_path = dir.join(format!(".forgebox-output-{:016x}.lock", hasher.finish()));
+        let hash = hasher.finish();
 
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        match options.open(&lock_path) {
-            Ok(lock) => drop(lock),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(format!("Could not reserve output name {}: {error}", path.display())),
+            let _gate = reservation_gate(dir)?;
+            match fs::symlink_metadata(&path) {
+                Ok(_) => continue,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("Could not inspect output path {}: {error}", path.display())),
+            }
+            let lock_prefix = format!(".forgebox-output-{hash:016x}-");
+            let legacy_lock = dir.join(format!(".forgebox-output-{hash:016x}.lock"));
+            let Some(lock_path) = reserve_lock_under_gate(dir, &lock_prefix, &legacy_lock)? else {
+                continue;
+            };
+            match fs::symlink_metadata(&path) {
+                Ok(_) => {
+                    let _ = fs::remove_file(&lock_path);
+                    continue;
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    let _ = fs::remove_file(&lock_path);
+                    return Err(format!("Could not inspect output path {}: {error}", path.display()));
+                }
+            }
+            return Ok(OutputReservation { path, lock_path });
         }
 
-        match fs::symlink_metadata(&path) {
-            Ok(_) => {
-                let _ = fs::remove_file(&lock_path);
-                continue;
+        #[cfg(not(target_os = "linux"))]
+        {
+            match fs::symlink_metadata(&path) {
+                Ok(_) => continue,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("Could not inspect output path {}: {error}", path.display())),
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                let _ = fs::remove_file(&lock_path);
-                return Err(format!("Could not inspect output path {}: {error}", path.display()));
+            let lock_path = dir.join(format!(".forgebox-output-{hash:016x}.lock"));
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
             }
+            match options.open(&lock_path) {
+                Ok(lock) => drop(lock),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(format!("Could not reserve output name {}: {error}", path.display())),
+            }
+            match fs::symlink_metadata(&path) {
+                Ok(_) => {
+                    let _ = fs::remove_file(&lock_path);
+                    continue;
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    let _ = fs::remove_file(&lock_path);
+                    return Err(format!("Could not inspect output path {}: {error}", path.display()));
+                }
+            }
+            return Ok(OutputReservation { path, lock_path });
         }
-        return Ok(OutputReservation { path, lock_path });
     }
     Err(format!("Could not reserve a unique output filename for {stem}.{ext} after 10,000 attempts."))
 }
@@ -270,6 +308,11 @@ impl PrefixReservation {
 
 impl Drop for PrefixReservation {
     fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
+        if let Some(parent) = self.lock_path.parent() {
+            remove_reservation_lock(parent, &self.lock_path);
+        }
+        #[cfg(not(target_os = "linux"))]
         let _ = fs::remove_file(&self.lock_path);
     }
 }
@@ -281,32 +324,52 @@ pub(super) fn reserve_unique_prefix(
     for index in 1..=10_000 {
         let candidate = if index == 1 { stem.to_owned() } else { format!("{stem}-{index}") };
         let path = dir.join(&candidate);
-        if fs::symlink_metadata(&path).is_ok() || !files_with_prefix(dir, &candidate).is_empty() {
-            continue;
-        }
-
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         format!("prefix:{candidate}").hash(&mut hasher);
-        let lock_path = dir.join(format!(".forgebox-prefix-{:016x}.lock", hasher.finish()));
+        let hash = hasher.finish();
 
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        match options.open(&lock_path) {
-            Ok(lock) => drop(lock),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(format!("Could not reserve output prefix {candidate}: {error}")),
+            let _gate = reservation_gate(dir)?;
+            if fs::symlink_metadata(&path).is_ok() || !files_with_prefix(dir, &candidate).is_empty() {
+                continue;
+            }
+            let lock_prefix = format!(".forgebox-prefix-{hash:016x}-");
+            let legacy_lock = dir.join(format!(".forgebox-prefix-{hash:016x}.lock"));
+            let Some(lock_path) = reserve_lock_under_gate(dir, &lock_prefix, &legacy_lock)? else {
+                continue;
+            };
+            if fs::symlink_metadata(&path).is_ok() || !files_with_prefix(dir, &candidate).is_empty() {
+                let _ = fs::remove_file(&lock_path);
+                continue;
+            }
+            return Ok(PrefixReservation { path, lock_path });
         }
 
-        if fs::symlink_metadata(&path).is_ok() || !files_with_prefix(dir, &candidate).is_empty() {
-            let _ = fs::remove_file(&lock_path);
-            continue;
+        #[cfg(not(target_os = "linux"))]
+        {
+            if fs::symlink_metadata(&path).is_ok() || !files_with_prefix(dir, &candidate).is_empty() {
+                continue;
+            }
+            let lock_path = dir.join(format!(".forgebox-prefix-{hash:016x}.lock"));
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            match options.open(&lock_path) {
+                Ok(lock) => drop(lock),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(format!("Could not reserve output prefix {candidate}: {error}")),
+            }
+            if fs::symlink_metadata(&path).is_ok() || !files_with_prefix(dir, &candidate).is_empty() {
+                let _ = fs::remove_file(&lock_path);
+                continue;
+            }
+            return Ok(PrefixReservation { path, lock_path });
         }
-        return Ok(PrefixReservation { path, lock_path });
     }
     Err(format!("Could not reserve a unique output prefix for {stem} after 10,000 attempts."))
 }
@@ -347,15 +410,16 @@ pub(super) fn temp_dir_for_output(output: &Path, prefix: &str) -> Result<PathBuf
 
 pub(super) fn temp_dir_in(base: &Path, prefix: &str) -> Result<PathBuf, String> {
     fs::create_dir_all(base).map_err(display_io)?;
+    #[cfg(target_os = "linux")]
+    remove_stale_temp_dirs(base);
 
-    // A millisecond timestamp alone can collide when two conversions create
-    // temporary directories at nearly the same time. Use an in-process
-    // sequence and create the directory atomically rather than accepting an
-    // already-existing path.
+    // Include the process start time as well as its PID. A reused PID must not
+    // make an abandoned workspace look active after an application crash.
+    let process_start = current_process_start_time().map_err(display_io)?;
     for _ in 0..128 {
         let sequence = TEMP_DIR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path = base.join(format!(
-            ".forgebox-{prefix}-{}-{}-{sequence}",
+            ".forgebox-{prefix}-{}-{process_start}-{}-{sequence}",
             std::process::id(),
             timestamp()
         ));
@@ -396,6 +460,219 @@ mod temp_dir_tests {
 
 fn timestamp() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
+}
+
+const STALE_ARTIFACT_GRACE_MS: u128 = 24 * 60 * 60 * 1_000;
+
+#[cfg(target_os = "linux")]
+fn process_identity(pid: u32) -> io::Result<Option<(char, u64)>> {
+    let stat = match fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    // The command name inside /proc/<pid>/stat is parenthesized and may itself
+    // contain spaces or parentheses. Parse fields only after its final ')'.
+    let fields = stat
+        .rsplit_once(')')
+        .map(|(_, fields)| fields)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Malformed process stat record"))?;
+    let mut fields = fields.split_whitespace();
+    let state = fields
+        .next()
+        .and_then(|field| field.chars().next())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Missing process state"))?;
+    // After consuming field 3 (state), field 22 (starttime) is 18 positions on.
+    let start_time = fields
+        .nth(18)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Missing process start time"))?
+        .parse::<u64>()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    Ok(Some((state, start_time)))
+}
+
+#[cfg(target_os = "linux")]
+fn current_process_start_time() -> io::Result<u64> {
+    process_identity(std::process::id())?
+        .map(|(_, start_time)| start_time)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Current process is missing from /proc"))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn current_process_start_time() -> io::Result<u64> {
+    Ok(0)
+}
+
+#[cfg(target_os = "linux")]
+fn process_instance_is_alive(pid: u32, expected_start_time: u64) -> io::Result<bool> {
+    Ok(matches!(
+        process_identity(pid)?,
+        Some((state, start_time)) if start_time == expected_start_time && state != 'Z' && state != 'X'
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn parse_reservation_owner(name: &str) -> Option<(u32, u64, u128)> {
+    let stem = name.strip_suffix(".lock")?;
+    let mut parts = stem.rsplitn(4, '-');
+    let created_at = parts.next()?.parse::<u128>().ok()?;
+    let start_time = parts.next()?.parse::<u64>().ok()?;
+    let pid = parts.next()?.parse::<u32>().ok()?;
+    let prefix = parts.next()?;
+    (prefix.starts_with(".forgebox-output-") || prefix.starts_with(".forgebox-prefix-"))
+        .then_some((pid, start_time, created_at))
+}
+
+#[cfg(target_os = "linux")]
+struct ReservationGate {
+    file: File,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for ReservationGate {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn reservation_gate(dir: &Path) -> Result<ReservationGate, String> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let path = dir.join(".forgebox-reservations.lock");
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).mode(0o600)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    let file = options.open(&path)
+        .map_err(|error| format!("Could not open output reservation gate {}: {error}", path.display()))?;
+    if !file.metadata().map_err(|error| error.to_string())?.is_file() {
+        return Err(format!("Output reservation gate {} is not a regular file.", path.display()));
+    }
+
+    loop {
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if result == 0 {
+            return Ok(ReservationGate { file });
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(format!("Could not lock output reservation gate {}: {error}", path.display()));
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn remove_stale_reservation_locks(dir: &Path, lock_prefix: &str) -> Result<bool, String> {
+    let now = timestamp();
+    let entries = fs::read_dir(dir)
+        .map_err(|error| format!("Could not inspect output reservation folder {}: {error}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("Could not inspect output reservation entry: {error}"))?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with(lock_prefix) || !name.ends_with(".lock") {
+            continue;
+        }
+        if !entry.file_type().map_err(|error| error.to_string())?.is_file() {
+            // Never follow or remove unexpected links/directories in a user-selected folder.
+            return Ok(false);
+        }
+        let Some((pid, start_time, created_at)) = parse_reservation_owner(name) else {
+            // Legacy or malformed lock: its owner cannot be proven dead, so preserve it.
+            return Ok(false);
+        };
+        if now.saturating_sub(created_at) < STALE_ARTIFACT_GRACE_MS {
+            return Ok(false);
+        }
+        let alive = process_instance_is_alive(pid, start_time)
+            .unwrap_or(true); // Uncertainty means keep the reservation.
+        if alive {
+            return Ok(false);
+        }
+        fs::remove_file(entry.path())
+            .map_err(|error| format!("Could not remove stale reservation {}: {error}", entry.path().display()))?;
+    }
+    Ok(true)
+}
+
+#[cfg(target_os = "linux")]
+fn reserve_lock_under_gate(
+    dir: &Path,
+    lock_prefix: &str,
+    legacy_lock_path: &Path,
+) -> Result<Option<PathBuf>, String> {
+    if fs::symlink_metadata(legacy_lock_path).is_ok() {
+        // The old lock format has no process identity. Leave it alone rather than
+        // risking deletion while an older ForgeBox process still owns it.
+        return Ok(None);
+    }
+    if !remove_stale_reservation_locks(dir, lock_prefix)? {
+        return Ok(None);
+    }
+
+    use std::os::unix::fs::OpenOptionsExt;
+    let pid = std::process::id();
+    let start_time = current_process_start_time().map_err(|error| {
+        format!("Could not identify the current process for output reservation: {error}")
+    })?;
+    let created_at = timestamp();
+    let path = dir.join(format!("{lock_prefix}{pid}-{start_time}-{created_at}.lock"));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true).mode(0o600)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    match options.open(&path) {
+        Ok(file) => {
+            drop(file);
+            Ok(Some(path))
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(None),
+        Err(error) => Err(format!("Could not reserve an output name with {}: {error}", path.display())),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn remove_reservation_lock(dir: &Path, path: &Path) {
+    if let Ok(_gate) = reservation_gate(dir) {
+        let _ = fs::remove_file(path);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn parse_temp_dir_owner(name: &str) -> Option<(u32, u64, u128)> {
+    let stem = name.strip_prefix(".forgebox-")?;
+    let mut parts = stem.rsplitn(5, '-');
+    let _sequence = parts.next()?.parse::<u64>().ok()?;
+    let created_at = parts.next()?.parse::<u128>().ok()?;
+    let start_time = parts.next()?.parse::<u64>().ok()?;
+    let pid = parts.next()?.parse::<u32>().ok()?;
+    let prefix = parts.next()?;
+    (!prefix.is_empty()).then_some((pid, start_time, created_at))
+}
+
+#[cfg(target_os = "linux")]
+fn remove_stale_temp_dirs(base: &Path) {
+    let now = timestamp();
+    let Ok(entries) = fs::read_dir(base) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some((pid, start_time, created_at)) = parse_temp_dir_owner(name) else { continue };
+        if now.saturating_sub(created_at) < STALE_ARTIFACT_GRACE_MS {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else { continue };
+        if !file_type.is_dir() {
+            continue;
+        }
+        if process_instance_is_alive(pid, start_time).unwrap_or(true) {
+            continue;
+        }
+        // The 24-hour grace period also gives orphaned converter helpers time
+        // to exit after their parent application was forcibly terminated.
+        let _ = fs::remove_dir_all(entry.path());
+    }
 }
 
 pub(super) fn positive(value: &str, fallback: i32) -> i32 {
