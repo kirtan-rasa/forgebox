@@ -564,7 +564,50 @@ fn reservation_gate(dir: &Path) -> Result<ReservationGate, String> {
 }
 
 #[cfg(target_os = "linux")]
-fn remove_stale_reservation_locks(dir: &Path, lock_prefix: &str) -> Result<bool, String> {
+fn remove_stale_reservation_locks(dir: &Path) -> Result<(), String> {
+    let now = timestamp();
+    let entries = fs::read_dir(dir)
+        .map_err(|error| format!("Could not inspect output reservation folder {}: {error}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("Could not inspect output reservation entry: {error}"))?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !(name.starts_with(".forgebox-output-") || name.starts_with(".forgebox-prefix-"))
+            || !name.ends_with(".lock")
+        {
+            continue;
+        }
+        if !entry.file_type().map_err(|error| error.to_string())?.is_file() {
+            continue;
+        }
+        let Some((pid, start_time, created_at)) = parse_reservation_owner(name) else {
+            // Legacy or malformed locks have no trustworthy owner identity.
+            continue;
+        };
+        if now.saturating_sub(created_at) < STALE_ARTIFACT_GRACE_MS {
+            continue;
+        }
+        let alive = process_instance_is_alive(pid, start_time).unwrap_or(true);
+        if !alive {
+            // The grace period gives a converter orphaned by SIGKILL time to exit.
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn reservation_lock_is_busy(
+    dir: &Path,
+    lock_prefix: &str,
+    legacy_lock_path: &Path,
+) -> Result<bool, String> {
+    match fs::symlink_metadata(legacy_lock_path) {
+        Ok(_) => return Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("Could not inspect legacy reservation {}: {error}", legacy_lock_path.display())),
+    }
+
     let now = timestamp();
     let entries = fs::read_dir(dir)
         .map_err(|error| format!("Could not inspect output reservation folder {}: {error}", dir.display()))?;
@@ -576,25 +619,18 @@ fn remove_stale_reservation_locks(dir: &Path, lock_prefix: &str) -> Result<bool,
             continue;
         }
         if !entry.file_type().map_err(|error| error.to_string())?.is_file() {
-            // Never follow or remove unexpected links/directories in a user-selected folder.
-            return Ok(false);
+            return Ok(true);
         }
         let Some((pid, start_time, created_at)) = parse_reservation_owner(name) else {
-            // Legacy or malformed lock: its owner cannot be proven dead, so preserve it.
-            return Ok(false);
+            return Ok(true);
         };
-        if now.saturating_sub(created_at) < STALE_ARTIFACT_GRACE_MS {
-            return Ok(false);
+        if now.saturating_sub(created_at) < STALE_ARTIFACT_GRACE_MS
+            || process_instance_is_alive(pid, start_time).unwrap_or(true)
+        {
+            return Ok(true);
         }
-        let alive = process_instance_is_alive(pid, start_time)
-            .unwrap_or(true); // Uncertainty means keep the reservation.
-        if alive {
-            return Ok(false);
-        }
-        fs::remove_file(entry.path())
-            .map_err(|error| format!("Could not remove stale reservation {}: {error}", entry.path().display()))?;
     }
-    Ok(true)
+    Ok(false)
 }
 
 #[cfg(target_os = "linux")]
@@ -603,12 +639,10 @@ fn reserve_lock_under_gate(
     lock_prefix: &str,
     legacy_lock_path: &Path,
 ) -> Result<Option<PathBuf>, String> {
-    if fs::symlink_metadata(legacy_lock_path).is_ok() {
-        // The old lock format has no process identity. Leave it alone rather than
-        // risking deletion while an older ForgeBox process still owns it.
-        return Ok(None);
-    }
-    if !remove_stale_reservation_locks(dir, lock_prefix)? {
+    remove_stale_reservation_locks(dir)?;
+    if reservation_lock_is_busy(dir, lock_prefix, legacy_lock_path)? {
+        // Legacy locks have no process identity. Preserve them rather than
+        // risking deletion while an older ForgeBox process still owns one.
         return Ok(None);
     }
 
