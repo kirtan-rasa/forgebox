@@ -1,6 +1,11 @@
 use super::ForgeApp;
 use eframe::egui;
 
+#[cfg(unix)]
+use super::SHUTDOWN_REQUESTED;
+#[cfg(unix)]
+use std::sync::atomic::Ordering;
+
 mod files;
 mod icons;
 mod parameters;
@@ -16,6 +21,14 @@ pub(super) use self::thumbnails::load_thumbnail;
 
 impl eframe::App for ForgeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(unix)]
+        if SHUTDOWN_REQUESTED.load(Ordering::Acquire) {
+            // Closing the viewport runs ForgeApp::drop, which cancels and reaps
+            // the active process group before the application exits.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+
         self.poll_execution_status();
         self.poll_queue_events();
         self.poll_dialogs();
