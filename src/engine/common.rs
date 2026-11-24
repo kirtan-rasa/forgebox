@@ -868,8 +868,8 @@ mod output_reservation_tests {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         "result.pdf".hash(&mut hasher);
         let hash = hasher.finish();
-        let old = super::super::timestamp().saturating_sub(
-            super::super::STALE_ARTIFACT_GRACE_MS + 1,
+        let old = super::timestamp().saturating_sub(
+            super::STALE_ARTIFACT_GRACE_MS + 1,
         );
         let stale = directory.join(format!(
             ".forgebox-output-{hash:016x}-{}-1-{old}.lock",
@@ -967,7 +967,7 @@ mod temp_dir_in_tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn abandoned_temporary_workspace_is_reclaimed_after_owner_exits() {
-        use super::super::{temp_dir_in, timestamp, STALE_ARTIFACT_GRACE_MS};
+        use super::{temp_dir_in, timestamp, STALE_ARTIFACT_GRACE_MS};
         use std::fs;
 
         let base = std::env::temp_dir().join(format!(
