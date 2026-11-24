@@ -10,18 +10,16 @@ mod control;
 mod job;
 
 pub(crate) use self::command::{image_magick_program, image_magick_thread_limit};
-use self::command::{
-    command_version_succeeds, configure_command_environment, recommended_image_magick_threads,
-    run_capture, run_magick_owned, run_ok, run_qpdf,
-};
+use self::command::{run_capture, run_magick_owned, run_ok, run_ok_with_timeout, run_qpdf};
 use self::common::{
     display_io, files_with_prefix, first_file, normalized_ext, os, reserve_output_for_input,
     reserve_unique_path, positive, process_each, process_each_capture, process_each_convert,
-    require_files, sort_numbered_paths, temp_dir, reserve_unique_prefix,
+    require_files, sort_numbered_paths, temp_dir, temp_dir_for_output, temp_dir_in, reserve_unique_prefix,
 };
-use self::data::{csv_to_json, data_convert, encode_file_url_path, pdf_to_docx, soffice_convert};
+use self::data::{data_convert, pdf_to_docx, soffice_convert};
 use self::images::{images_to_pdf, long_png_to_pdf};
-use self::media::{convert_audio, convert_davinci_resolve, convert_video, convert_video_sticker, extract_audio};
+use self::media::{convert_audio, convert_davinci_resolve, convert_video, convert_video_sticker, convert_video_to_gif, extract_audio};
+use self::job::{MAX_IMAGE_RESIZE_DIMENSION, MAX_IMAGE_RESIZE_PIXELS};
 use self::pdf::{parse_pdf_page_order, parse_pdf_page_range, pdf_page_count};
 pub use self::job::{
     AudioFormat, DataFormat, ImageFormat, Job, JobOptions, PdfCompressionProfile,
@@ -34,6 +32,66 @@ use std::cell::RefCell;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+fn image_compression_args(input: &Path, quality: u8) -> Vec<OsString> {
+    let extension = input.extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    match extension.as_str() {
+        "png" => {
+            // PNG remains lossless. The slider controls zlib compression effort,
+            // not visual quality, and must not be passed as ImageMagick -quality.
+            let level = (u16::from(quality) * 9 / 100).min(9);
+            vec![os("-define"), os(&format!("png:compression-level={level}"))]
+        }
+        "jpg" | "jpeg" | "webp" | "heic" | "heif" => {
+            vec![os("-quality"), os(&quality.to_string())]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn resize_geometry(width: u32, height: u32) -> String {
+    let max_other_dimension = |requested: u32| {
+        let pixel_limit = MAX_IMAGE_RESIZE_PIXELS / u64::from(requested.max(1));
+        pixel_limit.min(u64::from(MAX_IMAGE_RESIZE_DIMENSION)) as u32
+    };
+    let (width, height) = match (width, height) {
+        (0, 0) => (0, 0),
+        (width, 0) => (width, max_other_dimension(width)),
+        (0, height) => (max_other_dimension(height), height),
+        (width, height) => (width, height),
+    };
+    let width = if width == 0 { String::new() } else { width.to_string() };
+    let height = if height == 0 { String::new() } else { height.to_string() };
+    // Bound the automatically calculated side too: extremely wide/tall images
+    // must still fit the same maximum side and total output-pixel limits.
+    // The trailing '>' is ImageMagick's no-upscale modifier.
+    format!("{width}x{height}>")
+}
+
+fn image_first_frame_arg(input: &Path) -> OsString {
+    let mut argument = input.as_os_str().to_os_string();
+    argument.push("[0]");
+    argument
+}
+
+fn image_source_args(input: &Path, preserve_gif_animation: bool) -> Vec<OsString> {
+    let is_gif = input.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("gif"));
+
+    if is_gif && preserve_gif_animation {
+        // GIF frames are stored as partial updates. Coalesce them before applying
+        // transformations so every frame has a complete canvas.
+        vec![os(input), os("-coalesce")]
+    } else {
+        // Static outputs must not unexpectedly fan out into name-0, name-1, ...
+        vec![image_first_frame_arg(input)]
+    }
+}
 
 thread_local! {
     static EXECUTION_WARNINGS: RefCell<Vec<String>> = RefCell::new(Vec::new());
@@ -140,7 +198,8 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
             images_to_pdf(&job, *combine, *compress, *quality)
         }
         (Tool::ImageConvert, Options::ImageConvert { format }) => process_each(&job, |input, out| {
-            let mut args = vec![os(input), os("-auto-orient")];
+            let mut args = image_source_args(input, matches!(format, ImageFormat::Webp));
+            args.extend([os("-auto-orient"), os("-strip")]);
             if matches!(format, ImageFormat::Jpeg) {
                 args.extend([os("-background"), os("white"), os("-alpha"), os("remove"), os("-alpha"), os("off")]);
             }
@@ -148,15 +207,22 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
             run_magick_owned(args)
         }),
         (Tool::ImageResize, Options::ImageResize { width, height }) => process_each(&job, |input, out| {
-            let size = format!("{width}x{height}");
-            run_magick_owned(vec![os(input), os("-auto-orient"), os("-resize"), os(&size), os(out)])
+            let size = resize_geometry(*width, *height);
+            let mut args = image_source_args(input, true);
+            args.extend([os("-auto-orient"), os("-strip"), os("-resize"), os(&size), os(out)]);
+            run_magick_owned(args)
         }),
         (Tool::ImageCompress, Options::ImageCompress { quality }) => process_each(&job, |input, out| {
-            let quality = quality.to_string();
-            run_magick_owned(vec![os(input), os("-auto-orient"), os("-quality"), os(&quality), os(out)])
+            let mut args = image_source_args(input, true);
+            args.extend([os("-auto-orient"), os("-strip")]);
+            args.extend(image_compression_args(input, *quality));
+            args.push(os(out));
+            run_magick_owned(args)
         }),
         (Tool::ImageGrayscale, Options::None) => process_each(&job, |input, out| {
-            run_magick_owned(vec![os(input), os("-auto-orient"), os("-colorspace"), os("Gray"), os(out)])
+            let mut args = image_source_args(input, true);
+            args.extend([os("-auto-orient"), os("-strip"), os("-colorspace"), os("Gray"), os(out)]);
+            run_magick_owned(args)
         }),
         (Tool::RemoveBackground, Options::None) => process_each(&job, |input, out| {
             run_ok("rembg", vec![os("i"), os(input), os(out)]).map(|_| ())
@@ -168,42 +234,55 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
         (Tool::ImageOcr, Options::ImageOcr { language }) => process_each(&job, |input, out| {
             let base = out.with_extension("");
             let lang = if language.trim().is_empty() { "eng" } else { language.trim() };
-            run_ok("tesseract", vec![os(input), os(&base), os("-l"), os(lang), os("txt")])
-                .map(|_| ())
-                .map_err(|error| {
-                    if error.contains("Error opening data file")
-                        || error.contains("Failed loading language")
-                    {
-                        let languages = lang
-                            .split('+')
-                            .map(str::trim)
-                            .filter(|language| !language.is_empty())
-                            .collect::<Vec<_>>();
-                        let fedora_packages = languages
-                            .iter()
-                            .map(|language| format!("tesseract-langpack-{language}"))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        let debian_packages = languages
-                            .iter()
-                            .map(|language| format!("tesseract-ocr-{language}"))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        let arch_packages = languages
-                            .iter()
-                            .map(|language| format!("tesseract-data-{language}"))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        format!(
-                            "Tesseract language data for `{lang}` is missing. Install the matching language package and try again. Examples: Fedora: `sudo dnf install {fedora_packages}`; Debian/Ubuntu: `sudo apt install {debian_packages}`; Arch: `sudo pacman -S {arch_packages}`."
-                        )
-                    } else {
-                        error
-                    }
-                })
+            let temp = temp_dir_in(&job.output_dir, "ocr")?;
+            let oriented = temp.join("oriented.png");
+            let result = (|| {
+                run_magick_owned(vec![
+                    image_first_frame_arg(input),
+                    os("-auto-orient"),
+                    os("-strip"),
+                    os(&oriented),
+                ])?;
+                run_ok("tesseract", vec![os(&oriented), os(&base), os("-l"), os(lang), os("txt")])
+                    .map(|_| ())
+                    .map_err(|error| {
+                        if error.contains("Error opening data file")
+                            || error.contains("Failed loading language")
+                        {
+                            let languages = lang
+                                .split('+')
+                                .map(str::trim)
+                                .filter(|language| !language.is_empty())
+                                .collect::<Vec<_>>();
+                            let fedora_packages = languages
+                                .iter()
+                                .map(|language| format!("tesseract-langpack-{language}"))
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            let debian_packages = languages
+                                .iter()
+                                .map(|language| format!("tesseract-ocr-{language}"))
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            let arch_packages = languages
+                                .iter()
+                                .map(|language| format!("tesseract-data-{language}"))
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            format!(
+                                "Tesseract language data for {lang} is missing. Install the matching language package and try again. Examples: Fedora: sudo dnf install {fedora_packages}; Debian/Ubuntu: sudo apt install {debian_packages}; Arch: sudo pacman -S {arch_packages}."
+                            )
+                        } else {
+                            error
+                        }
+                    })
+            })();
+            let _ = fs::remove_dir_all(&temp);
+            result
         }),
         (Tool::GenerateQr, Options::GenerateQr { text }) => {
-            if text.trim().is_empty() {
+            let text = text.trim();
+            if text.is_empty() {
                 return Err("Enter text or a URL for the QR code.".into());
             }
             let reservation = reserve_unique_path(&job.output_dir, "qr-code", "png")?;
@@ -237,24 +316,53 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
             let input = first_file(&job)?;
             let page_count = pdf_page_count(input)?;
             let (first, end) = parse_pdf_page_range(range, page_count)?;
-            let prefix_reservation = reserve_unique_prefix(&job.output_dir, &format!("{}-split", input.file_stem().and_then(|value| value.to_str()).unwrap_or("document")))?;
+            let prefix_reservation = reserve_unique_prefix(
+                &job.output_dir,
+                &format!("{}-split", input.file_stem().and_then(|value| value.to_str()).unwrap_or("document")),
+            )?;
             let prefix = prefix_reservation.path().to_path_buf();
-            let pattern = job.output_dir.join(format!("{}-%d.pdf", prefix.file_name().and_then(|value| value.to_str()).unwrap_or("split")));
-            let pattern_prefix = pattern.file_name().and_then(|value| value.to_str()).unwrap_or("split-%d.pdf")
-                .split("%d").next().unwrap_or("split-").to_string();
-            if let Err(error) = run_ok("pdfseparate", vec![os("-f"), os(&first.to_string()), os("-l"), os(&end.to_string()), os(input), os(&pattern)]) {
-                for created in files_with_prefix(&job.output_dir, &pattern_prefix) { let _ = fs::remove_file(created); }
-                return Err(error);
-            }
-            let mut outputs = files_with_prefix(&job.output_dir, &pattern_prefix);
-            outputs.retain(|path| path.extension().and_then(|value| value.to_str()).map(|extension| extension.eq_ignore_ascii_case("pdf")).unwrap_or(false));
-            sort_numbered_paths(&mut outputs);
-            if outputs.is_empty() {
-                for created in files_with_prefix(&job.output_dir, &pattern_prefix) { let _ = fs::remove_file(created); }
-                Err("The PDF was processed, but no output pages were found. Check the page range.".into())
-            } else {
+            let prefix_name = prefix.file_name().and_then(|value| value.to_str()).unwrap_or("split");
+
+            // pdfseparate treats percent signs in its output pattern as format
+            // directives, so never place the user's output directory in that pattern.
+            let temp = temp_dir("pdf-split")?;
+            let pattern = temp.join("page-%d.pdf");
+            let result = (|| -> Result<Vec<PathBuf>, String> {
+                run_ok("pdfseparate", vec![
+                    os("-f"), os(&first.to_string()),
+                    os("-l"), os(&end.to_string()),
+                    os(input), os(&pattern),
+                ])?;
+
+                let mut pages = files_with_prefix(&temp, "page-");
+                pages.retain(|path| path.extension().and_then(|value| value.to_str())
+                    .map(|extension| extension.eq_ignore_ascii_case("pdf")).unwrap_or(false));
+                sort_numbered_paths(&mut pages);
+                if pages.is_empty() {
+                    return Err("The PDF was processed, but no output pages were found. Check the page range.".into());
+                }
+
+                let mut outputs = Vec::with_capacity(pages.len());
+                for page in &pages {
+                    let page_number = page.file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .and_then(|stem| stem.strip_prefix("page-"))
+                        .and_then(|number| number.parse::<u32>().ok())
+                        .ok_or_else(|| format!("Could not determine the page number for {}.", page.display()))?;
+                    let output = job.output_dir.join(format!("{prefix_name}-{page_number}.pdf"));
+                    if let Err(error) = fs::copy(page, &output) {
+                        return Err(if outputs.is_empty() {
+                            format!("Could not save split PDF page {page_number}: {error}")
+                        } else {
+                            format!("Could not save split PDF page {page_number}: {error}. {} earlier page(s) were kept in {}.", outputs.len(), job.output_dir.display())
+                        });
+                    }
+                    outputs.push(output);
+                }
                 Ok(outputs)
-            }
+            })();
+            let _ = fs::remove_dir_all(&temp);
+            result
         }
         (Tool::PdfCompress, Options::PdfCompress { profile }) => {
             let input = first_file(&job)?;
@@ -271,6 +379,18 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
                 output_argument, os(input),
             ]);
             if let Err(error) = result { let _ = fs::remove_file(&out); return Err(error); }
+            record_execution_warning(
+                "Ghostscript rewrites PDF content. Interactive forms, annotations, and digital-signature validity may not be preserved; keep the original PDF.".into()
+            );
+            if let (Ok(source), Ok(compressed)) = (fs::metadata(input), fs::metadata(&out)) {
+                if compressed.len() > source.len() {
+                    record_execution_warning(format!(
+                        "The compressed PDF is larger than the source ({} bytes vs {} bytes).",
+                        compressed.len(),
+                        source.len()
+                    ));
+                }
+            }
             Ok(vec![out])
         }
         (Tool::PdfRotate, Options::PdfRotate { rotation }) => {
@@ -347,8 +467,7 @@ fn execute_job(job: Job) -> Result<Vec<PathBuf>, String> {
             convert_davinci_resolve(input, out, *profile)
         }),
         (Tool::VideoToGif, Options::VideoToGif { width, fps }) => process_each(&job, |input, out| {
-            let filter = format!("fps={fps},scale={width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer");
-            run_ok("ffmpeg", vec![os("-y"), os("-hide_banner"), os("-loglevel"), os("error"), os("-nostdin"), os("-i"), os(input), os("-filter_complex"), os(&filter), os("-threads"), os("2"), os("-loop"), os("0"), os(out)]).map(|_| ())
+            convert_video_to_gif(input, out, *width, *fps)
         }),
         (Tool::VideoSticker, Options::VideoSticker { start_ms, end_ms, fit, crop_left, crop_top, zoom_milli }) => process_each(&job, |input, out| {
             convert_video_sticker(input, out, *start_ms, *end_ms, *fit, *crop_left, *crop_top, *zoom_milli)
@@ -534,7 +653,7 @@ mod pdf_page_tests {
 
 #[cfg(test)]
 mod file_url_tests {
-    use super::encode_file_url_path;
+    use super::data::encode_file_url_path;
 
     #[test]
     fn file_url_paths_escape_spaces_and_uri_delimiters() {
@@ -551,7 +670,8 @@ mod file_url_tests {
 
 #[cfg(test)]
 mod csv_conversion_tests {
-    use super::{csv_to_json, temp_dir};
+    use super::temp_dir;
+    use super::data::csv_to_json;
     use serde_json::Value;
     use std::fs;
 
@@ -642,7 +762,7 @@ mod video_tests {
 
 #[cfg(test)]
 mod image_magick_resource_tests {
-    use super::recommended_image_magick_threads;
+    use super::command::recommended_image_magick_threads;
 
     #[test]
     fn image_magick_reserves_a_thread_and_caps_parallelism() {
@@ -655,7 +775,7 @@ mod image_magick_resource_tests {
 
 #[cfg(test)]
 mod command_detection_tests {
-    use super::command_version_succeeds;
+    use super::command::command_version_succeeds;
     use std::ffi::OsStr;
 
     #[test]
@@ -671,7 +791,7 @@ mod command_detection_tests {
 
 #[cfg(test)]
 mod subprocess_environment_tests {
-    use super::configure_command_environment;
+    use super::command::configure_command_environment;
     use std::ffi::OsStr;
     use std::process::Command;
 
@@ -728,5 +848,93 @@ mod ghostscript_path_tests {
         ]
         .concat();
         assert_eq!(argument.as_os_str().as_bytes(), expected);
+    }
+}
+
+
+#[cfg(test)]
+mod image_sequence_input_tests {
+    use super::{image_first_frame_arg, image_source_args};
+    use std::path::Path;
+
+    fn strings(args: Vec<std::ffi::OsString>) -> Vec<String> {
+        args.into_iter().map(|value| value.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn gif_transformations_coalesce_animation_instead_of_selecting_one_frame() {
+        assert_eq!(
+            strings(image_source_args(Path::new("animation.GIF"), true)),
+            vec!["animation.GIF", "-coalesce"]
+        );
+    }
+
+    #[test]
+    fn static_image_outputs_select_the_first_frame() {
+        assert_eq!(
+            image_first_frame_arg(Path::new("pages.tiff")).to_string_lossy(),
+            "pages.tiff[0]"
+        );
+        assert_eq!(
+            strings(image_source_args(Path::new("animation.gif"), false)),
+            vec!["animation.gif[0]"]
+        );
+    }
+
+    #[test]
+    fn non_gif_sources_do_not_receive_gif_animation_options() {
+        assert_eq!(
+            strings(image_source_args(Path::new("photo.tif"), true)),
+            vec!["photo.tif[0]"]
+        );
+    }
+}
+
+
+#[cfg(test)]
+mod resize_geometry_tests {
+    use super::resize_geometry;
+
+    #[test]
+    fn supports_width_only_and_height_only_resize_with_output_bounds() {
+        assert_eq!(resize_geometry(1600, 0), "1600x16384>");
+        assert_eq!(resize_geometry(0, 1200), "16384x1200>");
+        assert_eq!(resize_geometry(16_000, 0), "16000x4000>");
+        assert_eq!(resize_geometry(0, 16_000), "4000x16000>");
+        assert_eq!(resize_geometry(16_384, 0), "16384x3906>");
+        assert_eq!(resize_geometry(1600, 1200), "1600x1200>");
+    }
+}
+
+
+#[cfg(test)]
+mod image_compression_args_tests {
+    use super::image_compression_args;
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    fn strings(values: Vec<OsString>) -> Vec<String> {
+        values.into_iter().map(|value| value.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn png_uses_lossless_compression_level_instead_of_quality() {
+        assert_eq!(
+            strings(image_compression_args(Path::new("input.png"), 82)),
+            vec!["-define", "png:compression-level=7"]
+        );
+    }
+
+    #[test]
+    fn lossy_formats_receive_quality_and_other_formats_use_defaults() {
+        assert_eq!(
+            strings(image_compression_args(Path::new("input.jpg"), 82)),
+            vec!["-quality", "82"]
+        );
+        assert_eq!(
+            strings(image_compression_args(Path::new("input.webp"), 70)),
+            vec!["-quality", "70"]
+        );
+        assert!(image_compression_args(Path::new("input.tiff"), 82).is_empty());
     }
 }

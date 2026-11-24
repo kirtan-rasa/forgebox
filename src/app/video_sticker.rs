@@ -9,12 +9,14 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const PLAYBACK_MAX_SIDE: u32 = 512;
 const PLAYBACK_FPS: u32 = 24;
 const STICKER_PREVIEW_FPS: u32 = 30;
 const CROP_HANDLE_SIZE: f32 = 22.0;
+const PREVIEW_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const PREVIEW_PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy)]
 struct VideoInfo { width: u32, height: u32, duration_ms: u32 }
@@ -37,6 +39,12 @@ enum PlaybackMessage {
     Frame { generation: u64, time_ms: u32, pixels: Vec<u8> },
     Finished { generation: u64 },
     Error { generation: u64, message: String },
+}
+
+/// Frames may be dropped when the preview is behind, but terminal state must
+/// be delivered so playback can stop, report errors, or restart sticker loops.
+fn send_playback_terminal(tx: &SyncSender<PlaybackMessage>, message: PlaybackMessage) {
+    let _ = tx.send(message);
 }
 
 #[derive(Clone, Copy)]
@@ -937,7 +945,7 @@ fn stream_preview(
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
-            let _ = tx.try_send(PlaybackMessage::Error {
+            send_playback_terminal(&tx, PlaybackMessage::Error {
                 generation,
                 message: format!("Could not start FFmpeg playback: {error}"),
             });
@@ -979,31 +987,41 @@ fn stream_preview(
     pid.store(0, Ordering::Relaxed);
     if stop.load(Ordering::Relaxed) { return; }
     if let Some(error) = read_error {
-        let _ = tx.try_send(PlaybackMessage::Error { generation, message: format!("Could not read FFmpeg preview frames: {error}") });
+        send_playback_terminal(&tx, PlaybackMessage::Error { generation, message: format!("Could not read FFmpeg preview frames: {error}") });
     } else {
         match status {
             Ok(status) if status.success() => {
-                let _ = tx.try_send(PlaybackMessage::Finished { generation });
+                send_playback_terminal(&tx, PlaybackMessage::Finished { generation });
             }
             Ok(status) => {
-                let _ = tx.try_send(PlaybackMessage::Error {
+                send_playback_terminal(&tx, PlaybackMessage::Error {
                     generation,
                     message: format!("FFmpeg preview stopped with exit code {}.", status),
                 });
             }
             Err(error) => {
-                let _ = tx.try_send(PlaybackMessage::Error { generation, message: format!("Could not finish FFmpeg preview: {error}") });
+                send_playback_terminal(&tx, PlaybackMessage::Error { generation, message: format!("Could not finish FFmpeg preview: {error}") });
             }
         }
     }
 }
 
-fn stop_preview_child(child: &mut std::process::Child) {
+fn terminate_preview_process_group(process_id: u32) {
     #[cfg(unix)]
     {
-        let group = -(child.id() as libc::pid_t);
+        let group = -(process_id as libc::pid_t);
         let _ = unsafe { libc::kill(group, libc::SIGKILL) };
     }
+    #[cfg(not(unix))]
+    {
+        let _ = process_id;
+    }
+}
+
+fn stop_preview_child(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    terminate_preview_process_group(child.id());
+
     #[cfg(not(unix))]
     {
         let _ = child.kill();
@@ -1022,7 +1040,24 @@ fn terminate_preview_process(pid: i32) {
     }
 }
 
-fn run_preview_command(mut command: Command, cancelled: &AtomicBool) -> Result<std::process::Output, String> {
+fn join_preview_readers(
+    stdout_reader: thread::JoinHandle<std::io::Result<Vec<u8>>>,
+    stderr_reader: thread::JoinHandle<std::io::Result<Vec<u8>>>,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let stdout = stdout_reader.join()
+        .map_err(|_| "FFmpeg preview output reader panicked.".to_string())?
+        .map_err(|error| format!("Could not read preview output: {error}"))?;
+    let stderr = stderr_reader.join()
+        .map_err(|_| "FFmpeg preview error reader panicked.".to_string())?
+        .map_err(|error| format!("Could not read preview errors: {error}"))?;
+    Ok((stdout, stderr))
+}
+
+fn run_preview_command(
+    mut command: Command,
+    cancelled: &AtomicBool,
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
     if cancelled.load(Ordering::Acquire) {
         return Err("Preview cancelled.".into());
     }
@@ -1033,6 +1068,7 @@ fn run_preview_command(mut command: Command, cancelled: &AtomicBool) -> Result<s
         command.process_group(0);
     }
     let mut child = command.spawn().map_err(|error| error.to_string())?;
+    let process_id = child.id();
     let stdout = child.stdout.take().expect("preview stdout is piped");
     let stderr = child.stderr.take().expect("preview stderr is piped");
     let stdout_reader = thread::spawn(move || {
@@ -1045,40 +1081,119 @@ fn run_preview_command(mut command: Command, cancelled: &AtomicBool) -> Result<s
         let mut pipe = stderr;
         pipe.read_to_end(&mut bytes).map(|_| bytes)
     });
+    let started = Instant::now();
 
     let status = loop {
         if cancelled.load(Ordering::Acquire) {
             stop_preview_child(&mut child);
-            let _ = stdout_reader.join();
-            let _ = stderr_reader.join();
+            // Killing the process group normally closes both pipes. Detach
+            // readers rather than joining indefinitely if a helper escaped
+            // the group and inherited one of the handles.
+            drop(stdout_reader);
+            drop(stderr_reader);
             return Err("Preview cancelled.".into());
+        }
+        if started.elapsed() >= timeout {
+            stop_preview_child(&mut child);
+            drop(stdout_reader);
+            drop(stderr_reader);
+            return Err(format!(
+                "Preview command exceeded its {:.0}-second time limit.",
+                timeout.as_secs_f64()
+            ));
         }
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => thread::sleep(Duration::from_millis(20)),
             Err(error) => {
                 stop_preview_child(&mut child);
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
+                drop(stdout_reader);
+                drop(stderr_reader);
                 return Err(error.to_string());
             }
         }
     };
 
-    let stdout = stdout_reader.join()
-        .map_err(|_| "FFmpeg preview output reader panicked.".to_string())?
-        .map_err(|error| format!("Could not read preview output: {error}"))?;
-    let stderr = stderr_reader.join()
-        .map_err(|_| "FFmpeg preview error reader panicked.".to_string())?
-        .map_err(|error| format!("Could not read preview errors: {error}"))?;
+    // A helper can inherit the pipes after the main FFprobe/FFmpeg process
+    // exits. Bound that drain too, or joining the reader threads can hang
+    // the editor indefinitely.
+    let drain_started = Instant::now();
+    while !stdout_reader.is_finished() || !stderr_reader.is_finished() {
+        if drain_started.elapsed() >= PREVIEW_PIPE_DRAIN_TIMEOUT {
+            terminate_preview_process_group(process_id);
+            // The standard library cannot reliably terminate a descendant
+            // that escaped its parent's process group. Never block the editor
+            // on pipe readers after the bounded drain period.
+            drop(stdout_reader);
+            drop(stderr_reader);
+            return Err(
+                "A helper process kept the preview output pipes open after FFprobe/FFmpeg exited."
+                    .into(),
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let (stdout, stderr) = join_preview_readers(stdout_reader, stderr_reader)?;
     Ok(std::process::Output { status, stdout, stderr })
+}
+
+fn display_oriented_dimensions(width: u32, height: u32, rotation: Option<f64>) -> (u32, u32) {
+    let rotation = rotation.unwrap_or(0.0).round() as i32;
+    if rotation.rem_euclid(180) == 90 { (height, width) } else { (width, height) }
+}
+
+fn rational_value(value: &str) -> Option<f64> {
+    let (numerator, denominator) = value.split_once('/')?;
+    let numerator = numerator.trim().parse::<f64>().ok()?;
+    let denominator = denominator.trim().parse::<f64>().ok()?;
+    if !numerator.is_finite() || !denominator.is_finite() || denominator == 0.0 {
+        return None;
+    }
+    Some(numerator / denominator)
+}
+
+fn numeric_value(value: &Value) -> Option<f64> {
+    value.as_f64()
+        .or_else(|| value.as_str().and_then(|text| text.parse::<f64>().ok()))
+        .filter(|number| number.is_finite())
+}
+
+fn stream_duration_seconds(stream: &Value) -> Option<f64> {
+    stream.get("duration")
+        .and_then(numeric_value)
+        .filter(|value| *value > 0.0)
+        .or_else(|| {
+            let ticks = numeric_value(stream.get("duration_ts")?)?;
+            let time_base = stream.get("time_base").and_then(Value::as_str)?;
+            let seconds_per_tick = rational_value(time_base)?;
+            let duration = ticks * seconds_per_tick;
+            (duration.is_finite() && duration > 0.0).then_some(duration)
+        })
+        .or_else(|| {
+            let frames = numeric_value(stream.get("nb_frames")?)?;
+            let frame_rate = stream.get("avg_frame_rate").and_then(Value::as_str)?;
+            let frames_per_second = rational_value(frame_rate)?;
+            if frames_per_second <= 0.0 { return None; }
+            let duration = frames / frames_per_second;
+            (duration.is_finite() && duration > 0.0).then_some(duration)
+        })
 }
 
 fn inspect_video(path: &Path, cancelled: &AtomicBool) -> Result<VideoInfo, String> {
     let mut command = Command::new("ffprobe");
-    command.args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,duration:format=duration", "-of", "json"])
-        .arg(path);
-    let output = run_preview_command(command, cancelled)
+    command.args([
+        "-v", "error",
+        "-select_streams", "v:0",
+        // Use the long-standing show_streams/show_format flags instead of
+        // naming stream_side_data in -show_entries. Older FFprobe releases
+        // (including Ubuntu 22.04's) reject that section name, even though
+        // they can return side_data_list as part of each stream object.
+        "-show_streams",
+        "-show_format",
+        "-of", "json",
+    ]).arg(path);
+    let output = run_preview_command(command, cancelled, PREVIEW_COMMAND_TIMEOUT)
         .map_err(|e| format!("Could not inspect the selected video: {e}. Install FFmpeg and FFprobe if they are missing."))?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
@@ -1086,10 +1201,17 @@ fn inspect_video(path: &Path, cancelled: &AtomicBool) -> Result<VideoInfo, Strin
     }
     let value: Value = serde_json::from_slice(&output.stdout).map_err(|e| format!("FFprobe returned invalid metadata: {e}"))?;
     let stream = value["streams"].as_array().and_then(|s| s.first()).ok_or("The selected file does not contain a video stream.")?;
-    let duration = value["format"]["duration"].as_str().and_then(|s| s.parse::<f64>().ok())
-        .or_else(|| stream["duration"].as_str().and_then(|s| s.parse::<f64>().ok())).unwrap_or(0.0);
+    let duration = value["format"]["duration"].as_str()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .or_else(|| stream_duration_seconds(stream))
+        .unwrap_or(0.0);
     let width = stream["width"].as_u64().unwrap_or(0) as u32;
     let height = stream["height"].as_u64().unwrap_or(0) as u32;
+    let rotation = stream["side_data_list"].as_array()
+        .and_then(|items| items.iter().find_map(|item| item["rotation"].as_f64()))
+        .or_else(|| stream["tags"]["rotate"].as_str().and_then(|value| value.parse::<f64>().ok()));
+    let (width, height) = display_oriented_dimensions(width, height, rotation);
     if width < 2 || height < 2 || !duration.is_finite() || duration <= 0.0 {
         return Err("FFprobe could not determine the video dimensions or duration.".into());
     }
@@ -1102,7 +1224,7 @@ fn preview_frame(path: &Path, time_ms: u32, cancelled: &AtomicBool) -> Result<eg
     command.args(["-hide_banner", "-loglevel", "error", "-nostdin", "-ss", &seek, "-i"])
         .arg(path)
         .args(["-frames:v", "1", "-vf", "scale=512:512:force_original_aspect_ratio=decrease:flags=fast_bilinear", "-f", "image2pipe", "-vcodec", "png", "pipe:1"]);
-    let output = run_preview_command(command, cancelled)
+    let output = run_preview_command(command, cancelled, PREVIEW_COMMAND_TIMEOUT)
         .map_err(|e| format!("Could not render FFmpeg preview: {e}"))?;
     if !output.status.success() || output.stdout.is_empty() {
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
@@ -1168,8 +1290,46 @@ mod tests {
 }
 
 #[cfg(all(test, unix))]
-mod preview_cancellation_tests {
+mod preview_timeout_tests {
     use super::run_preview_command;
+    use std::process::Command;
+    use std::sync::atomic::AtomicBool;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn preview_command_timeout_terminates_the_process_group() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 10"]);
+        let started = Instant::now();
+        let error = run_preview_command(
+            command,
+            &AtomicBool::new(false),
+            Duration::from_millis(150),
+        ).unwrap_err();
+
+        assert!(error.contains("time limit"));
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn exited_command_cannot_leave_a_helper_holding_preview_pipes_open() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 10 & exit 0"]);
+        let started = Instant::now();
+        let error = run_preview_command(
+            command,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        ).unwrap_err();
+
+        assert!(error.contains("kept the preview output pipes open"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod preview_cancellation_tests {
+    use super::{run_preview_command, PREVIEW_COMMAND_TIMEOUT};
     use std::process::Command;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -1183,7 +1343,7 @@ mod preview_cancellation_tests {
         let worker = thread::spawn(move || {
             let mut command = Command::new("sh");
             command.args(["-c", "sleep 10"]);
-            run_preview_command(command, &worker_cancelled)
+            run_preview_command(command, &worker_cancelled, PREVIEW_COMMAND_TIMEOUT)
         });
 
         thread::sleep(Duration::from_millis(150));
@@ -1196,5 +1356,88 @@ mod preview_cancellation_tests {
             started.elapsed() < Duration::from_secs(2),
             "preview cancellation should terminate the child process group promptly"
         );
+    }
+}
+
+
+#[cfg(test)]
+mod display_orientation_tests {
+    use super::display_oriented_dimensions;
+
+    #[test]
+    fn display_matrix_rotation_swaps_portrait_dimensions() {
+        assert_eq!(display_oriented_dimensions(1920, 1080, Some(90.0)), (1080, 1920));
+        assert_eq!(display_oriented_dimensions(1920, 1080, Some(-90.0)), (1080, 1920));
+        assert_eq!(display_oriented_dimensions(1920, 1080, Some(270.0)), (1080, 1920));
+        assert_eq!(display_oriented_dimensions(1920, 1080, Some(180.0)), (1920, 1080));
+        assert_eq!(display_oriented_dimensions(1920, 1080, None), (1920, 1080));
+    }
+}
+
+
+#[cfg(test)]
+mod duration_metadata_tests {
+    use super::{rational_value, stream_duration_seconds};
+    use serde_json::json;
+
+    #[test]
+    fn parses_ffprobe_rational_values() {
+        assert_eq!(rational_value("1/1000"), Some(0.001));
+        assert_eq!(rational_value("30000/1001"), Some(30000.0 / 1001.0));
+        assert_eq!(rational_value("1/0"), None);
+        assert_eq!(rational_value("N/A"), None);
+    }
+
+    #[test]
+    fn calculates_duration_from_stream_timestamps_when_webm_format_duration_is_missing() {
+        let stream = json!({
+            "duration": "N/A",
+            "duration_ts": 90000,
+            "time_base": "1/90000"
+        });
+        assert_eq!(stream_duration_seconds(&stream), Some(1.0));
+    }
+
+    #[test]
+    fn falls_back_to_frame_count_and_average_frame_rate() {
+        let stream = json!({
+            "duration": "N/A",
+            "duration_ts": "N/A",
+            "nb_frames": "60",
+            "avg_frame_rate": "30/1"
+        });
+        assert_eq!(stream_duration_seconds(&stream), Some(2.0));
+    }
+}
+
+
+#[cfg(test)]
+mod playback_terminal_channel_tests {
+    use super::{send_playback_terminal, PlaybackMessage};
+    use std::sync::mpsc;
+    use std::thread;
+
+    #[test]
+    fn terminal_message_waits_for_room_instead_of_being_dropped() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        tx.try_send(PlaybackMessage::Frame {
+            generation: 1,
+            time_ms: 100,
+            pixels: Vec::new(),
+        }).unwrap();
+
+        let worker = thread::spawn(move || {
+            send_playback_terminal(&tx, PlaybackMessage::Finished { generation: 1 });
+        });
+
+        match rx.recv().unwrap() {
+            PlaybackMessage::Frame { generation, .. } => assert_eq!(generation, 1),
+            _ => panic!("the queued preview frame must be delivered first"),
+        }
+        match rx.recv().unwrap() {
+            PlaybackMessage::Finished { generation } => assert_eq!(generation, 1),
+            _ => panic!("the terminal playback message must not be lost"),
+        }
+        worker.join().unwrap();
     }
 }

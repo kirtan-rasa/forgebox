@@ -34,13 +34,13 @@ pub(super) fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
                 labeled_text(ui, "Width", &mut app.width, "1600");
                 labeled_text(ui, "Height", &mut app.height, "1200");
             });
-            ui.label(RichText::new("Image aspect ratio is preserved. Resize bounds are limited to 16,384 px per side and 64 MP total.").size(11.0).color(MUTED));
+            ui.label(RichText::new("Leave width or height blank to calculate it automatically. Aspect ratio is preserved; output is limited to 16,384 px per side and 64 megapixels. Smaller images are not enlarged.").size(11.0).color(MUTED));
         }
         ToolId::ImageCompress => {
             ui.label(RichText::new(format!("Quality: {}%", app.quality)).size(12.0));
             let mut quality = app.quality.parse::<f32>().unwrap_or(82.0).clamp(1.0, 100.0);
             if ui.add(egui::Slider::new(&mut quality, 1.0..=100.0).integer()).changed() { app.quality = (quality as i32).to_string(); }
-            ui.label(RichText::new("For JPEG/WebP, lower values usually produce smaller files.").size(11.0).color(MUTED));
+            ui.label(RichText::new("JPEG/WebP use lossy quality. PNG stays lossless; this slider changes compression effort, not image quality.").size(11.0).color(MUTED));
         }
         ToolId::ImageOcr => {
             ui.label(RichText::new("Tesseract language").size(12.0));
@@ -186,7 +186,7 @@ pub(super) fn parameter_ui(ui: &mut egui::Ui, app: &mut ForgeApp) {
                 labeled_text(ui, "Width", &mut app.width, "480");
                 labeled_text(ui, "Frames per second", &mut app.fps, "12");
             });
-            ui.label(RichText::new("A palette is generated automatically for cleaner colors. GIF works best for short clips.").size(11.0).color(MUTED));
+            ui.label(RichText::new("Palette optimization is automatic. GIF exports are limited to 60 seconds; ForgeBox checks estimated disk space before encoding.").size(11.0).color(MUTED));
         }
         ToolId::PdfWatermark => {
             ui.label(RichText::new("Select the main PDF on the left and a second PDF to use as a watermark.").size(12.0));

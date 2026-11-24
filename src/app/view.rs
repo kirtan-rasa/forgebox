@@ -1,6 +1,11 @@
 use super::ForgeApp;
 use eframe::egui;
 
+#[cfg(unix)]
+use super::SHUTDOWN_REQUESTED;
+#[cfg(unix)]
+use std::sync::atomic::Ordering;
+
 mod files;
 mod icons;
 mod parameters;
@@ -10,12 +15,20 @@ mod thumbnails;
 mod widgets;
 mod workspace;
 
-pub(super) use self::files::{accepted_input_description, append_image_paths, default_output_dir, is_supported_input_file, sort_image_paths_naturally};
+pub(super) use self::files::{accepted_input_description, append_image_paths, default_output_dir, is_supported_input_file};
 pub(super) use self::icons::load_nerd_font;
 pub(super) use self::thumbnails::load_thumbnail;
 
 impl eframe::App for ForgeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(unix)]
+        if SHUTDOWN_REQUESTED.load(Ordering::Acquire) {
+            // Closing the viewport runs ForgeApp::drop, which cancels and reaps
+            // the active process group before the application exits.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+
         self.poll_execution_status();
         self.poll_queue_events();
         self.poll_dialogs();
@@ -23,9 +36,15 @@ impl eframe::App for ForgeApp {
         self.video_sticker.poll(ctx);
         self.queue_thumbnails();
         let dropped = ctx.input(|input| input.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>());
-        if !dropped.is_empty() && !self.running {
-            self.add_files(dropped);
-            self.wizard_step = 0;
+        if !dropped.is_empty() {
+            if self.selected_tool == crate::catalog::ToolId::GenerateQr {
+                self.selection_notice = Some("QR Code Generator accepts text, not files.".into());
+            } else if self.running {
+                self.deferred_dropped_files.extend(dropped);
+            } else {
+                self.add_files(dropped);
+                self.wizard_step = 0;
+            }
         }
         let dragging_external_files = ctx.input(|input| !input.raw.hovered_files.is_empty());
 

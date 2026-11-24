@@ -291,8 +291,8 @@ pub struct Job {
     pub options: JobOptions,
 }
 
-const MAX_IMAGE_RESIZE_DIMENSION: u32 = 16_384;
-const MAX_IMAGE_RESIZE_PIXELS: u64 = 64_000_000;
+pub(super) const MAX_IMAGE_RESIZE_DIMENSION: u32 = 16_384;
+pub(super) const MAX_IMAGE_RESIZE_PIXELS: u64 = 64_000_000;
 
 impl Job {
     pub fn new(tool: ToolId, files: Vec<PathBuf>, output_dir: PathBuf, options: JobOptions) -> Result<Self, String> {
@@ -318,20 +318,49 @@ impl Job {
                 return Err("Audio bitrate must be between 64 and 320 kb/s.".into());
             }
         }
+        if let JobOptions::ImageCompress { quality } = &options {
+            if !(1..=100).contains(quality) {
+                return Err("Image quality must be between 1 and 100.".into());
+            }
+        }
+        if let JobOptions::ImagesToPdf { quality, .. } = &options {
+            if !(20..=100).contains(quality) {
+                return Err("PDF image quality must be between 20 and 100.".into());
+            }
+        }
+        if let JobOptions::PdfToImages { dpi, .. } = &options {
+            if !(36..=600).contains(dpi) {
+                return Err("PDF image DPI must be between 36 and 600.".into());
+            }
+        }
+        if let JobOptions::VideoConvert { quality, .. } = &options {
+            if !(18..=30).contains(quality) {
+                return Err("Video quality must be between 18 and 30.".into());
+            }
+        }
+        if let JobOptions::VideoToGif { width, fps } = &options {
+            if !(64..=1280).contains(width) {
+                return Err("GIF width must be between 64 and 1280 pixels.".into());
+            }
+            if !(1..=30).contains(fps) {
+                return Err("GIF frame rate must be between 1 and 30 FPS.".into());
+            }
+        }
+
 
         if let JobOptions::ImageResize { width, height } = &options {
-            let requested_pixels = u64::from(*width) * u64::from(*height);
-            if *width == 0 || *height == 0 {
-                return Err("Image resize width and height must be greater than zero.".into());
+            if *width == 0 && *height == 0 {
+                return Err("Image resize requires at least one non-zero dimension.".into());
             }
             if *width > MAX_IMAGE_RESIZE_DIMENSION
                 || *height > MAX_IMAGE_RESIZE_DIMENSION
-                || requested_pixels > MAX_IMAGE_RESIZE_PIXELS
             {
-                return Err(
-                    "Image resize bounds are limited to 16,384 px per side and 64 megapixels in total."
-                        .into(),
-                );
+                return Err("Image resize dimensions are limited to 16,384 px per side.".into());
+            }
+            if *width > 0 && *height > 0
+                && u64::from(*width) * u64::from(*height) > MAX_IMAGE_RESIZE_PIXELS
+            {
+                return Err("Image resize bounds are limited to 64 megapixels in total.".into());
             }
         }
 
@@ -404,10 +433,12 @@ mod tests {
             )
         };
 
-        assert!(make_job(0, 100).is_err());
-        assert!(make_job(16_385, 1).is_err());
+        assert!(make_job(0, 0).is_err());
+        assert!(make_job(16_385, 0).is_err());
         assert!(make_job(8_001, 8_000).is_err());
         assert!(make_job(8_000, 8_000).is_ok());
+        assert!(make_job(0, 1_200).is_ok());
+        assert!(make_job(1_600, 0).is_ok());
     }
 
     #[test]

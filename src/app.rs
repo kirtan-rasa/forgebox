@@ -5,10 +5,32 @@ use crate::engine::{
     VideoFormat, VideoPreset, ResolveProfile,
 };
 use eframe::egui::{self, Vec2};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+
+#[cfg(unix)]
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(unix)]
+static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+extern "C" fn request_graceful_shutdown(_signal: libc::c_int) {
+    // Signal handlers must stay async-signal-safe: only set a lock-free flag.
+    SHUTDOWN_REQUESTED.store(true, Ordering::Relaxed);
+}
+
+#[cfg(unix)]
+fn install_graceful_shutdown_handlers() {
+    unsafe {
+        for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+            let _ = libc::signal(signal, request_graceful_shutdown as *const () as libc::sighandler_t);
+        }
+    }
+}
 
 mod open_folder;
 mod theme;
@@ -69,6 +91,7 @@ struct ForgeApp {
     files: Vec<PathBuf>,
     images_order_manually_edited: bool,
     selection_notice: Option<String>,
+    deferred_dropped_files: Vec<PathBuf>,
     secondary_file: Option<PathBuf>,
     output_dir: PathBuf,
     target_format: String,
@@ -121,6 +144,10 @@ struct ForgeApp {
     dialog_rx: Receiver<DialogResult>,
     thumbnail_tx: Sender<(PathBuf, Result<egui::ColorImage, String>)>,
     thumbnail_rx: Receiver<(PathBuf, Result<egui::ColorImage, String>)>,
+    #[cfg(unix)]
+    shutdown_stop: std::sync::Arc<AtomicBool>,
+    #[cfg(unix)]
+    shutdown_wakeup: Option<thread::JoinHandle<()>>,
     video_sticker: video_sticker::VideoStickerEditor,
 }
 
@@ -132,6 +159,23 @@ impl ForgeApp {
         let (dialog_tx, dialog_rx) = mpsc::channel();
         let (thumbnail_tx, thumbnail_rx) = mpsc::channel();
         let (status_tx, status_rx) = mpsc::channel();
+        #[cfg(unix)]
+        let shutdown_stop = std::sync::Arc::new(AtomicBool::new(false));
+        #[cfg(unix)]
+        let shutdown_wakeup = {
+            let stop = std::sync::Arc::clone(&shutdown_stop);
+            let context = cc.egui_ctx.clone();
+            thread::spawn(move || {
+                while !stop.load(Ordering::Acquire)
+                    && !SHUTDOWN_REQUESTED.load(Ordering::Acquire)
+                {
+                    thread::sleep(std::time::Duration::from_millis(50));
+                }
+                if SHUTDOWN_REQUESTED.load(Ordering::Acquire) {
+                    context.request_repaint();
+                }
+            })
+        };
         Self {
             selected_tool: ToolId::ImageConvert,
             icons_loaded,
@@ -140,6 +184,7 @@ impl ForgeApp {
             files: Vec::new(),
             images_order_manually_edited: false,
             selection_notice: None,
+            deferred_dropped_files: Vec::new(),
             secondary_file: None,
             output_dir: view::default_output_dir(),
             target_format: "png".into(),
@@ -192,6 +237,10 @@ impl ForgeApp {
             dialog_rx,
             thumbnail_tx,
             thumbnail_rx,
+            #[cfg(unix)]
+            shutdown_stop,
+            #[cfg(unix)]
+            shutdown_wakeup: Some(shutdown_wakeup),
             video_sticker: video_sticker::VideoStickerEditor::default(),
         }
     }
@@ -211,7 +260,7 @@ impl ForgeApp {
         self.completed_cancelled = false;
         match id {
             ToolId::ImageConvert => self.target_format = "png".into(),
-            ToolId::ImagesToPdf => self.target_format = "pdf".into(),
+            ToolId::ImagesToPdf => { self.target_format = "pdf".into(); self.quality = "82".into(); },
             ToolId::PdfToImages => { self.target_format = "png".into(); self.dpi = "150".into(); },
             ToolId::AudioConvert => { self.target_format = "mp3".into(); self.audio_bitrate = "192".into(); },
             ToolId::ExtractAudio => self.target_format = "mp3".into(),
@@ -271,17 +320,53 @@ impl ForgeApp {
         }
     }
 
-    fn add_files(&mut self, mut paths: Vec<PathBuf>) {
+    fn add_files(&mut self, paths: Vec<PathBuf>) {
         if self.selected_tool == ToolId::GenerateQr { return; }
         self.selection_notice = None;
 
-        let requested = paths.len();
-        paths.retain(|path| path.is_file() && view::is_supported_input_file(self.selected_tool, path));
-        let skipped = requested.saturating_sub(paths.len());
+        let mut pending: VecDeque<PathBuf> = paths.into();
+        let mut supported = Vec::new();
+        let mut skipped = 0usize;
+        let mut unreadable_directories = 0usize;
+        while let Some(path) = pending.pop_front() {
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(_) => { skipped += 1; continue; }
+            };
+            let kind = metadata.file_type();
+            if kind.is_symlink() {
+                // Do not follow links: a dragged directory can otherwise contain
+                // cycles or unexpectedly import files outside the selected tree.
+                skipped += 1;
+            } else if kind.is_dir() {
+                match fs::read_dir(&path) {
+                    Ok(entries) => {
+                        let mut children = entries
+                            .filter_map(|entry| match entry {
+                                Ok(entry) => Some(entry.path()),
+                                Err(_) => { skipped += 1; None }
+                            })
+                            .collect::<Vec<_>>();
+                        children.sort();
+                        pending.extend(children);
+                    }
+                    Err(_) => unreadable_directories += 1,
+                }
+            } else if kind.is_file() && view::is_supported_input_file(self.selected_tool, &path) {
+                supported.push(path);
+            } else {
+                skipped += 1;
+            }
+        }
+        supported.sort();
+        let paths = supported;
         let mut notices = Vec::new();
+        if unreadable_directories > 0 {
+            notices.push(format!("Could not read {unreadable_directories} dropped folder(s)."));
+        }
         if skipped > 0 {
             notices.push(format!(
-                "Skipped {skipped} unsupported item(s). This tool accepts {}.",
+                "Skipped {skipped} unsupported or inaccessible item(s). This tool accepts {}.",
                 view::accepted_input_description(self.selected_tool)
             ));
         }
@@ -320,7 +405,7 @@ impl ForgeApp {
         match self.selected_tool {
             ToolId::PdfMerge | ToolId::PdfSplit | ToolId::PdfCompress | ToolId::PdfRotate | ToolId::PdfReorder | ToolId::PdfToImages | ToolId::PdfWatermark | ToolId::PdfToDoc => { dialog = dialog.add_filter("PDF", &["pdf"]); }
             ToolId::DocToPdf => { dialog = dialog.add_filter("Documents", &["doc", "docx", "odt", "rtf"]); }
-            ToolId::ImageOcr | ToolId::ExtractExif | ToolId::ImagesToPdf | ToolId::ImageConvert | ToolId::ImageResize | ToolId::ImageCompress | ToolId::ImageGrayscale | ToolId::RemoveBackground | ToolId::LongPngToPdf => { dialog = dialog.add_filter("Images", &["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "heic", "avif", "gif"]); }
+            ToolId::ImageOcr | ToolId::ExtractExif | ToolId::ImagesToPdf | ToolId::ImageConvert | ToolId::ImageResize | ToolId::ImageCompress | ToolId::ImageGrayscale | ToolId::RemoveBackground | ToolId::LongPngToPdf => { dialog = dialog.add_filter("Images", &["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "heic", "heif", "avif", "gif"]); }
             ToolId::DataConvert => { dialog = dialog.add_filter("Spreadsheets and data", &["csv", "json", "xlsx"]); }
             ToolId::VideoConvert | ToolId::VideoToGif | ToolId::DavinciResolve | ToolId::VideoSticker => { dialog = dialog.add_filter("Videos", &["mp4", "mkv", "mov", "webm", "avi", "m4v", "mpeg", "mpg", "3gp", "ogv", "flv", "mts", "m2ts"]); }
             ToolId::AudioConvert => { dialog = dialog.add_filter("Audio files", &["mp3", "wav", "flac", "m4a", "ogg", "aac", "opus", "aif", "aiff", "wma", "amr", "ac3"]); }
@@ -423,9 +508,13 @@ impl ForgeApp {
             }
         }
 
+        // Build the active-file index once per repaint. Calling Vec::contains
+        // from each retain/receive operation makes large page sets quadratic.
+        let active_files: HashSet<PathBuf> = self.files.iter().cloned().collect();
+
         while let Ok((path, result)) = self.thumbnail_rx.try_recv() {
             self.thumbnail_pending.remove(&path);
-            if !self.files.contains(&path) { continue; }
+            if !active_files.contains(&path) { continue; }
             match result {
                 Ok(image) => {
                     let texture = ctx.load_texture(
@@ -438,18 +527,24 @@ impl ForgeApp {
                 Err(_) => { self.thumbnail_errors.insert(path); }
             }
         }
-        self.thumbnails.retain(|path, _| self.files.contains(path));
-        self.thumbnail_errors.retain(|path| self.files.contains(path));
+        self.thumbnails.retain(|path, _| active_files.contains(path));
+        self.thumbnail_errors.retain(|path| active_files.contains(path));
         // Keep in-flight entries for removed files until their worker returns so rapid
         // edits cannot accidentally launch unlimited thumbnail decoders in parallel.
     }
 
     fn build_job(&self) -> Result<Job, String> {
-        let positive_u32 = |value: &str, fallback: u32| {
-            value.trim().parse::<i32>().ok().filter(|number| *number > 0).map(|number| number as u32).unwrap_or(fallback)
+        let bounded_u32 = |value: &str, label: &str, min: u32, max: u32| -> Result<u32, String> {
+            let parsed = value.trim().parse::<u32>()
+                .map_err(|_| format!("{label} must be a whole number between {min} and {max}."))?;
+            if !(min..=max).contains(&parsed) {
+                return Err(format!("{label} must be between {min} and {max}."));
+            }
+            Ok(parsed)
         };
-        let positive_u8 = |value: &str, fallback: u8, min: u8, max: u8| {
-            value.trim().parse::<i32>().ok().filter(|number| *number > 0).unwrap_or(i32::from(fallback)).clamp(i32::from(min), i32::from(max)) as u8
+        let bounded_u8 = |value: &str, label: &str, min: u8, max: u8| -> Result<u8, String> {
+            let parsed = bounded_u32(value, label, u32::from(min), u32::from(max))?;
+            Ok(parsed as u8)
         };
 
         let options = match self.selected_tool {
@@ -457,19 +552,31 @@ impl ForgeApp {
                 format: ImageFormat::parse(&self.target_format)?,
             },
             ToolId::ImageResize => {
-                let width = self.width.trim().parse::<u32>()
-                    .map_err(|_| "Enter a valid whole-number image width.".to_string())?;
-                let height = self.height.trim().parse::<u32>()
-                    .map_err(|_| "Enter a valid whole-number image height.".to_string())?;
+                let parse_dimension = |value: &str, label: &str| -> Result<u32, String> {
+                    if value.trim().is_empty() {
+                        return Ok(0);
+                    }
+                    let parsed = value.trim().parse::<u32>()
+                        .map_err(|_| format!("Enter a valid whole-number image {label}."))?;
+                    if parsed == 0 || parsed > 16_384 {
+                        return Err(format!("Image {label} must be between 1 and 16,384 px."));
+                    }
+                    Ok(parsed)
+                };
+                let width = parse_dimension(&self.width, "width")?;
+                let height = parse_dimension(&self.height, "height")?;
+                if width == 0 && height == 0 {
+                    return Err("Enter a width or height. Leave the other field blank to calculate it automatically.".into());
+                }
                 JobOptions::ImageResize { width, height }
             },
             ToolId::ImageCompress => JobOptions::ImageCompress {
-                quality: positive_u8(&self.quality, 82, 1, 100),
+                quality: bounded_u8(&self.quality, "Image quality", 1, 100)?,
             },
             ToolId::ImagesToPdf => JobOptions::ImagesToPdf {
                 combine: self.combine_images_pdf,
                 compress: self.compress_pdf,
-                quality: positive_u8(&self.quality, 82, 20, 100),
+                quality: if self.compress_pdf { bounded_u8(&self.quality, "PDF image quality", 20, 100)? } else { 82 },
             },
             ToolId::ImageOcr => JobOptions::ImageOcr {
                 language: if self.language.trim().is_empty() { "eng".into() } else { self.language.trim().to_owned() },
@@ -485,7 +592,7 @@ impl ForgeApp {
             ToolId::PdfReorder => JobOptions::PdfReorder { order: self.pages.trim().to_owned() },
             ToolId::PdfToImages => JobOptions::PdfToImages {
                 format: PdfImageFormat::parse(&self.target_format)?,
-                dpi: positive_u32(&self.dpi, 150).clamp(36, 600) as u16,
+                dpi: bounded_u32(&self.dpi, "PDF image DPI", 36, 600)? as u16,
             },
             ToolId::PdfWatermark => JobOptions::PdfWatermark {
                 watermark_file: self.secondary_file.clone().ok_or("Select the watermark PDF in the first step.")?,
@@ -495,7 +602,7 @@ impl ForgeApp {
             },
             ToolId::AudioConvert => JobOptions::AudioConvert {
                 format: AudioFormat::parse(&self.target_format)?,
-                bitrate: positive_u32(&self.audio_bitrate, 192).clamp(64, 320) as u16,
+                bitrate: bounded_u32(&self.audio_bitrate, "Audio bitrate", 64, 320)? as u16,
             },
             ToolId::ExtractAudio => JobOptions::ExtractAudio {
                 format: AudioFormat::parse(&self.target_format)?,
@@ -503,11 +610,11 @@ impl ForgeApp {
             ToolId::VideoConvert => JobOptions::VideoConvert {
                 format: VideoFormat::parse(&self.target_format)?,
                 preset: VideoPreset::parse(&self.video_preset)?,
-                quality: positive_u8(&self.quality, 23, 18, 30),
+                quality: bounded_u8(&self.quality, "Video quality", 18, 30)?,
             },
             ToolId::VideoToGif => JobOptions::VideoToGif {
-                width: positive_u32(&self.width, 480).clamp(64, 1280) as u16,
-                fps: positive_u32(&self.fps, 12).clamp(1, 30) as u8,
+                width: bounded_u32(&self.width, "GIF width", 64, 1280)? as u16,
+                fps: bounded_u32(&self.fps, "GIF frame rate", 1, 30)? as u8,
             },
             ToolId::VideoSticker => self.video_sticker.job_options()?,
             ToolId::DavinciResolve => JobOptions::DavinciResolve {
@@ -817,6 +924,20 @@ impl ForgeApp {
                         self.logs.drain(0..self.logs.len() - 200);
                     }
                     self.queue_run_indices.clear();
+
+                    if !self.deferred_dropped_files.is_empty() {
+                        let dropped = std::mem::take(&mut self.deferred_dropped_files);
+                        let dropped_count = dropped.len();
+                        self.add_files(dropped);
+                        self.wizard_step = 0;
+                        let notice = format!(
+                            "Processed {dropped_count} item(s) dropped during the active conversion."
+                        );
+                        self.selection_notice = Some(match self.selection_notice.take() {
+                            Some(existing) => format!("{existing} {notice}"),
+                            None => notice,
+                        });
+                    }
                 }
             }
         }
@@ -839,6 +960,14 @@ impl ForgeApp {
 
 impl Drop for ForgeApp {
     fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            self.shutdown_stop.store(true, Ordering::Release);
+            if let Some(wakeup) = self.shutdown_wakeup.take() {
+                let _ = wakeup.join();
+            }
+        }
+
         // Closing the window must have the same cancellation semantics as Stop.
         // Keep the application process alive until the worker has reaped its
         // active child process and finished cleaning up its temporary files.
@@ -856,7 +985,24 @@ impl Drop for ForgeApp {
     }
 }
 
+#[cfg(all(test, unix))]
+mod shutdown_signal_tests {
+    use super::{request_graceful_shutdown, SHUTDOWN_REQUESTED};
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn termination_signal_only_sets_the_shutdown_flag() {
+        SHUTDOWN_REQUESTED.store(false, Ordering::Release);
+        request_graceful_shutdown(libc::SIGTERM);
+        assert!(SHUTDOWN_REQUESTED.load(Ordering::Acquire));
+        SHUTDOWN_REQUESTED.store(false, Ordering::Release);
+    }
+}
+
 pub fn run() -> eframe::Result<()> {
+    #[cfg(unix)]
+    install_graceful_shutdown_handlers();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1240.0, 900.0])

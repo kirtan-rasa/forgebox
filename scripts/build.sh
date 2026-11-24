@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 # repairs missing state before Cargo resolves the local dependency.
 bash scripts/enable-native-wayland-dnd.sh
 
-# Formatting is fast and catches many syntax errors before the compiler starts.
-cargo fmt
+# Check formatting without mutating the user's working tree.
+cargo fmt --check
 
 # Full dev/test builds are opt-in so low-power CPUs do not compile several profiles on every build.
 if [[ "${FORGEBOX_RUN_CHECKS:-0}" == "1" ]]; then
