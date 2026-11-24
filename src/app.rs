@@ -11,6 +11,27 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
+#[cfg(unix)]
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(unix)]
+static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+extern "C" fn request_graceful_shutdown(_signal: libc::c_int) {
+    // Signal handlers must stay async-signal-safe: only set a lock-free flag.
+    SHUTDOWN_REQUESTED.store(true, Ordering::Relaxed);
+}
+
+#[cfg(unix)]
+fn install_graceful_shutdown_handlers() {
+    unsafe {
+        for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+            let _ = libc::signal(signal, request_graceful_shutdown as libc::sighandler_t);
+        }
+    }
+}
+
 mod open_folder;
 mod theme;
 mod video_sticker;
@@ -123,6 +144,10 @@ struct ForgeApp {
     dialog_rx: Receiver<DialogResult>,
     thumbnail_tx: Sender<(PathBuf, Result<egui::ColorImage, String>)>,
     thumbnail_rx: Receiver<(PathBuf, Result<egui::ColorImage, String>)>,
+    #[cfg(unix)]
+    shutdown_stop: std::sync::Arc<AtomicBool>,
+    #[cfg(unix)]
+    shutdown_wakeup: Option<thread::JoinHandle<()>>,
     video_sticker: video_sticker::VideoStickerEditor,
 }
 
@@ -134,6 +159,23 @@ impl ForgeApp {
         let (dialog_tx, dialog_rx) = mpsc::channel();
         let (thumbnail_tx, thumbnail_rx) = mpsc::channel();
         let (status_tx, status_rx) = mpsc::channel();
+        #[cfg(unix)]
+        let shutdown_stop = std::sync::Arc::new(AtomicBool::new(false));
+        #[cfg(unix)]
+        let shutdown_wakeup = {
+            let stop = std::sync::Arc::clone(&shutdown_stop);
+            let context = cc.egui_ctx.clone();
+            thread::spawn(move || {
+                while !stop.load(Ordering::Acquire)
+                    && !SHUTDOWN_REQUESTED.load(Ordering::Acquire)
+                {
+                    thread::sleep(std::time::Duration::from_millis(50));
+                }
+                if SHUTDOWN_REQUESTED.load(Ordering::Acquire) {
+                    context.request_repaint();
+                }
+            })
+        };
         Self {
             selected_tool: ToolId::ImageConvert,
             icons_loaded,
@@ -195,6 +237,10 @@ impl ForgeApp {
             dialog_rx,
             thumbnail_tx,
             thumbnail_rx,
+            #[cfg(unix)]
+            shutdown_stop,
+            #[cfg(unix)]
+            shutdown_wakeup: Some(shutdown_wakeup),
             video_sticker: video_sticker::VideoStickerEditor::default(),
         }
     }
@@ -914,6 +960,14 @@ impl ForgeApp {
 
 impl Drop for ForgeApp {
     fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            self.shutdown_stop.store(true, Ordering::Release);
+            if let Some(wakeup) = self.shutdown_wakeup.take() {
+                let _ = wakeup.join();
+            }
+        }
+
         // Closing the window must have the same cancellation semantics as Stop.
         // Keep the application process alive until the worker has reaped its
         // active child process and finished cleaning up its temporary files.
@@ -932,6 +986,9 @@ impl Drop for ForgeApp {
 }
 
 pub fn run() -> eframe::Result<()> {
+    #[cfg(unix)]
+    install_graceful_shutdown_handlers();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1240.0, 900.0])
