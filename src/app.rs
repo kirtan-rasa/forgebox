@@ -985,6 +985,20 @@ impl Drop for ForgeApp {
     }
 }
 
+#[cfg(all(test, unix))]
+mod shutdown_signal_tests {
+    use super::{request_graceful_shutdown, SHUTDOWN_REQUESTED};
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn termination_signal_only_sets_the_shutdown_flag() {
+        SHUTDOWN_REQUESTED.store(false, Ordering::Release);
+        request_graceful_shutdown(libc::SIGTERM);
+        assert!(SHUTDOWN_REQUESTED.load(Ordering::Acquire));
+        SHUTDOWN_REQUESTED.store(false, Ordering::Release);
+    }
+}
+
 pub fn run() -> eframe::Result<()> {
     #[cfg(unix)]
     install_graceful_shutdown_handlers();
