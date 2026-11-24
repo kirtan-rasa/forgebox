@@ -949,7 +949,7 @@ mod prefix_reservation_tests {
         assert_eq!(reservation_entry_count(&directory), 6);
 
         drop(reservations);
-        assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+        assert_eq!(reservation_entry_count(&directory), 0);
         fs::remove_dir_all(directory).unwrap();
     }
 }
