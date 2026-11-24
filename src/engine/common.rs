@@ -734,7 +734,16 @@ mod cancellation_cleanup_tests {
         with_execution_control, ExecutionControl, ImageFormat, Job, JobOptions,
     };
     use std::fs;
+    use std::path::Path;
     use std::sync::mpsc;
+
+    fn completed_outputs(directory: &Path) -> Vec<std::path::PathBuf> {
+        fs::read_dir(directory).unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name() != ".forgebox-reservations.lock")
+            .map(|entry| entry.path())
+            .collect()
+    }
 
     #[test]
     fn cancelling_between_files_keeps_completed_outputs() {
@@ -768,9 +777,9 @@ mod cancellation_cleanup_tests {
         });
 
         assert!(result.unwrap_err().contains("cancelled"));
-        let outputs = fs::read_dir(&output_dir).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        let outputs = completed_outputs(&output_dir);
         assert_eq!(outputs.len(), 1, "the first completed output must be preserved");
-        assert_eq!(fs::read(outputs[0].path()).unwrap(), b"completed output");
+        assert_eq!(fs::read(&outputs[0]).unwrap(), b"completed output");
 
         fs::remove_dir_all(directory).unwrap();
     }
@@ -800,9 +809,9 @@ mod cancellation_cleanup_tests {
         });
 
         assert!(result.unwrap_err().contains("simulated second-file failure"));
-        let outputs = fs::read_dir(&output_dir).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        let outputs = completed_outputs(&output_dir);
         assert_eq!(outputs.len(), 1, "the first output should remain after a later failure");
-        assert_eq!(fs::read(outputs[0].path()).unwrap(), b"first completed output");
+        assert_eq!(fs::read(&outputs[0]).unwrap(), b"first completed output");
 
         fs::remove_dir_all(directory).unwrap();
     }
