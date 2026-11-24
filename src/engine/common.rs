@@ -590,7 +590,9 @@ fn remove_stale_reservation_locks(dir: &Path) -> Result<(), String> {
         let alive = process_instance_is_alive(pid, start_time).unwrap_or(true);
         if !alive {
             // The grace period gives a converter orphaned by SIGKILL time to exit.
-            let _ = fs::remove_file(entry.path());
+            fs::remove_file(entry.path()).map_err(|error| {
+                format!("Could not remove stale reservation {}: {error}", entry.path().display())
+            })?;
         }
     }
     Ok(())
